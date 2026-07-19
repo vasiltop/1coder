@@ -124,6 +124,36 @@ TEST(search_grep_finds_matches_with_smartcase) {
   Destroy(&tree);
 }
 
+TEST(grep_without_a_pattern_prompts) {
+  Tree tree = MakeTree("prompt");
+
+  Arena *arena = ArenaAlloc(MB(64));
+  Editor ed = {};
+  EditorInit(&ed, arena, RectS32{0, 0, 80, 25});
+  ed.cwd = PushStr8Copy(arena, tree.root);
+
+  // A keybinding carries no argument text. Searching for nothing and reporting
+  // no matches would look like a broken command, so it opens the command window
+  // ready for a pattern instead.
+  EditorProcessSpec(&ed, "<leader>pg");
+
+  CHECK(ed.command_line_active);
+  Buffer *command = BufferFromHandle(&ed.buffers, ed.command_buffer);
+  CHECK_STR(BufferTextAll(arena, command), Str8Lit("grep "));
+  CHECK_EQ((u32)ed.command_view->vim.mode, (u32)VimMode::Insert);
+  // The cursor waits at the end, so typing continues the command.
+  CHECK_EQ(ed.command_view->cursor, 5);
+
+  // Finishing the line runs the search for real.
+  EditorProcessSpec(&ed, "needle<CR>");
+  CHECK(!ed.command_line_active);
+  CHECK_STR(EditorFocusedBuffer(&ed)->name, Str8Lit("[grep]"));
+
+  EditorDestroy(&ed);
+  ArenaRelease(arena);
+  Destroy(&tree);
+}
+
 TEST(fuzzy_score_ranks_sensibly) {
   // A subsequence matches; anything else does not.
   CHECK(FuzzyScore(Str8Lit("core/editor/command.cpp"), Str8Lit("cmd")) != kFuzzyNoMatch);

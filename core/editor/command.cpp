@@ -890,6 +890,25 @@ void CommandLineDismiss(Editor *ed) {
 
 }  // namespace
 
+namespace {
+
+// Opens the command window with `prefill` already typed and the cursor after
+// it. This is how a keybinding asks for something it cannot supply itself: a
+// binding carries no argument text, so `<leader>pg` cannot grep for anything
+// until the pattern has been typed.
+void CommandLineOpenWith(Editor *ed, String8 prefill) {
+  Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
+  if (!buffer || !ed->command_view) return;
+
+  BufferSetText(ed, buffer, prefill);
+  ViewInit(ed->command_view, ed->command_buffer);
+  ed->command_view->vim.mode = VimMode::Insert;
+  ViewSetCursor(ed->command_view, buffer, BufferSize(buffer));
+  ed->command_line_active = true;
+}
+
+}  // namespace
+
 static void Cmd_command_line_open(CommandArgs *a) {
   Editor *ed = a->ed;
   Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
@@ -1019,6 +1038,14 @@ BufferHandle GrepBufferOpen(Editor *ed, String8 pattern);
 BufferHandle FinderBufferOpen(Editor *ed);
 
 static void Cmd_grep(CommandArgs *a) {
+  // A keybinding carries no argument, so with nothing to search for the only
+  // useful thing to do is ask. Searching for "" and reporting no matches looks
+  // like a broken command.
+  if (Str8SkipChopWhitespace(a->text).size == 0) {
+    CommandLineOpenWith(a->ed, Str8Lit("grep "));
+    return;
+  }
+
   BufferHandle handle = GrepBufferOpen(a->ed, a->text);
   if (handle.index == 0) return;
 
