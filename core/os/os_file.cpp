@@ -1,0 +1,226 @@
+#include "os/os_file.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+#if defined(_WIN32)
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#else
+#  include <dirent.h>
+#  include <limits.h>
+#  include <stdio.h>
+#  include <sys/stat.h>
+#  include <unistd.h>
+#endif
+
+namespace {
+
+int CompareEntries(const void *a, const void *b) {
+  const FileInfo *fa = (const FileInfo *)a;
+  const FileInfo *fb = (const FileInfo *)b;
+
+  // Directories first, so an explorer listing groups them at the top.
+  if (fa->is_dir != fb->is_dir) return fa->is_dir ? -1 : 1;
+
+  u64 n = Min(fa->name.size, fb->name.size);
+  for (u64 i = 0; i < n; i += 1) {
+    u8 ca = CharToLower(fa->name.str[i]);
+    u8 cb = CharToLower(fb->name.str[i]);
+    if (ca != cb) return (ca < cb) ? -1 : 1;
+  }
+  if (fa->name.size != fb->name.size) return (fa->name.size < fb->name.size) ? -1 : 1;
+  return 0;
+}
+
+}  // namespace
+
+#if !defined(_WIN32)
+
+FileContents OsFileRead(Arena *arena, String8 path) {
+  TempArena scratch = ScratchBegin1(arena);
+  const char *cpath = PushCStr(scratch.arena, path);
+
+  FILE *file = fopen(cpath, "rb");
+  ScratchEnd(scratch);
+  if (!file) return FileContents{String8{nullptr, 0}, false};
+
+  if (fseek(file, 0, SEEK_END) != 0) {
+    fclose(file);
+    return FileContents{String8{nullptr, 0}, false};
+  }
+  long size = ftell(file);
+  if (size < 0) {
+    fclose(file);
+    return FileContents{String8{nullptr, 0}, false};
+  }
+  rewind(file);
+
+  u8 *data = PushArrayNoZero(arena, u8, (u64)size + 1);
+  size_t read = fread(data, 1, (size_t)size, file);
+  fclose(file);
+
+  if (read != (size_t)size) return FileContents{String8{nullptr, 0}, false};
+
+  data[size] = 0;
+  return FileContents{String8{data, (u64)size}, true};
+}
+
+bool OsFileWrite(String8 path, String8 data) {
+  TempArena scratch = ScratchBegin();
+
+  // Write to a temporary beside the target, then rename: a crash or a full disk
+  // leaves the original file intact rather than half-written.
+  String8 temp_path = PushStr8F(scratch.arena, "%.*s.tmp%d", (int)path.size, (char *)path.str,
+                                (int)getpid());
+  const char *ctemp = (const char *)temp_path.str;
+  const char *cpath = PushCStr(scratch.arena, path);
+
+  FILE *file = fopen(ctemp, "wb");
+  if (!file) {
+    ScratchEnd(scratch);
+    return false;
+  }
+
+  bool ok = true;
+  if (data.size) ok = (fwrite(data.str, 1, data.size, file) == data.size);
+  if (fclose(file) != 0) ok = false;
+
+  if (ok) {
+    ok = (rename(ctemp, cpath) == 0);
+  }
+  if (!ok) remove(ctemp);
+
+  ScratchEnd(scratch);
+  return ok;
+}
+
+bool OsFileExists(String8 path) {
+  TempArena scratch = ScratchBegin();
+  const char *cpath = PushCStr(scratch.arena, path);
+  struct stat st;
+  bool ok = (stat(cpath, &st) == 0) && S_ISREG(st.st_mode);
+  ScratchEnd(scratch);
+  return ok;
+}
+
+bool OsDirExists(String8 path) {
+  TempArena scratch = ScratchBegin();
+  const char *cpath = PushCStr(scratch.arena, path);
+  struct stat st;
+  bool ok = (stat(cpath, &st) == 0) && S_ISDIR(st.st_mode);
+  ScratchEnd(scratch);
+  return ok;
+}
+
+FileList OsDirList(Arena *arena, String8 path) {
+  FileList list = {};
+
+  TempArena scratch = ScratchBegin1(arena);
+  const char *cpath = PushCStr(scratch.arena, path);
+
+  DIR *dir = opendir(cpath);
+  if (!dir) {
+    ScratchEnd(scratch);
+    return list;
+  }
+
+  // Gather into a list first, since the entry count is not known up front.
+  struct Node {
+    Node *next;
+    FileInfo info;
+  };
+  Node *first = nullptr, *last = nullptr;
+  u64 count = 0;
+
+  for (struct dirent *entry = readdir(dir); entry; entry = readdir(dir)) {
+    String8 name = Str8C(entry->d_name);
+    if (Str8Match(name, Str8Lit(".")) || Str8Match(name, Str8Lit(".."))) continue;
+
+    Node *node = PushStruct(scratch.arena, Node);
+    node->info.name = PushStr8Copy(arena, name);
+
+    // d_type is unavailable on some filesystems, so fall back to stat.
+    bool is_dir = false;
+    u64 size = 0;
+#  if defined(DT_DIR)
+    if (entry->d_type != DT_UNKNOWN) {
+      is_dir = (entry->d_type == DT_DIR);
+    } else
+#  endif
+    {
+      String8 full = OsPathJoin(scratch.arena, path, name);
+      struct stat st;
+      if (stat((const char *)full.str, &st) == 0) {
+        is_dir = S_ISDIR(st.st_mode);
+        size = (u64)st.st_size;
+      }
+    }
+    node->info.is_dir = is_dir;
+    node->info.size = size;
+
+    if (last) {
+      last->next = node;
+      last = node;
+    } else {
+      first = last = node;
+    }
+    count += 1;
+  }
+  closedir(dir);
+
+  list.files = PushArrayNoZero(arena, FileInfo, Max(count, (u64)1));
+  list.count = count;
+  u64 i = 0;
+  for (Node *n = first; n; n = n->next) list.files[i++] = n->info;
+
+  ScratchEnd(scratch);
+
+  qsort(list.files, list.count, sizeof(FileInfo), CompareEntries);
+  return list;
+}
+
+String8 OsGetCwd(Arena *arena) {
+  char buffer[PATH_MAX];
+  if (!getcwd(buffer, sizeof(buffer))) return String8{nullptr, 0};
+  return PushStr8Copy(arena, Str8C(buffer));
+}
+
+String8 OsPathAbsolute(Arena *arena, String8 path) {
+  TempArena scratch = ScratchBegin1(arena);
+  const char *cpath = PushCStr(scratch.arena, path);
+
+  char buffer[PATH_MAX];
+  char *resolved = realpath(cpath, buffer);
+  ScratchEnd(scratch);
+
+  // realpath fails for paths that do not exist yet, which is legitimate for a
+  // file about to be created, so fall back to the input.
+  if (!resolved) return PushStr8Copy(arena, path);
+  return PushStr8Copy(arena, Str8C(resolved));
+}
+
+#else
+
+// Windows implementations are not written yet; the editor targets Linux first.
+// They slot in here without touching any caller.
+#  error "os_file: Windows backend not implemented yet"
+
+#endif
+
+String8 OsPathJoin(Arena *arena, String8 a, String8 b) {
+  if (a.size == 0) return PushStr8Copy(arena, b);
+  if (b.size == 0) return PushStr8Copy(arena, a);
+
+  bool a_ends = (a.str[a.size - 1] == '/');
+  bool b_starts = (b.str[0] == '/');
+
+  if (a_ends && b_starts) return PushStr8Cat(arena, a, Str8Skip(b, 1));
+  if (a_ends || b_starts) return PushStr8Cat(arena, a, b);
+
+  TempArena scratch = ScratchBegin1(arena);
+  String8 joined = PushStr8Cat(scratch.arena, a, Str8Lit("/"));
+  String8 result = PushStr8Cat(arena, joined, b);
+  ScratchEnd(scratch);
+  return result;
+}
