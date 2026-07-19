@@ -86,6 +86,10 @@ struct Buffer {
   UndoStack undo;
   TokenArray tokens;
 
+  // Bumped on every edit. Lets consumers -- dot-repeat recording, syntax
+  // providers -- notice a change without diffing the text.
+  u64 edit_serial;
+
   BufferHooks hooks;
   void *user_data;
 

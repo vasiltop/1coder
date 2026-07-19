@@ -70,6 +70,7 @@ void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
   UndoPush(&buffer->undo, clamped, old_text, insert_text, cursor_before, cursor_after);
 
   buffer->flags |= BufferFlags::Dirty;
+  buffer->edit_serial += 1;
 
   if (buffer->hooks.on_edit) {
     buffer->hooks.on_edit(ed, buffer, clamped, insert_text.size);
@@ -87,6 +88,7 @@ void BufferSetText(Editor *ed, Buffer *buffer, String8 text) {
   LineIndexRebuild(&buffer->lines, &buffer->text);
   UndoClear(&buffer->undo);
   buffer->flags &= ~BufferFlags::Dirty;
+  buffer->edit_serial += 1;
 
   if (buffer->hooks.on_edit) {
     buffer->hooks.on_edit(ed, buffer, RangeU64{0, 0}, text.size);
@@ -112,6 +114,7 @@ u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
     if (!RangeEmpty(current)) GapBufferDelete(&buffer->text, current);
     if (old_text.size) GapBufferInsert(&buffer->text, current.min, old_text);
     LineIndexEdit(&buffer->lines, &buffer->text, current, old_text.size);
+    buffer->edit_serial += 1;
 
     if (buffer->hooks.on_edit) {
       buffer->hooks.on_edit(ed, buffer, current, old_text.size);
@@ -142,6 +145,7 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved) {
     if (!RangeEmpty(current)) GapBufferDelete(&buffer->text, current);
     if (new_text.size) GapBufferInsert(&buffer->text, current.min, new_text);
     LineIndexEdit(&buffer->lines, &buffer->text, current, new_text.size);
+    buffer->edit_serial += 1;
 
     if (buffer->hooks.on_edit) {
       buffer->hooks.on_edit(ed, buffer, current, new_text.size);
