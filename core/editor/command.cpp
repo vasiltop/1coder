@@ -170,6 +170,9 @@ static void Cmd_word_end_big(CommandArgs *a) { RunMotion(a, MotionWordEndBig); }
 
 static void Cmd_line_start(CommandArgs *a) { RunMotion(a, MotionLineStart); }
 static void Cmd_line_first_non_blank(CommandArgs *a) { RunMotion(a, MotionLineFirstNonBlank); }
+static void Cmd_line_first_non_blank_linewise(CommandArgs *a) {
+  RunMotion(a, MotionFirstNonBlankLinewise);
+}
 static void Cmd_line_end(CommandArgs *a) { RunMotion(a, MotionLineEnd); }
 
 static void Cmd_file_start(CommandArgs *a) { RunMotion(a, MotionFileStart); }

@@ -12,7 +12,7 @@ Needs CMake, a C++23 compiler, and SDL3.
 cmake -B build -S . && cmake --build build -j
 
 ./build/editor path/to/file      # run
-./build/editor_tests             # 239 tests, needs no display
+./build/editor_tests             # 241 tests, needs no display
 ```
 
 With [just](https://github.com/casey/just), `just` on its own lists everything:
@@ -102,7 +102,7 @@ Defined in `core/vim/vim_binds.cpp`, mirroring `~/.config/nvim` for every
 feature that exists here. Leader is space; `shiftwidth` is 2 and `scrolloff`
 is 4, matching that config.
 
-Motions `h j k l w b e W B E 0 ^ $ gg G { } f F t T %` · operators `d c y > <`
+Motions `h j k l w b e W B E 0 ^ _ $ gg G { } f F t T %` · operators `d c y > <`
 composed with any motion, plus `dd yy cc >> <<` · edits `x X D C p P J u <C-r> .`
 · insert `i I a A o O R` · visual `v V` · scrolling `<C-d> <C-u> <C-e> <C-y> zz`.
 
@@ -115,6 +115,13 @@ Insert mode: `<C-w>`, `<C-h>` and `<C-BS>` all rub out the previous word.
 The command window opens in insert mode, as `q:i` does in vim. `<Esc>` drops to
 normal mode where every motion and operator applies to the line being typed;
 `<Esc>` again abandons it. `<CR>` submits from any mode.
+
+## Colours
+
+`app/render/theme.cpp` takes its palette from `~/.config/i3/config` — `$bg`,
+`$text`, and the focused/unfocused window colours, which are reused for the
+panel status bars and the split divider so focus reads the same way it does on
+the desktop. Syntax colours are not in that palette and are set separately.
 
 ## Command window
 

@@ -219,6 +219,19 @@ MotionResult MotionLineFirstNonBlank(const Buffer *b, const View *, u64 pos, u64
   return Ok(at, MotionKind::Exclusive);
 }
 
+MotionResult MotionFirstNonBlankLinewise(const Buffer *b, const View *, u64 pos, u64 count,
+                                         u32) {
+  u64 line = BufferLineFromOffset(b, pos);
+  // A count of one means this line, which is why the step is count - 1.
+  u64 target = Min(line + (count > 0 ? count - 1 : 0), BufferLineCount(b) - 1);
+
+  RangeU64 range = BufferLineRange(b, target);
+  u64 at = range.min;
+  while (at < range.max && CharIsSpace(BufferByteAt(b, at))) at = BufferNextCodepoint(b, at);
+
+  return Ok(at, MotionKind::Linewise);
+}
+
 MotionResult MotionLineEnd(const Buffer *b, const View *, u64 pos, u64 count, u32) {
   u64 line = BufferLineFromOffset(b, pos);
   // A count on $ moves down that many lines first, as vim does.

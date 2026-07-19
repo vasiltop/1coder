@@ -29,6 +29,10 @@ MotionResult MotionWordEndBig(const Buffer *b, const View *v, u64 pos, u64 count
 
 MotionResult MotionLineStart(const Buffer *b, const View *v, u64 pos, u64 count, u32 arg);
 MotionResult MotionLineFirstNonBlank(const Buffer *b, const View *v, u64 pos, u64 count, u32 arg);
+// `_`: count-1 lines down, on the first non-blank. Linewise, unlike `^`, so
+// `d_` takes whole lines the way `dd` does.
+MotionResult MotionFirstNonBlankLinewise(const Buffer *b, const View *v, u64 pos, u64 count,
+                                         u32 arg);
 MotionResult MotionLineEnd(const Buffer *b, const View *v, u64 pos, u64 count, u32 arg);
 
 MotionResult MotionFileStart(const Buffer *b, const View *v, u64 pos, u64 count, u32 arg);

@@ -59,6 +59,8 @@ void EditorInstallDefaultBindings(Editor *ed) {
 
     KeymapBind(map, "0", CommandId::line_start);
     KeymapBind(map, "^", CommandId::line_first_non_blank);
+    // `_` is `^` made linewise, so d_ takes the whole line as dd does.
+    KeymapBind(map, "_", CommandId::line_first_non_blank_linewise);
     KeymapBind(map, "$", CommandId::line_end);
 
     KeymapBind(map, "gg", CommandId::file_start);

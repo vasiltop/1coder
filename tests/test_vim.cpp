@@ -127,6 +127,54 @@ TEST(vim_line_motions) {
   Destroy(&f);
 }
 
+TEST(vim_underscore_first_non_blank) {
+  Fixture f = MakeFixture("    indented\n  second\n      third");
+
+  // With no count `_` is where `^` is: the first non-blank of this line.
+  Type(&f, "$_");
+  CHECK_EQ(CursorLine(&f), 0);
+  CHECK_EQ(CursorColumn(&f), 4);
+
+  // A count moves count-1 lines down, landing on that line's first non-blank.
+  Type(&f, "2_");
+  CHECK_EQ(CursorLine(&f), 1);
+  CHECK_EQ(CursorColumn(&f), 2);
+
+  Type(&f, "gg3_");
+  CHECK_EQ(CursorLine(&f), 2);
+  CHECK_EQ(CursorColumn(&f), 6);
+
+  // It clamps at the last line rather than failing.
+  Type(&f, "gg99_");
+  CHECK_EQ(CursorLine(&f), 2);
+
+  Destroy(&f);
+}
+
+TEST(vim_underscore_is_linewise_unlike_caret) {
+  // The difference that matters: `^` is exclusive, `_` is linewise, so the
+  // same operator over each takes a very different span.
+  Fixture caret = MakeFixture("  hello world\nsecond");
+  Type(&caret, "$d^");
+  // Charwise, back to the first non-blank, leaving the line in place.
+  CHECK_STR(TextOf(&caret), Str8Lit("  d\nsecond"));
+  CHECK_EQ(BufferLineCount(BufferOf(&caret)), 2);
+  Destroy(&caret);
+
+  Fixture underscore = MakeFixture("  hello world\nsecond");
+  Type(&underscore, "$d_");
+  // Linewise, so the whole line goes, exactly as dd would take it.
+  CHECK_STR(TextOf(&underscore), Str8Lit("second"));
+  CHECK_EQ(BufferLineCount(BufferOf(&underscore)), 1);
+  Destroy(&underscore);
+
+  // With a count it spans that many lines.
+  Fixture counted = MakeFixture("a\nb\nc\nd");
+  Type(&counted, "d2_");
+  CHECK_STR(TextOf(&counted), Str8Lit("c\nd"));
+  Destroy(&counted);
+}
+
 TEST(vim_file_motions) {
   Fixture f = MakeFixture("one\ntwo\nthree\nfour");
 

@@ -86,6 +86,7 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(word_end_big,          "word-end-big",          "Move to next WORD end",           CommandArg::None, CmdHidden)      \
   X(line_start,            "line-start",            "Move to start of line",           CommandArg::None, CmdHidden)      \
   X(line_first_non_blank,  "line-first-non-blank",  "Move to first non-blank",         CommandArg::None, CmdHidden)      \
+  X(line_first_non_blank_linewise, "line-first-non-blank-linewise", "First non-blank, linewise", CommandArg::None, CmdHidden) \
   X(line_end,              "line-end",              "Move to end of line",             CommandArg::None, CmdHidden)      \
   X(file_start,            "file-start",            "Move to start of file",           CommandArg::None, CmdHidden)      \
   X(file_end,              "file-end",              "Move to end of file",             CommandArg::None, CmdHidden)      \
