@@ -78,12 +78,19 @@ the normal map, and `d` again in the operator-pending map.
 
 ## Keybindings
 
-Defined in `core/vim/vim_binds.cpp`. Leader is space.
+Defined in `core/vim/vim_binds.cpp`, mirroring `~/.config/nvim` for every
+feature that exists here. Leader is space; `shiftwidth` is 2 and `scrolloff`
+is 4, matching that config.
 
 Motions `h j k l w b e W B E 0 ^ $ gg G { } f F t T %` · operators `d c y > <`
 composed with any motion, plus `dd yy cc >> <<` · edits `x X D C p P J u <C-r> .`
-· insert `i I a A o O R` · visual `v V` · windows `<C-w>v` `<C-w>s`
-`<C-w>hjkl` `<C-w>c` `<C-w>o` · scrolling `<C-d> <C-u> <C-e> <C-y> zz`.
+· insert `i I a A o O R` · visual `v V` · scrolling `<C-d> <C-u> <C-e> <C-y> zz`.
+
+Windows: `<C-h/j/k/l>` moves focus, `<leader>v` splits vertically and
+`<leader>h` horizontally (as `:vsplit` and `:split` do). The built-in `<C-w>`
+forms — `<C-w>v` `<C-w>s` `<C-w>hjkl` `<C-w>c` `<C-w>o` — work too.
+
+Insert mode: `<C-w>`, `<C-h>` and `<C-BS>` all rub out the previous word.
 
 ## Command window
 

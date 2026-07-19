@@ -182,7 +182,7 @@ TEST(command_line_percent_range_affects_whole_buffer) {
   Fixture f = MakeFixture("a\nb\nc");
 
   CHECK(CommandExecLine(&f.ed, Str8Lit("%indent")));
-  CHECK_STR(TextOf(&f), Str8Lit("    a\n    b\n    c"));
+  CHECK_STR(TextOf(&f), Str8Lit("  a\n  b\n  c"));
 
   CHECK(CommandExecLine(&f.ed, Str8Lit("%dedent")));
   CHECK_STR(TextOf(&f), Str8Lit("a\nb\nc"));

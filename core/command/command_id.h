@@ -133,6 +133,7 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(insert_newline,        "insert-newline",        "Insert a line break",             CommandArg::None, CmdHidden)      \
   X(insert_tab,            "insert-tab",            "Insert a tab",                    CommandArg::None, CmdHidden)      \
   X(backspace,             "backspace",             "Delete backwards",                CommandArg::None, CmdHidden)      \
+  X(delete_word_before,    "delete-word-before",    "Delete the word before the cursor", CommandArg::None, CmdHidden)    \
   /* ---- scrolling ---- */                                                                                              \
   X(scroll_half_page_down, "scroll-half-page-down", "Scroll down half a screen",       CommandArg::None, CmdHidden)      \
   X(scroll_half_page_up,   "scroll-half-page-up",   "Scroll up half a screen",         CommandArg::None, CmdHidden)      \

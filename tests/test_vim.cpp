@@ -381,14 +381,15 @@ TEST(vim_delete_yanks_into_register) {
 TEST(vim_indent_and_dedent) {
   Fixture f = MakeFixture("one\ntwo");
 
+  // One shift width, which matches 'shiftwidth' from the nvim config.
   Type(&f, ">>");
-  CHECK_STR(TextOf(&f), Str8Lit("    one\ntwo"));
+  CHECK_STR(TextOf(&f), Str8Lit("  one\ntwo"));
   Type(&f, "<<");
   CHECK_STR(TextOf(&f), Str8Lit("one\ntwo"));
 
   // An operator with a linewise motion indents the whole span.
   Type(&f, ">j");
-  CHECK_STR(TextOf(&f), Str8Lit("    one\n    two"));
+  CHECK_STR(TextOf(&f), Str8Lit("  one\n  two"));
 
   Destroy(&f);
 }
@@ -792,9 +793,57 @@ TEST(vim_close_window) {
 TEST(vim_leader_bindings) {
   Fixture f = MakeFixture("hello");
 
-  // <leader> is space by default, so this is the neovim style chain.
-  Type(&f, "<leader>sv");
+  // <leader> is space, matching the nvim config's mapleader.
+  Type(&f, "<leader>v");
   CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
+
+  Type(&f, "<leader>h");
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 3);
+
+  Destroy(&f);
+}
+
+TEST(vim_ctrl_hjkl_moves_window_focus) {
+  Fixture f = MakeFixture("hello");
+
+  // The nvim config maps bare ctrl-hjkl alongside the built-in <C-w> forms.
+  Type(&f, "<C-w>v");
+  Panel *left = PanelFirstLeaf(f.ed.root_panel);
+  Panel *right = PanelNextLeaf(f.ed.root_panel, left);
+
+  EditorFocusPanel(&f.ed, left);
+  Type(&f, "<C-l>");
+  CHECK(f.ed.focused_panel == right);
+
+  Type(&f, "<C-h>");
+  CHECK(f.ed.focused_panel == left);
+
+  // Both spellings still work.
+  Type(&f, "<C-w>l");
+  CHECK(f.ed.focused_panel == right);
+
+  Destroy(&f);
+}
+
+TEST(vim_insert_mode_word_rubout) {
+  Fixture f = MakeFixture("");
+
+  Type(&f, "ihello world");
+  Type(&f, "<C-w>");
+  CHECK_STR(TextOf(&f), Str8Lit("hello "));
+
+  // <C-h> is the nvim config's ctrl-backspace mapping, and <C-BS> is what a
+  // window system actually sends for it.
+  Type(&f, "again");
+  Type(&f, "<C-h>");
+  CHECK_STR(TextOf(&f), Str8Lit("hello "));
+  Type(&f, "more");
+  Type(&f, "<C-BS>");
+  CHECK_STR(TextOf(&f), Str8Lit("hello "));
+
+  // Rubbing out stops at the start of the line rather than eating the one above.
+  Type(&f, "<C-w>");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
 
   Destroy(&f);
 }

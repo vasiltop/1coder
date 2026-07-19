@@ -33,7 +33,8 @@ void VimYankRange(Editor *ed, Buffer *buffer, RangeU64 range, bool linewise);
 u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool after);
 
 // Indents or dedents whole lines by one shift width.
-inline constexpr u64 kShiftWidth = 4;
+// Matches 'shiftwidth' in the user's nvim config.
+inline constexpr u64 kShiftWidth = 2;
 u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool indent);
 
 // Joins the line below onto the current one, collapsing the whitespace between

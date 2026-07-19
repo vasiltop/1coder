@@ -460,6 +460,31 @@ static void Cmd_backspace(CommandArgs *a) {
   ViewSetCursor(view, buffer, start);
 }
 
+// Insert-mode word rubout. Bound to <C-w> as vim does, and to <C-h> and
+// <C-BS>, which is what a terminal and a window system respectively send for
+// ctrl-backspace.
+static void Cmd_delete_word_before(CommandArgs *a) {
+  View *view = a->view;
+  Buffer *buffer = a->buffer;
+  if (view->cursor == 0) return;
+
+  u64 line_start = BufferOffsetFromLine(buffer, ViewCursorLine(view, buffer));
+
+  // At the very start of a line there is no word to rub out, so fall back to
+  // deleting the line break.
+  if (view->cursor <= line_start) {
+    Cmd_backspace(a);
+    return;
+  }
+
+  MotionResult motion = MotionWordBackward(buffer, view, view->cursor, a->count, 0);
+  u64 start = motion.valid ? Max(motion.target, line_start) : line_start;
+  if (start >= view->cursor) start = line_start;
+
+  BufferDelete(a->ed, buffer, RangeU64{start, view->cursor}, view->cursor, start);
+  ViewSetCursor(view, buffer, start);
+}
+
 // ---------------------------------------------------------------------------
 // Scrolling
 // ---------------------------------------------------------------------------

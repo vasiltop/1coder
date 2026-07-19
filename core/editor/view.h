@@ -55,9 +55,9 @@ void ViewSetCursorLineColumn(View *view, const Buffer *buffer, u64 line, u64 col
 // Scrolling
 // ---------------------------------------------------------------------------
 
-// Lines of context kept above and below the cursor where possible, matching
-// vim's 'scrolloff'.
-inline constexpr i32 kDefaultScrollOff = 3;
+// Lines of context kept above and below the cursor where possible.
+// Matches 'scrolloff' in the user's nvim config.
+inline constexpr i32 kDefaultScrollOff = 4;
 // Columns of context kept left and right of the cursor.
 inline constexpr i32 kDefaultSideScrollOff = 8;
 

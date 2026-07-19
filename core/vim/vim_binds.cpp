@@ -6,6 +6,12 @@
 // changing a binding means editing this file. Everything here goes through the
 // same KeymapBind used by any other code, so nothing about these is privileged.
 //
+// These mirror the user's neovim config (~/.config/nvim/lua/config/keymaps.lua)
+// for every feature that exists here. Its mappings that depend on plugins or
+// LSP -- the file explorer, mini.pick, compile-mode, dap, neogit, search
+// highlighting -- have no counterpart yet and are left out rather than
+// approximated.
+//
 // Note how `d` is bound only as an operator in the normal map, with the motions
 // it can take living in the operator-pending map. That means `dw`, `d$`, `d2j`
 // and `dip` all work without any of them being spelled out -- and `dd` is just
@@ -108,13 +114,19 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, ":", CommandId::command_line_open);
   KeymapBind(normal, "<Esc>", CommandId::normal_mode);
 
+  // ---- window navigation ----
+  // Bare ctrl-hjkl to move focus, alongside the <C-w> forms above, which is how
+  // the neovim config layers its mappings over the built-in ones.
+  KeymapBind(normal, "<C-h>", CommandId::focus_left);
+  KeymapBind(normal, "<C-j>", CommandId::focus_down);
+  KeymapBind(normal, "<C-k>", CommandId::focus_up);
+  KeymapBind(normal, "<C-l>", CommandId::focus_right);
+
   // ---- leader bindings ----
-  KeymapBind(normal, "<leader>w", CommandId::write_file);
-  KeymapBind(normal, "<leader>q", CommandId::quit);
-  KeymapBind(normal, "<leader>bn", CommandId::buffer_next);
-  KeymapBind(normal, "<leader>bp", CommandId::buffer_prev);
-  KeymapBind(normal, "<leader>sv", CommandId::split_vertical);
-  KeymapBind(normal, "<leader>sh", CommandId::split_horizontal);
+  // <leader>h and <leader>v mirror :split and :vsplit, so h is the horizontal
+  // divider (stacked windows) and v the vertical one (side by side).
+  KeymapBind(normal, "<leader>h", CommandId::split_horizontal);
+  KeymapBind(normal, "<leader>v", CommandId::split_vertical);
 
   // ---- operator-pending ----
   // A doubled operator acts on whole lines: dd, yy, cc, >>, <<.
@@ -144,6 +156,11 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(insert, "<CR>", CommandId::insert_newline);
   KeymapBind(insert, "<Tab>", CommandId::insert_tab);
   KeymapBind(insert, "<BS>", CommandId::backspace);
+  // Word rubout: <C-w> is vim's own, <C-h> is what the neovim config maps, and
+  // <C-BS> is what a window system sends for ctrl-backspace.
+  KeymapBind(insert, "<C-w>", CommandId::delete_word_before);
+  KeymapBind(insert, "<C-h>", CommandId::delete_word_before);
+  KeymapBind(insert, "<C-BS>", CommandId::delete_word_before);
   KeymapBind(insert, "<Left>", CommandId::cursor_left);
   KeymapBind(insert, "<Down>", CommandId::cursor_down);
   KeymapBind(insert, "<Up>", CommandId::cursor_up);
