@@ -182,6 +182,12 @@ void BufferEndEditGroup(Buffer *buffer);
 [[nodiscard]] u64 BufferNextCodepoint(const Buffer *buffer, u64 offset);
 [[nodiscard]] u64 BufferPrevCodepoint(const Buffer *buffer, u64 offset);
 
+// Decodes the character at `offset`. The gap buffer's storage is not
+// contiguous, so text cannot simply be decoded in place -- this gathers the
+// sequence's bytes first. Past the end yields codepoint 0 with advance 1, so
+// scans terminate.
+[[nodiscard]] DecodedCodepoint BufferDecodeAt(const Buffer *buffer, u64 offset);
+
 // ---------------------------------------------------------------------------
 // Files
 // ---------------------------------------------------------------------------

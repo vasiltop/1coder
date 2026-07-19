@@ -34,7 +34,9 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/app/main.cpp)
   file(GLOB_RECURSE APP_SOURCES CONFIGURE_DEPENDS app/*.cpp)
 
   add_executable(editor ${APP_SOURCES})
-  target_include_directories(editor PRIVATE app third_party)
+  target_include_directories(editor PRIVATE app)
+  # Vendored single-header libraries are not ours to keep warning-clean.
+  target_include_directories(editor SYSTEM PRIVATE third_party)
   target_link_libraries(editor PRIVATE editor_core SDL3::SDL3)
 endif()
 

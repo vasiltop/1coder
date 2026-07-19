@@ -196,6 +196,23 @@ u64 BufferPrevCodepoint(const Buffer *buffer, u64 offset) {
   return prev;
 }
 
+DecodedCodepoint BufferDecodeAt(const Buffer *buffer, u64 offset) {
+  u64 size = BufferSize(buffer);
+  if (offset >= size) return DecodedCodepoint{0, 1};
+
+  // Gather the lead byte plus any continuation bytes, then decode normally.
+  u8 bytes[4] = {};
+  u32 length = 1;
+  bytes[0] = BufferByteAt(buffer, offset);
+  while (length < 4 && offset + length < size &&
+         Utf8IsContinuation(BufferByteAt(buffer, offset + length))) {
+    bytes[length] = BufferByteAt(buffer, offset + length);
+    length += 1;
+  }
+
+  return Utf8Decode(String8{bytes, length}, 0);
+}
+
 u64 BufferColumnFromOffset(const Buffer *buffer, u64 offset) {
   // Clamp first. A view can hold a cursor past the end after the buffer it
   // points at is replaced or truncated, and BufferNextCodepoint saturates at
