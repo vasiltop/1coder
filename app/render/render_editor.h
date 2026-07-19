@@ -12,9 +12,14 @@ struct RenderContext {
   GlyphAtlas *atlas;
   Theme theme;
 
-  // Cell dimensions in pixels, derived from the font.
+  // Cell dimensions in pixels, derived from the font and rounded to whole
+  // pixels so rows land on exact boundaries.
   f32 cell_width;
   f32 cell_height;
+
+  // Pixel y where the panel area ends and the command line begins. Recomputed
+  // each frame, since it depends on the window height.
+  f32 panel_bottom;
 };
 
 void RenderContextInit(RenderContext *ctx, DrawList *draw, GlyphAtlas *atlas);

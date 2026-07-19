@@ -159,8 +159,21 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
   if (!view || !buffer) return;
 
   RectS32 text_cells = EditorPanelTextRect(ed, panel);
-  RectF32 text_rect = CellsToPixels(ctx, text_cells);
   RectF32 panel_rect = CellsToPixels(ctx, panel->rect);
+
+  // A window height is rarely an exact multiple of the cell height, and those
+  // few leftover pixels have to land somewhere. Panels along the bottom stretch
+  // to meet the command line, which puts the remainder inside the text area --
+  // where unused space is ordinary and invisible -- rather than leaving a strip
+  // of background above or below the command line.
+  if (panel->rect.y1 >= ed->screen.y1 - 1) {
+    panel_rect.y1 = ctx->panel_bottom;
+  }
+
+  // Derived from the panel rather than converted separately, so the stretch
+  // above carries through and the status line stays exactly one cell tall.
+  RectF32 text_rect = panel_rect;
+  text_rect.y1 = panel_rect.y1 - ctx->cell_height;
 
   i32 columns = RectWidth(text_cells);
   i32 rows = RectHeight(text_cells);
@@ -222,13 +235,7 @@ void RenderPanelTree(RenderContext *ctx, Editor *ed, Panel *panel) {
 // The bottom row: the command window when open, otherwise the last message or
 // a part-typed chord.
 void RenderCommandLine(RenderContext *ctx, Editor *ed, f32 pixel_width, f32 pixel_height) {
-  // Starts where the panels stop, not one cell up from the bottom of the
-  // window. The two are only the same when the window height divides exactly
-  // by the cell height; otherwise the leftover pixels fall between them and the
-  // command line appears to be two rows tall. Anchoring it to the panels puts
-  // the remainder below everything, where it cannot show as a gap.
-  f32 top = (f32)(ed->screen.y1 - 1) * ctx->cell_height;
-  RectF32 rect = {0.0f, top, pixel_width, Max(pixel_height, top + ctx->cell_height)};
+  RectF32 rect = {0.0f, pixel_height - ctx->cell_height, pixel_width, pixel_height};
   DrawRect(ctx->draw, rect, ctx->theme.background);
   DrawPushClip(ctx->draw, rect);
 
@@ -278,8 +285,13 @@ void RenderContextInit(RenderContext *ctx, DrawList *draw, GlyphAtlas *atlas) {
   ctx->theme = ThemeDefault();
   // Cell size comes straight from the font, which is exactly why the core can
   // lay out in cells and stay free of font metrics.
-  ctx->cell_width = atlas->advance;
-  ctx->cell_height = atlas->line_height;
+  // Rounded to whole pixels. A fractional cell height puts every row on a
+  // different subpixel offset, which softens the text and leaves an awkward
+  // remainder at the bottom of the window.
+  ctx->cell_width = (f32)(i32)(atlas->advance + 0.5f);
+  ctx->cell_height = (f32)(i32)(atlas->line_height + 0.5f);
+  if (ctx->cell_width < 1.0f) ctx->cell_width = 1.0f;
+  if (ctx->cell_height < 1.0f) ctx->cell_height = 1.0f;
 }
 
 RectS32 RenderScreenCells(const RenderContext *ctx, i32 pixel_width, i32 pixel_height) {
@@ -289,6 +301,9 @@ RectS32 RenderScreenCells(const RenderContext *ctx, i32 pixel_width, i32 pixel_h
 }
 
 void RenderEditor(RenderContext *ctx, Editor *ed, i32 pixel_width, i32 pixel_height) {
+  // Where the panel area ends and the command line begins.
+  ctx->panel_bottom = (f32)pixel_height - ctx->cell_height;
+
   DrawBegin(ctx->draw);
 
   DrawRect(ctx->draw, RectF32{0.0f, 0.0f, (f32)pixel_width, (f32)pixel_height},
