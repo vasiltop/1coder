@@ -114,6 +114,58 @@ TEST(vim_word_motions_stop_at_punctuation) {
   Destroy(&f);
 }
 
+TEST(vim_word_motions_stop_on_empty_lines) {
+  // Vim treats an empty line as a word. If `w` runs through one it lands on the
+  // line after, and an operator over that motion drags the line break along.
+  Fixture f = MakeFixture("alpha\n\n## Build");
+
+  Type(&f, "w");
+  CHECK_EQ(CursorLine(&f), 1);  // the blank line, not "## Build"
+
+  Type(&f, "w");
+  CHECK_EQ(CursorLine(&f), 2);
+
+  // And the same going back.
+  Type(&f, "b");
+  CHECK_EQ(CursorLine(&f), 1);
+  Type(&f, "b");
+  CHECK_EQ(CursorLine(&f), 0);
+
+  Destroy(&f);
+}
+
+TEST(vim_yank_before_empty_line_takes_only_the_word) {
+  Fixture f = MakeFixture("alpha\n\n## Build");
+
+  Type(&f, "yw");
+  CHECK_STR(EditorGetRegister(&f.ed, 0).text, Str8Lit("alpha"));
+  CHECK(!EditorGetRegister(&f.ed, 0).linewise);
+
+  Destroy(&f);
+}
+
+TEST(vim_charwise_paste_stays_on_an_empty_line) {
+  // On an empty line there is no character to paste "after", so p must not step
+  // across the newline onto the following line. p and P coincide here.
+  Fixture f = MakeFixture("alpha\n\n## Build");
+  Type(&f, "ywjp");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha\nalpha\n## Build"));
+  CHECK_EQ(BufferLineCount(BufferOf(&f)), 3);
+  Destroy(&f);
+
+  Fixture g = MakeFixture("alpha\n\n## Build");
+  Type(&g, "ywjP");
+  CHECK_STR(TextOf(&g), Str8Lit("alpha\nalpha\n## Build"));
+  CHECK_EQ(BufferLineCount(BufferOf(&g)), 3);
+  Destroy(&g);
+
+  // A non-empty line is unaffected: p still goes after the cursor.
+  Fixture h = MakeFixture("ab\ncd");
+  Type(&h, "ylp");
+  CHECK_STR(TextOf(&h), Str8Lit("aab\ncd"));
+  Destroy(&h);
+}
+
 TEST(vim_line_motions) {
   Fixture f = MakeFixture("    indented line");
 

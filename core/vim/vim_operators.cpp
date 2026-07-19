@@ -169,7 +169,11 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
     BufferInsert(ed, buffer, at, text, pos, at);
     cursor = at;
   } else {
-    u64 at = after ? Min(BufferNextCodepoint(buffer, pos), BufferSize(buffer)) : pos;
+    // `p` pastes after the character under the cursor -- but on an empty line
+    // there is no such character, and stepping forward would cross the newline
+    // and land the text on the following line.
+    u64 line_end = BufferLineEnd(buffer, BufferLineFromOffset(buffer, pos));
+    u64 at = after ? Min(BufferNextCodepoint(buffer, pos), line_end) : pos;
     // Characterwise paste leaves the cursor on the last pasted character.
     BufferInsert(ed, buffer, at, text, pos, at + text.size);
     cursor = (text.size > 0) ? at + text.size - 1 : at;

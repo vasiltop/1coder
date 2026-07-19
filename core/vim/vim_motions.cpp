@@ -30,6 +30,16 @@ enum class CharClass : u8 { Blank, Word, Punct };
   return BufferByteAt(b, pos) == '\n';
 }
 
+// Vim counts an empty line as a word of its own, so word motions stop on one
+// instead of running through it. Without this, `w` before a blank line lands on
+// the line *after* it, and an operator over that motion takes the line break
+// with it -- which then shows up as a stray newline when the yank is pasted.
+[[nodiscard]] bool AtEmptyLine(const Buffer *b, u64 pos) {
+  if (pos >= BufferSize(b)) return false;
+  if (BufferByteAt(b, pos) != '\n') return false;
+  return BufferOffsetFromLine(b, BufferLineFromOffset(b, pos)) == pos;
+}
+
 // One step of `w`: past the current run, then over any blanks.
 [[nodiscard]] u64 StepWordForward(const Buffer *b, u64 pos, bool big) {
   u64 size = BufferSize(b);
@@ -45,6 +55,7 @@ enum class CharClass : u8 { Blank, Word, Punct };
   }
   while (pos < size && classify(BufferByteAt(b, pos)) == CharClass::Blank) {
     pos = BufferNextCodepoint(b, pos);
+    if (AtEmptyLine(b, pos)) break;
   }
   return pos;
 }
@@ -55,8 +66,11 @@ enum class CharClass : u8 { Blank, Word, Punct };
   auto classify = big ? ClassOfBig : ClassOf;
 
   pos = BufferPrevCodepoint(b, pos);
+  if (AtEmptyLine(b, pos)) return pos;
+
   while (pos > 0 && classify(BufferByteAt(b, pos)) == CharClass::Blank) {
     pos = BufferPrevCodepoint(b, pos);
+    if (AtEmptyLine(b, pos)) return pos;
   }
   if (classify(BufferByteAt(b, pos)) == CharClass::Blank) return pos;
 
