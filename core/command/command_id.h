@@ -5,124 +5,203 @@
 #include "base/base_types.h"
 
 // Command *identity*: the canonical list of every action the editor can
-// perform, and the name<->id mapping.
+// perform, what each one accepts, and the name<->id mapping.
 //
 // Identity is separated from dispatch on purpose. The keymap binds ids and
 // needs nothing else, so it can sit below the editor; the table of function
 // pointers that actually runs a command lives in editor/command.cpp, where the
-// Editor, View and Buffer types exist. Adding a command is a single line here
-// plus its body there -- and the linker catches a missing body.
+// Editor, View and Buffer types exist.
 //
-// Keybindings and the `:` command line both resolve to these ids, so there is
-// exactly one dispatch path regardless of how an action was invoked.
+// Keybindings and the command window both resolve to these ids, so there is one
+// dispatch path regardless of how an action was invoked.
+//
+// ---------------------------------------------------------------------------
+// Command line syntax
+// ---------------------------------------------------------------------------
+//
+//     [range] name[!] [arguments]
+//
+//   range      %            the whole buffer
+//              .            the current line
+//              $            the last line
+//              N            line N (1-based, as displayed)
+//              N,M          lines N through M
+//              .,+3         relative to the current line
+//              '<,'>        the visual selection
+//   name       a command name, or any unambiguous prefix of one ("spl" ->
+//              split-vertical only if nothing else starts with "spl"), or one
+//              of the short aliases below
+//   !          the "forced" variant, where a command defines one -- q! discards
+//              unsaved changes, w! writes a read-only buffer
+//   arguments  whitespace separated; wrap in double quotes to include spaces,
+//              backslash escapes a quote
+//
+// A command declares which of these it accepts, so the parser can reject
+// nonsense ("cursor-left" with a range) and the command window knows what to
+// complete. Adding a command is one line here plus a body in command.cpp -- and
+// a missing body is a link error, not a silent gap.
 
-// X(identifier, "name typed at the : prompt", "description")
-#define COMMAND_LIST                                                                        \
-  /* ---- motions ---- */                                                                   \
-  X(cursor_left,             "cursor-left",             "Move cursor left")                 \
-  X(cursor_right,            "cursor-right",            "Move cursor right")                \
-  X(cursor_up,               "cursor-up",               "Move cursor up one line")          \
-  X(cursor_down,             "cursor-down",             "Move cursor down one line")        \
-  X(word_forward,            "word-forward",            "Move to next word start")          \
-  X(word_backward,           "word-backward",           "Move to previous word start")      \
-  X(word_end,                "word-end",                "Move to next word end")            \
-  X(word_forward_big,        "word-forward-big",        "Move to next WORD start")          \
-  X(word_backward_big,       "word-backward-big",       "Move to previous WORD start")      \
-  X(word_end_big,            "word-end-big",            "Move to next WORD end")            \
-  X(line_start,              "line-start",              "Move to start of line")            \
-  X(line_first_non_blank,    "line-first-non-blank",    "Move to first non-blank of line")  \
-  X(line_end,                "line-end",                "Move to end of line")              \
-  X(file_start,              "file-start",              "Move to start of file")            \
-  X(file_end,                "file-end",                "Move to end of file")              \
-  X(paragraph_forward,       "paragraph-forward",       "Move to next blank line")          \
-  X(paragraph_backward,      "paragraph-backward",      "Move to previous blank line")      \
-  X(find_char_forward,       "find-char-forward",       "Find character forward on line")   \
-  X(find_char_backward,      "find-char-backward",      "Find character backward on line")  \
-  X(till_char_forward,       "till-char-forward",       "Move before next character")       \
-  X(till_char_backward,      "till-char-backward",      "Move after previous character")    \
-  X(matching_bracket,        "matching-bracket",        "Jump to matching bracket")         \
-  /* ---- mode changes ---- */                                                              \
-  X(normal_mode,             "normal-mode",             "Return to normal mode")            \
-  X(insert_mode,             "insert-mode",             "Insert before cursor")             \
-  X(insert_line_start,       "insert-line-start",       "Insert at first non-blank")        \
-  X(append,                  "append",                  "Insert after cursor")              \
-  X(append_line_end,         "append-line-end",         "Insert at end of line")            \
-  X(open_line_below,         "open-line-below",         "Open a line below and insert")     \
-  X(open_line_above,         "open-line-above",         "Open a line above and insert")     \
-  X(visual_mode,             "visual-mode",             "Enter characterwise visual mode")  \
-  X(visual_line_mode,        "visual-line-mode",        "Enter linewise visual mode")       \
-  X(replace_mode,            "replace-mode",            "Enter replace mode")               \
-  /* ---- operators ---- */                                                                 \
-  X(operator_delete,         "operator-delete",         "Delete over a motion")             \
-  X(operator_change,         "operator-change",         "Change over a motion")             \
-  X(operator_yank,           "operator-yank",           "Yank over a motion")               \
-  X(operator_indent,         "operator-indent",         "Indent over a motion")             \
-  X(operator_dedent,         "operator-dedent",         "Dedent over a motion")             \
-  /* ---- edits ---- */                                                                     \
-  X(delete_char,             "delete-char",             "Delete character under cursor")    \
-  X(delete_char_before,      "delete-char-before",      "Delete character before cursor")   \
-  X(delete_line,             "delete-line",             "Delete current line")              \
-  X(delete_to_line_end,      "delete-to-line-end",      "Delete to end of line")            \
-  X(change_line,             "change-line",             "Change current line")              \
-  X(change_to_line_end,      "change-to-line-end",      "Change to end of line")            \
-  X(yank_line,               "yank-line",               "Yank current line")                \
-  X(paste_after,             "paste-after",             "Paste after cursor")               \
-  X(paste_before,            "paste-before",            "Paste before cursor")              \
-  X(join_lines,              "join-lines",              "Join line below onto this one")    \
-  X(indent_line,             "indent-line",             "Indent current line")              \
-  X(dedent_line,             "dedent-line",             "Dedent current line")              \
-  X(undo,                    "undo",                    "Undo last change")                 \
-  X(redo,                    "redo",                    "Redo last undone change")          \
-  X(repeat,                  "repeat",                  "Repeat last change")               \
-  /* ---- insert-mode input ---- */                                                         \
-  X(insert_newline,          "insert-newline",          "Insert a line break")              \
-  X(insert_tab,              "insert-tab",              "Insert a tab")                     \
-  X(backspace,               "backspace",               "Delete backwards")                 \
-  /* ---- scrolling ---- */                                                                 \
-  X(scroll_half_page_down,   "scroll-half-page-down",   "Scroll down half a screen")        \
-  X(scroll_half_page_up,     "scroll-half-page-up",     "Scroll up half a screen")          \
-  X(scroll_line_down,        "scroll-line-down",        "Scroll down one line")             \
-  X(scroll_line_up,          "scroll-line-up",          "Scroll up one line")               \
-  X(center_line,             "center-line",             "Centre cursor line on screen")     \
-  /* ---- windows ---- */                                                                   \
-  X(split_vertical,          "split-vertical",          "Split window vertically")          \
-  X(split_horizontal,        "split-horizontal",        "Split window horizontally")        \
-  X(focus_left,              "focus-left",              "Focus window to the left")         \
-  X(focus_right,             "focus-right",             "Focus window to the right")        \
-  X(focus_up,                "focus-up",                "Focus window above")               \
-  X(focus_down,              "focus-down",              "Focus window below")               \
-  X(close_window,            "close-window",            "Close the focused window")         \
-  X(only_window,             "only-window",             "Close all other windows")          \
-  /* ---- buffers and files ---- */                                                         \
-  X(buffer_next,             "buffer-next",             "Switch to next buffer")            \
-  X(buffer_prev,             "buffer-prev",             "Switch to previous buffer")        \
-  X(edit_file,               "edit",                    "Open a file")                      \
-  X(write_file,              "write",                   "Write the current buffer")         \
-  X(write_quit,              "write-quit",              "Write and close the window")       \
-  X(quit,                    "quit",                    "Close the focused window")         \
-  X(quit_all,                "quit-all",                "Exit the editor")                  \
-  /* ---- command line ---- */                                                              \
-  X(command_line_open,       "command-line-open",       "Open the command line")            \
-  X(command_line_submit,     "command-line-submit",     "Run the typed command")            \
-  X(command_line_cancel,     "command-line-cancel",     "Dismiss the command line")
+// What a command's argument means, which is what completion keys off.
+enum class CommandArg : u8 {
+  None = 0,     // takes no argument
+  Text,          // freeform
+  Path,          // completes against the filesystem
+  BufferName,    // completes against open buffers
+  CommandName,   // completes against the command list
+  COUNT
+};
+
+enum class CommandFlags : u16 {
+  None = 0,
+  Bang = 1 << 0,        // accepts a trailing "!"
+  Range = 1 << 1,       // accepts a line range prefix
+  RequiresArg = 1 << 2, // an argument is mandatory
+  Hidden = 1 << 3,      // omitted from completion (keybinding-only actions)
+};
+ENUM_FLAG_OPS(CommandFlags)
+
+// Short spellings for the table below, so a COMMAND_LIST line stays readable.
+inline constexpr CommandFlags CmdNone = CommandFlags::None;
+inline constexpr CommandFlags CmdBang = CommandFlags::Bang;
+inline constexpr CommandFlags CmdRange = CommandFlags::Range;
+inline constexpr CommandFlags CmdArg = CommandFlags::RequiresArg;
+inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
+
+// X(identifier, "name", "description", argument kind, flags)
+//
+// Editing primitives are Hidden: they are bound to keys and make little sense
+// typed at a prompt, but they remain callable by name so a future macro or a
+// binding can reach them.
+#define COMMAND_LIST                                                                                                     \
+  /* ---- motions ---- */                                                                                                \
+  X(cursor_left,           "cursor-left",           "Move cursor left",                CommandArg::None, CmdHidden)      \
+  X(cursor_right,          "cursor-right",          "Move cursor right",               CommandArg::None, CmdHidden)      \
+  X(cursor_up,             "cursor-up",             "Move cursor up one line",         CommandArg::None, CmdHidden)      \
+  X(cursor_down,           "cursor-down",           "Move cursor down one line",       CommandArg::None, CmdHidden)      \
+  X(word_forward,          "word-forward",          "Move to next word start",         CommandArg::None, CmdHidden)      \
+  X(word_backward,         "word-backward",         "Move to previous word start",     CommandArg::None, CmdHidden)      \
+  X(word_end,              "word-end",              "Move to next word end",           CommandArg::None, CmdHidden)      \
+  X(word_forward_big,      "word-forward-big",      "Move to next WORD start",         CommandArg::None, CmdHidden)      \
+  X(word_backward_big,     "word-backward-big",     "Move to previous WORD start",     CommandArg::None, CmdHidden)      \
+  X(word_end_big,          "word-end-big",          "Move to next WORD end",           CommandArg::None, CmdHidden)      \
+  X(line_start,            "line-start",            "Move to start of line",           CommandArg::None, CmdHidden)      \
+  X(line_first_non_blank,  "line-first-non-blank",  "Move to first non-blank",         CommandArg::None, CmdHidden)      \
+  X(line_end,              "line-end",              "Move to end of line",             CommandArg::None, CmdHidden)      \
+  X(file_start,            "file-start",            "Move to start of file",           CommandArg::None, CmdHidden)      \
+  X(file_end,              "file-end",              "Move to end of file",             CommandArg::None, CmdHidden)      \
+  X(paragraph_forward,     "paragraph-forward",     "Move to next blank line",         CommandArg::None, CmdHidden)      \
+  X(paragraph_backward,    "paragraph-backward",    "Move to previous blank line",     CommandArg::None, CmdHidden)      \
+  X(find_char_forward,     "find-char-forward",     "Find character forward",          CommandArg::None, CmdHidden)      \
+  X(find_char_backward,    "find-char-backward",    "Find character backward",         CommandArg::None, CmdHidden)      \
+  X(till_char_forward,     "till-char-forward",     "Move before next character",      CommandArg::None, CmdHidden)      \
+  X(till_char_backward,    "till-char-backward",    "Move after previous character",   CommandArg::None, CmdHidden)      \
+  X(matching_bracket,      "matching-bracket",      "Jump to matching bracket",        CommandArg::None, CmdHidden)      \
+  /* ---- mode changes ---- */                                                                                           \
+  X(normal_mode,           "normal-mode",           "Return to normal mode",           CommandArg::None, CmdHidden)      \
+  X(insert_mode,           "insert-mode",           "Insert before cursor",            CommandArg::None, CmdHidden)      \
+  X(insert_line_start,     "insert-line-start",     "Insert at first non-blank",       CommandArg::None, CmdHidden)      \
+  X(append,                "append",                "Insert after cursor",             CommandArg::None, CmdHidden)      \
+  X(append_line_end,       "append-line-end",       "Insert at end of line",           CommandArg::None, CmdHidden)      \
+  X(open_line_below,       "open-line-below",       "Open a line below",               CommandArg::None, CmdHidden)      \
+  X(open_line_above,       "open-line-above",       "Open a line above",               CommandArg::None, CmdHidden)      \
+  X(visual_mode,           "visual-mode",           "Enter visual mode",               CommandArg::None, CmdHidden)      \
+  X(visual_line_mode,      "visual-line-mode",      "Enter linewise visual mode",      CommandArg::None, CmdHidden)      \
+  X(replace_mode,          "replace-mode",          "Enter replace mode",              CommandArg::None, CmdHidden)      \
+  /* ---- operators ---- */                                                                                              \
+  X(operator_delete,       "operator-delete",       "Delete over a motion",            CommandArg::None, CmdHidden)      \
+  X(operator_change,       "operator-change",       "Change over a motion",            CommandArg::None, CmdHidden)      \
+  X(operator_yank,         "operator-yank",         "Yank over a motion",              CommandArg::None, CmdHidden)      \
+  X(operator_indent,       "operator-indent",       "Indent over a motion",            CommandArg::None, CmdHidden)      \
+  X(operator_dedent,       "operator-dedent",       "Dedent over a motion",            CommandArg::None, CmdHidden)      \
+  /* ---- edits ---- */                                                                                                  \
+  X(delete_char,           "delete-char",           "Delete character under cursor",   CommandArg::None, CmdHidden)      \
+  X(delete_char_before,    "delete-char-before",    "Delete character before cursor",  CommandArg::None, CmdHidden)      \
+  X(delete_line,           "delete",                "Delete lines",                    CommandArg::None, CmdRange)       \
+  X(delete_to_line_end,    "delete-to-line-end",    "Delete to end of line",           CommandArg::None, CmdHidden)      \
+  X(change_line,           "change-line",           "Change current line",             CommandArg::None, CmdHidden)      \
+  X(change_to_line_end,    "change-to-line-end",    "Change to end of line",           CommandArg::None, CmdHidden)      \
+  X(yank_line,             "yank",                  "Yank lines",                      CommandArg::None, CmdRange)       \
+  X(paste_after,           "put",                   "Paste after cursor",              CommandArg::None, CmdNone)        \
+  X(paste_before,          "put-before",            "Paste before cursor",             CommandArg::None, CmdNone)        \
+  X(join_lines,            "join",                  "Join lines",                      CommandArg::None, CmdRange)       \
+  X(indent_line,           "indent",                "Indent lines",                    CommandArg::None, CmdRange)       \
+  X(dedent_line,           "dedent",                "Dedent lines",                    CommandArg::None, CmdRange)       \
+  X(undo,                  "undo",                  "Undo last change",                CommandArg::None, CmdNone)        \
+  X(redo,                  "redo",                  "Redo last undone change",         CommandArg::None, CmdNone)        \
+  X(repeat,                "repeat",                "Repeat last change",              CommandArg::None, CmdHidden)      \
+  /* ---- insert-mode input ---- */                                                                                      \
+  X(insert_newline,        "insert-newline",        "Insert a line break",             CommandArg::None, CmdHidden)      \
+  X(insert_tab,            "insert-tab",            "Insert a tab",                    CommandArg::None, CmdHidden)      \
+  X(backspace,             "backspace",             "Delete backwards",                CommandArg::None, CmdHidden)      \
+  /* ---- scrolling ---- */                                                                                              \
+  X(scroll_half_page_down, "scroll-half-page-down", "Scroll down half a screen",       CommandArg::None, CmdHidden)      \
+  X(scroll_half_page_up,   "scroll-half-page-up",   "Scroll up half a screen",         CommandArg::None, CmdHidden)      \
+  X(scroll_line_down,      "scroll-line-down",      "Scroll down one line",            CommandArg::None, CmdHidden)      \
+  X(scroll_line_up,        "scroll-line-up",        "Scroll up one line",              CommandArg::None, CmdHidden)      \
+  X(center_line,           "center-line",           "Centre cursor line",              CommandArg::None, CmdHidden)      \
+  X(goto_line,             "goto",                  "Go to a line",                    CommandArg::None, CmdRange)       \
+  /* ---- windows ---- */                                                                                                \
+  X(split_vertical,        "split-vertical",        "Split window vertically",         CommandArg::Path, CmdNone)        \
+  X(split_horizontal,      "split-horizontal",      "Split window horizontally",       CommandArg::Path, CmdNone)        \
+  X(focus_left,            "focus-left",            "Focus window to the left",        CommandArg::None, CmdHidden)      \
+  X(focus_right,           "focus-right",           "Focus window to the right",       CommandArg::None, CmdHidden)      \
+  X(focus_up,              "focus-up",              "Focus window above",              CommandArg::None, CmdHidden)      \
+  X(focus_down,            "focus-down",            "Focus window below",              CommandArg::None, CmdHidden)      \
+  X(close_window,          "close",                 "Close the focused window",        CommandArg::None, CmdBang)        \
+  X(only_window,           "only",                  "Close all other windows",         CommandArg::None, CmdNone)        \
+  /* ---- buffers and files ---- */                                                                                      \
+  X(buffer_next,           "buffer-next",           "Switch to next buffer",           CommandArg::None, CmdNone)        \
+  X(buffer_prev,           "buffer-prev",           "Switch to previous buffer",       CommandArg::None, CmdNone)        \
+  X(buffer_switch,         "buffer",                "Switch to a named buffer",  CommandArg::BufferName, CmdArg)         \
+  X(edit_file,             "edit",                  "Open a file",                     CommandArg::Path, CmdBang|CmdArg) \
+  X(write_file,            "write",                 "Write the buffer",                CommandArg::Path, CmdBang|CmdRange) \
+  X(write_quit,            "write-quit",            "Write and close the window",      CommandArg::Path, CmdBang)        \
+  X(quit,                  "quit",                  "Close the focused window",        CommandArg::None, CmdBang)        \
+  X(quit_all,              "quit-all",              "Exit the editor",                 CommandArg::None, CmdBang)        \
+  /* ---- meta ---- */                                                                                                   \
+  X(list_commands,         "commands",              "List every command",              CommandArg::None, CmdNone)        \
+  X(list_buffers,          "buffers",               "List open buffers",               CommandArg::None, CmdNone)        \
+  X(list_bindings,         "bindings",              "List key bindings",               CommandArg::None, CmdNone)        \
+  /* ---- command window ---- */                                                                                         \
+  X(command_line_open,     "command-line-open",     "Open the command window",         CommandArg::None, CmdHidden)      \
+  X(command_line_submit,   "command-line-submit",   "Run the typed command",           CommandArg::None, CmdHidden)      \
+  X(command_line_cancel,   "command-line-cancel",   "Dismiss the command window",      CommandArg::None, CmdHidden)      \
+  X(command_line_complete, "command-line-complete", "Complete the current word",       CommandArg::None, CmdHidden)
 
 enum class CommandId : u16 {
   None = 0,
-#define X(id, name, desc) id,
+#define X(id, name, desc, arg, flags) id,
   COMMAND_LIST
 #undef X
   COUNT
 };
 
-// The name typed at the `:` prompt.
+// What a command is called and what it accepts. Dispatch is separate; see
+// editor/command.h.
+struct CommandSpec {
+  String8 name;
+  String8 desc;
+  CommandArg arg;
+  CommandFlags flags;
+};
+
+[[nodiscard]] const CommandSpec *CommandSpecFromId(CommandId id);
 [[nodiscard]] String8 CommandName(CommandId id);
 [[nodiscard]] String8 CommandDescription(CommandId id);
-// Returns CommandId::None when no command has that name.
+
+// Exact name match only. Returns None when there is no such command.
 [[nodiscard]] CommandId CommandIdFromName(String8 name);
 
-// Prefix search over command names, for command-line completion.
+// Full resolution as the command window does it: exact name, then a short
+// alias, then an unambiguous prefix. Ambiguous prefixes resolve to None, so
+// "b" does not silently pick one of several commands starting with it.
+[[nodiscard]] CommandId CommandIdResolve(String8 name);
+
+// Names that would be reachable by extending `prefix`, for completion. Hidden
+// commands are omitted unless `include_hidden`.
 struct CommandIdList {
   CommandId *ids;
   u64 count;
 };
-[[nodiscard]] CommandIdList CommandIdsWithPrefix(Arena *arena, String8 prefix);
+[[nodiscard]] CommandIdList CommandIdsWithPrefix(Arena *arena, String8 prefix,
+                                                 bool include_hidden = false);

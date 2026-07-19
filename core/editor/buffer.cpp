@@ -47,6 +47,10 @@ void BufferDestroy(Buffer *buffer) {
 // is what keeps the line index, undo stack, dirty flag and hooks in step.
 void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
                    u64 cursor_before, u64 cursor_after) {
+  // Enforced here rather than in each command: this is the only way text
+  // changes, so one check covers every caller.
+  if (BufferIsReadOnly(buffer)) return;
+
   u64 size = BufferSize(buffer);
   RangeU64 clamped = RangeU64{Min(range.min, size), Min(range.max, size)};
   if (clamped.max < clamped.min) clamped.max = clamped.min;
@@ -193,11 +197,16 @@ u64 BufferPrevCodepoint(const Buffer *buffer, u64 offset) {
 }
 
 u64 BufferColumnFromOffset(const Buffer *buffer, u64 offset) {
-  u64 line = BufferLineFromOffset(buffer, offset);
+  // Clamp first. A view can hold a cursor past the end after the buffer it
+  // points at is replaced or truncated, and BufferNextCodepoint saturates at
+  // the end -- so without this the walk below would never reach `offset`.
+  u64 target = Min(offset, BufferSize(buffer));
+
+  u64 line = BufferLineFromOffset(buffer, target);
   u64 start = BufferOffsetFromLine(buffer, line);
 
   u64 column = 0;
-  for (u64 p = start; p < offset;) {
+  for (u64 p = start; p < target;) {
     p = BufferNextCodepoint(buffer, p);
     column += 1;
   }

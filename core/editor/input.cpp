@@ -75,7 +75,7 @@ void InsertText(Editor *ed, View *view, Buffer *buffer, u32 codepoint) {
 }  // namespace
 
 Keymap *EditorActiveKeymap(Editor *ed) {
-  View *view = EditorFocusedView(ed);
+  View *view = EditorInputView(ed);
   Buffer *buffer = EditorBufferForView(ed, view);
   if (!view) return ed->global_map;
 
@@ -104,7 +104,9 @@ Keymap *EditorActiveKeymap(Editor *ed) {
 void EditorProcessChord(Editor *ed, KeyChord chord) {
   if (!KeyChordValid(chord)) return;
 
-  View *view = EditorFocusedView(ed);
+  // Keystrokes go to the command window while it is open; commands it runs
+  // still act on the panel underneath.
+  View *view = EditorInputView(ed);
   Buffer *buffer = EditorBufferForView(ed, view);
   if (!view || !buffer) return;
 

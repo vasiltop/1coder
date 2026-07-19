@@ -109,13 +109,17 @@ void BeginOperator(CommandArgs *a, OperatorKind op) {
   vim->has_operator_count = a->has_count;
 }
 
-// The doubled form of an operator (dd, yy, cc) acting on whole lines.
+// The doubled form of an operator (dd, yy, cc) acting on whole lines. Also the
+// entry point for the range forms typed at the command window, where the range
+// names the lines outright instead of counting from the cursor.
 void OperatorOnLines(CommandArgs *a, OperatorKind op) {
   View *view = a->view;
   Buffer *buffer = a->buffer;
 
-  u64 line = ViewCursorLine(view, buffer);
-  u64 last = Min(line + a->count - 1, BufferLineCount(buffer) - 1);
+  u64 line = a->has_range ? Min(a->line_first, BufferLineCount(buffer) - 1)
+                          : ViewCursorLine(view, buffer);
+  u64 last = a->has_range ? Min(a->line_last, BufferLineCount(buffer) - 1)
+                          : Min(line + a->count - 1, BufferLineCount(buffer) - 1);
 
   RangeU64 range = RangeU64{BufferOffsetFromLine(buffer, line),
                             LineRangeWithNewline(&buffer->lines, &buffer->text, last).max};
@@ -482,15 +486,22 @@ static void Cmd_center_line(CommandArgs *a) {
 // Windows
 // ---------------------------------------------------------------------------
 
-static void Cmd_split_vertical(CommandArgs *a) { (void)EditorSplit(a->ed, Axis2::X); }
-static void Cmd_split_horizontal(CommandArgs *a) { (void)EditorSplit(a->ed, Axis2::Y); }
+// A split may name a file to open in the new window, as vim's :vsplit does.
+static void SplitAndMaybeOpen(CommandArgs *a, Axis2 axis) {
+  if (!EditorSplit(a->ed, axis)) return;
+  if (a->arg.size == 0) return;
+
+  BufferHandle handle = EditorOpenFile(a->ed, a->arg);
+  if (handle.index != 0) EditorShowBuffer(a->ed, handle);
+}
+
+static void Cmd_split_vertical(CommandArgs *a) { SplitAndMaybeOpen(a, Axis2::X); }
+static void Cmd_split_horizontal(CommandArgs *a) { SplitAndMaybeOpen(a, Axis2::Y); }
 
 static void Cmd_focus_left(CommandArgs *a) { EditorFocusDir(a->ed, Dir2::Left); }
 static void Cmd_focus_right(CommandArgs *a) { EditorFocusDir(a->ed, Dir2::Right); }
 static void Cmd_focus_up(CommandArgs *a) { EditorFocusDir(a->ed, Dir2::Up); }
 static void Cmd_focus_down(CommandArgs *a) { EditorFocusDir(a->ed, Dir2::Down); }
-
-static void Cmd_close_window(CommandArgs *a) { EditorClosePanel(a->ed, a->ed->focused_panel); }
 
 static void Cmd_only_window(CommandArgs *a) {
   Editor *ed = a->ed;
@@ -523,21 +534,43 @@ static void Cmd_buffer_prev(CommandArgs *a) {
 }
 
 static void Cmd_edit_file(CommandArgs *a) {
-  if (a->text.size == 0) {
-    EditorSetStatus(a->ed, Str8Lit("edit: expected a path"));
+  // Opening over unsaved work needs the forced variant.
+  if (BufferIsDirty(a->buffer) && !a->bang && a->buffer->kind == BufferKind::File) {
+    EditorSetStatus(a->ed, Str8Lit("No write since last change (add ! to override)"));
     return;
   }
-  BufferHandle handle = EditorOpenFile(a->ed, a->text);
+
+  BufferHandle handle = EditorOpenFile(a->ed, a->arg);
   if (handle.index == 0) {
-    EditorSetStatusF(a->ed, "edit: cannot open %.*s", (int)a->text.size, (char *)a->text.str);
+    EditorSetStatusF(a->ed, "Cannot open %.*s", (int)a->arg.size, (char *)a->arg.str);
     return;
   }
   EditorShowBuffer(a->ed, handle);
 }
 
+static void Cmd_buffer_switch(CommandArgs *a) {
+  BufferHandle handle = BufferFromName(&a->ed->buffers, a->arg);
+  if (handle.index == 0) {
+    EditorSetStatusF(a->ed, "No buffer named %.*s", (int)a->arg.size, (char *)a->arg.str);
+    return;
+  }
+  EditorShowBuffer(a->ed, handle);
+}
+
+static void Cmd_goto_line(CommandArgs *a) {
+  u64 line = a->has_range ? a->line_last : 0;
+  ViewSetCursorLineColumn(a->view, a->buffer, line, 0);
+  a->view->preferred_column = 0;
+}
+
 static void Cmd_write_file(CommandArgs *a) {
   Buffer *buffer = a->buffer;
-  String8 path = a->text;
+  String8 path = a->arg;
+
+  if (BufferIsReadOnly(buffer) && !a->bang) {
+    EditorSetStatus(a->ed, Str8Lit("Buffer is read-only (add ! to override)"));
+    return;
+  }
 
   if (path.size == 0 && buffer->path.size == 0) {
     EditorSetStatus(a->ed, Str8Lit("write: no file name"));
@@ -551,20 +584,36 @@ static void Cmd_write_file(CommandArgs *a) {
 }
 
 static void Cmd_quit(CommandArgs *a) {
-  // Refuse to discard unsaved work silently.
-  if (BufferIsDirty(a->buffer) && a->buffer->kind == BufferKind::File) {
-    EditorSetStatus(a->ed, Str8Lit("No write since last change"));
+  // Refuse to discard unsaved work unless explicitly forced.
+  if (BufferIsDirty(a->buffer) && !a->bang && a->buffer->kind == BufferKind::File) {
+    EditorSetStatus(a->ed, Str8Lit("No write since last change (add ! to override)"));
     return;
   }
   EditorClosePanel(a->ed, a->ed->focused_panel);
 }
+
+static void Cmd_close_window(CommandArgs *a) { Cmd_quit(a); }
 
 static void Cmd_write_quit(CommandArgs *a) {
   Cmd_write_file(a);
   if (!BufferIsDirty(a->buffer)) EditorClosePanel(a->ed, a->ed->focused_panel);
 }
 
-static void Cmd_quit_all(CommandArgs *a) { a->ed->quit = true; }
+static void Cmd_quit_all(CommandArgs *a) {
+  if (!a->bang) {
+    // Check every buffer, not just the focused one.
+    for (BufferHandle h = BufferFirst(&a->ed->buffers); h.index != 0;
+         h = BufferNext(&a->ed->buffers, h)) {
+      Buffer *b = BufferFromHandle(&a->ed->buffers, h);
+      if (b && BufferIsDirty(b) && b->kind == BufferKind::File) {
+        EditorSetStatusF(a->ed, "No write since last change for %.*s (add ! to override)",
+                         (int)b->name.size, (char *)b->name.str);
+        return;
+      }
+    }
+  }
+  a->ed->quit = true;
+}
 
 // ---------------------------------------------------------------------------
 // Command line
@@ -598,15 +647,177 @@ static void Cmd_command_line_cancel(CommandArgs *a) {
   a->ed->command_line_active = false;
 }
 
+static void Cmd_command_line_complete(CommandArgs *a) {
+  Editor *ed = a->ed;
+  Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
+  if (!buffer) return;
+
+  TempArena scratch = ScratchBegin();
+  String8 line = BufferTextAll(scratch.arena, buffer);
+  CommandCompletion completion = CommandCompletionsFor(scratch.arena, ed, line);
+
+  if (completion.count == 0) {
+    ScratchEnd(scratch);
+    return;
+  }
+
+  // With one candidate, accept it. With several, extend to their longest
+  // common prefix and show them, which is what makes repeated Tab useful
+  // rather than cycling blindly.
+  String8 replacement = completion.items[0];
+  if (completion.count > 1) {
+    u64 common = replacement.size;
+    for (u64 i = 1; i < completion.count; i += 1) {
+      String8 other = completion.items[i];
+      u64 n = Min(common, other.size);
+      u64 k = 0;
+      while (k < n && replacement.str[k] == other.str[k]) k += 1;
+      common = k;
+    }
+    replacement = Str8Prefix(replacement, common);
+
+    TempArena list_scratch = ScratchBegin1(scratch.arena);
+    String8List names = {};
+    for (u64 i = 0; i < completion.count && i < 12; i += 1) {
+      Str8ListPush(list_scratch.arena, &names, completion.items[i]);
+    }
+    EditorSetStatus(ed, Str8ListJoin(list_scratch.arena, &names, Str8Lit("  ")));
+    ScratchEnd(list_scratch);
+  } else {
+    EditorSetStatus(ed, String8{nullptr, 0});
+  }
+
+  RangeU64 replace = RangeU64{completion.replace_start, completion.replace_end};
+  if (replacement.size > 0) {
+    BufferReplace(ed, buffer, replace, replacement, 0, 0);
+    View *command_view = a->view;
+    if (command_view) ViewSetCursor(command_view, buffer, BufferSize(buffer));
+  }
+
+  ScratchEnd(scratch);
+}
+
+// ---------------------------------------------------------------------------
+// Listings
+//
+// Each opens an ordinary scratch buffer. Showing a list needs no new UI
+// concept, which is the same property a grep results pane or a file explorer
+// will rely on.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+void ShowListing(Editor *ed, String8 name, String8 text) {
+  BufferHandle handle = BufferFromName(&ed->buffers, name);
+  if (handle.index == 0) handle = BufferOpen(&ed->buffers, BufferKind::Scratch, name);
+
+  Buffer *buffer = BufferFromHandle(&ed->buffers, handle);
+  if (!buffer) return;
+
+  buffer->flags &= ~BufferFlags::ReadOnly;
+  BufferSetText(ed, buffer, text);
+  buffer->flags |= BufferFlags::ReadOnly;
+
+  EditorShowBuffer(ed, handle);
+}
+
+}  // namespace
+
+static void Cmd_list_commands(CommandArgs *a) {
+  TempArena scratch = ScratchBegin();
+  String8List lines = {};
+
+  Str8ListPush(scratch.arena, &lines, Str8Lit("COMMAND                  ARGUMENT   DESCRIPTION"));
+  Str8ListPush(scratch.arena, &lines, Str8Lit(""));
+
+  for (u16 i = 1; i < (u16)CommandId::COUNT; i += 1) {
+    const CommandSpec *spec = CommandSpecFromId((CommandId)i);
+    if (!spec || HasFlag(spec->flags, CommandFlags::Hidden)) continue;
+
+    const char *arg = "";
+    switch (spec->arg) {
+      case CommandArg::Path: arg = "path"; break;
+      case CommandArg::BufferName: arg = "buffer"; break;
+      case CommandArg::CommandName: arg = "command"; break;
+      case CommandArg::Text: arg = "text"; break;
+      default: arg = "-"; break;
+    }
+
+    // Show the shape as well as the name, so the listing doubles as the
+    // reference for what each command accepts.
+    TempArena inner = ScratchBegin1(scratch.arena);
+    String8 decorated = PushStr8F(inner.arena, "%.*s%s%s", (int)spec->name.size,
+                                  (char *)spec->name.str,
+                                  HasFlag(spec->flags, CommandFlags::Bang) ? "[!]" : "",
+                                  HasFlag(spec->flags, CommandFlags::Range) ? " [range]" : "");
+    Str8ListPush(scratch.arena, &lines,
+                 PushStr8F(scratch.arena, "%-24.*s %-10s %.*s", (int)decorated.size,
+                           (char *)decorated.str, arg, (int)spec->desc.size,
+                           (char *)spec->desc.str));
+    ScratchEnd(inner);
+  }
+
+  ShowListing(a->ed, Str8Lit("[commands]"), Str8ListJoin(scratch.arena, &lines, Str8Lit("\n")));
+  ScratchEnd(scratch);
+}
+
+static void Cmd_list_buffers(CommandArgs *a) {
+  TempArena scratch = ScratchBegin();
+  String8List lines = {};
+
+  for (BufferHandle h = BufferFirst(&a->ed->buffers); h.index != 0;
+       h = BufferNext(&a->ed->buffers, h)) {
+    Buffer *b = BufferFromHandle(&a->ed->buffers, h);
+    if (!b) continue;
+    Str8ListPush(scratch.arena, &lines,
+                 PushStr8F(scratch.arena, "%3llu %s %-24.*s %.*s", (unsigned long long)h.index,
+                           BufferIsDirty(b) ? "+" : " ", (int)b->name.size, (char *)b->name.str,
+                           (int)b->path.size, (char *)b->path.str));
+  }
+
+  ShowListing(a->ed, Str8Lit("[buffers]"), Str8ListJoin(scratch.arena, &lines, Str8Lit("\n")));
+  ScratchEnd(scratch);
+}
+
+static void Cmd_list_bindings(CommandArgs *a) {
+  TempArena scratch = ScratchBegin();
+  String8List lines = {};
+
+  struct MapEntry { const char *label; Keymap *map; };
+  MapEntry maps[] = {
+      {"normal", a->ed->normal_map},   {"visual", a->ed->visual_map},
+      {"insert", a->ed->insert_map},   {"operator-pending", a->ed->operator_pending_map},
+      {"global", a->ed->global_map},
+  };
+
+  for (u64 i = 0; i < ArrayCount(maps); i += 1) {
+    Str8ListPush(scratch.arena, &lines,
+                 PushStr8F(scratch.arena, "-- %s --", maps[i].label));
+
+    KeymapEntryList entries = KeymapAllBindings(scratch.arena, maps[i].map);
+    for (u64 j = 0; j < entries.count; j += 1) {
+      String8 name = CommandName(entries.entries[j].command);
+      Str8ListPush(scratch.arena, &lines,
+                   PushStr8F(scratch.arena, "  %-12.*s %.*s", (int)entries.entries[j].spec.size,
+                             (char *)entries.entries[j].spec.str, (int)name.size,
+                             (char *)name.str));
+    }
+    Str8ListPush(scratch.arena, &lines, Str8Lit(""));
+  }
+
+  ShowListing(a->ed, Str8Lit("[bindings]"), Str8ListJoin(scratch.arena, &lines, Str8Lit("\n")));
+  ScratchEnd(scratch);
+}
+
 // ---------------------------------------------------------------------------
 // Table
 // ---------------------------------------------------------------------------
 
 namespace {
 
-const Command kCommands[] = {
-    {String8{nullptr, 0}, String8{nullptr, 0}, nullptr},  // CommandId::None
-#define X(id, name, desc) {Str8LitComp(name), Str8LitComp(desc), Cmd_##id},
+constexpr Command kCommands[] = {
+    {CommandId::None, nullptr},
+#define X(id, name, desc, arg, flags) {CommandId::id, Cmd_##id},
     COMMAND_LIST
 #undef X
 };
@@ -622,6 +833,13 @@ const Command *CommandFromId(CommandId id) {
 }
 
 void CommandExec(Editor *ed, CommandId id, String8 text, KeyChord chord) {
+  CommandArgs args = {};
+  args.text = text;
+  args.chord = chord;
+  CommandExecArgs(ed, id, &args);
+}
+
+void CommandExecArgs(Editor *ed, CommandId id, CommandArgs *supplied) {
   const Command *command = CommandFromId(id);
   if (!command || !command->proc) return;
 
@@ -629,12 +847,10 @@ void CommandExec(Editor *ed, CommandId id, String8 text, KeyChord chord) {
   Buffer *buffer = EditorBufferForView(ed, view);
   if (!view || !buffer) return;
 
-  CommandArgs args = {};
+  CommandArgs args = *supplied;
   args.ed = ed;
   args.view = view;
   args.buffer = buffer;
-  args.text = text;
-  args.chord = chord;
 
   // Resolve the vim count once, here, so no command has to reimplement the
   // "operator count times motion count, defaulting to one" rule.
@@ -646,6 +862,13 @@ void CommandExec(Editor *ed, CommandId id, String8 text, KeyChord chord) {
   view->vim.count = 0;
   view->vim.has_count = false;
 
+  // A range implies a count for commands that think in lines, so ":1,5d" and
+  // "5dd" reach the same code.
+  if (args.has_range) {
+    args.count = args.line_last - args.line_first + 1;
+    args.has_count = true;
+  }
+
   command->proc(&args);
 
   // The operator count survives only until the motion that consumes it.
@@ -655,37 +878,4 @@ void CommandExec(Editor *ed, CommandId id, String8 text, KeyChord chord) {
   }
 
   EditorScrollFocusedToCursor(ed);
-}
-
-bool CommandExecLine(Editor *ed, String8 line) {
-  String8 trimmed = Str8SkipChopWhitespace(line);
-  if (trimmed.size == 0) return true;
-
-  // Split into the command name and the rest, which becomes its argument.
-  u64 space = Str8FindFirstChar(trimmed, ' ');
-  String8 name = Str8Prefix(trimmed, space);
-  String8 argument = Str8SkipChopWhitespace(Str8Skip(trimmed, space));
-
-  CommandId id = CommandIdFromName(name);
-
-  // Vim's single-letter shorthands, which are what people actually type.
-  if (id == CommandId::None) {
-    if (Str8Match(name, Str8Lit("w"))) id = CommandId::write_file;
-    else if (Str8Match(name, Str8Lit("q"))) id = CommandId::quit;
-    else if (Str8Match(name, Str8Lit("wq"))) id = CommandId::write_quit;
-    else if (Str8Match(name, Str8Lit("qa"))) id = CommandId::quit_all;
-    else if (Str8Match(name, Str8Lit("e"))) id = CommandId::edit_file;
-    else if (Str8Match(name, Str8Lit("bn"))) id = CommandId::buffer_next;
-    else if (Str8Match(name, Str8Lit("bp"))) id = CommandId::buffer_prev;
-    else if (Str8Match(name, Str8Lit("vs"))) id = CommandId::split_vertical;
-    else if (Str8Match(name, Str8Lit("sp"))) id = CommandId::split_horizontal;
-  }
-
-  if (id == CommandId::None) {
-    EditorSetStatusF(ed, "Not a command: %.*s", (int)name.size, (char *)name.str);
-    return false;
-  }
-
-  CommandExec(ed, id, argument);
-  return true;
 }

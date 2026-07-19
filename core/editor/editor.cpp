@@ -33,6 +33,8 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   ed->focused_panel = ed->root_panel;
 
   ed->command_buffer = CommandLineBufferOpen(ed);
+  ed->command_view = PushStruct(arena, View);
+  ViewInit(ed->command_view, ed->command_buffer);
 
   EditorInstallDefaultBindings(ed);
   EditorLayout(ed);
@@ -64,6 +66,13 @@ Buffer *EditorBufferForView(Editor *ed, View *view) {
 Buffer *EditorFocusedBuffer(Editor *ed) {
   return EditorBufferForView(ed, EditorFocusedView(ed));
 }
+
+View *EditorInputView(Editor *ed) {
+  if (ed->command_line_active && ed->command_view) return ed->command_view;
+  return EditorFocusedView(ed);
+}
+
+Buffer *EditorInputBuffer(Editor *ed) { return EditorBufferForView(ed, EditorInputView(ed)); }
 
 RectS32 EditorPanelTextRect(const Editor *ed, const Panel *panel) {
   // Each panel reserves its bottom row for its own status line.

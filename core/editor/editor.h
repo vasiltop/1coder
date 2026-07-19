@@ -66,8 +66,11 @@ struct Editor {
   String8 cwd;
   String8 status_message;
 
-  // The `:` line, which is a buffer like any other.
+  // The command window: a buffer like any other, plus its own view. It needs a
+  // view of its own because it has a cursor and a scroll position that must not
+  // disturb the panel underneath it.
   BufferHandle command_buffer;
+  View *command_view;
   bool command_line_active;
 
   RectS32 screen;  // whole window, in cells
@@ -82,6 +85,11 @@ void EditorLayout(Editor *ed);
 void EditorSetScreen(Editor *ed, RectS32 screen);
 
 [[nodiscard]] View *EditorFocusedView(Editor *ed);
+// Where keystrokes go: the command window when it is open, otherwise the
+// focused panel. Commands still act on the focused panel, so a command typed
+// into the window affects the text underneath it.
+[[nodiscard]] View *EditorInputView(Editor *ed);
+[[nodiscard]] Buffer *EditorInputBuffer(Editor *ed);
 [[nodiscard]] Buffer *EditorFocusedBuffer(Editor *ed);
 [[nodiscard]] Buffer *EditorBufferForView(Editor *ed, View *view);
 

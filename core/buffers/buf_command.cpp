@@ -40,6 +40,23 @@ bool CommandLineKey(Editor *ed, Buffer *buffer, View *view, KeyChord chord) {
     return true;
   }
 
+  // Tab completes rather than inserting whitespace.
+  if (KeyChordEqual(chord, KeyChordKey(Key::Tab))) {
+    CommandExec(ed, CommandId::command_line_complete);
+    return true;
+  }
+
+  // Enter submits. Handled here rather than through insert-newline because the
+  // hook has the command buffer in hand, whereas a command would resolve to the
+  // focused buffer -- the one the typed command is about to act on.
+  if (KeyChordEqual(chord, KeyChordKey(Key::Return))) {
+    TempArena scratch = ScratchBegin();
+    String8 line = BufferTextAll(scratch.arena, buffer);
+    CommandLineSubmit(ed, buffer, view, line);
+    ScratchEnd(scratch);
+    return true;
+  }
+
   return false;  // everything else is ordinary text editing
 }
 

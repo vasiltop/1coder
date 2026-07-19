@@ -305,8 +305,18 @@ TEST(command_id_prefix_completion) {
   CHECK_EQ(write.count, 2);  // write, write-quit
 
   CHECK_EQ(CommandIdsWithPrefix(arena, Str8Lit("zzz")).count, 0);
-  // An empty prefix matches everything.
-  CHECK_EQ(CommandIdsWithPrefix(arena, Str8Lit("")).count, (u64)CommandId::COUNT - 1);
+
+  // Keybinding-only actions are hidden from completion, so an empty prefix
+  // offers the typeable commands rather than all 80-odd of them.
+  u64 visible = CommandIdsWithPrefix(arena, Str8Lit("")).count;
+  u64 all = CommandIdsWithPrefix(arena, Str8Lit(""), true).count;
+  CHECK(visible > 0);
+  CHECK(visible < all);
+  CHECK_EQ(all, (u64)CommandId::COUNT - 1);
+
+  // A hidden command is still reachable by exact name, so a binding or a
+  // future macro can call it.
+  CHECK_EQ((u32)CommandIdFromName(Str8Lit("cursor-left")), (u32)CommandId::cursor_left);
 
   ArenaRelease(arena);
 }
