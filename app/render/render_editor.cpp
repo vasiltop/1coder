@@ -222,7 +222,13 @@ void RenderPanelTree(RenderContext *ctx, Editor *ed, Panel *panel) {
 // The bottom row: the command window when open, otherwise the last message or
 // a part-typed chord.
 void RenderCommandLine(RenderContext *ctx, Editor *ed, f32 pixel_width, f32 pixel_height) {
-  RectF32 rect = {0.0f, pixel_height - ctx->cell_height, pixel_width, pixel_height};
+  // Starts where the panels stop, not one cell up from the bottom of the
+  // window. The two are only the same when the window height divides exactly
+  // by the cell height; otherwise the leftover pixels fall between them and the
+  // command line appears to be two rows tall. Anchoring it to the panels puts
+  // the remainder below everything, where it cannot show as a gap.
+  f32 top = (f32)(ed->screen.y1 - 1) * ctx->cell_height;
+  RectF32 rect = {0.0f, top, pixel_width, Max(pixel_height, top + ctx->cell_height)};
   DrawRect(ctx->draw, rect, ctx->theme.background);
   DrawPushClip(ctx->draw, rect);
 
