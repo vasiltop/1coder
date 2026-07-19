@@ -7,6 +7,9 @@
 BufferHandle CommandLineBufferOpen(Editor *ed);
 
 #include <stdarg.h>
+// Needed in its own right: base_types.h only pulls stdio in for Assert, which
+// compiles out in release builds.
+#include <stdio.h>
 
 void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   *ed = Editor{};
@@ -201,13 +204,11 @@ void EditorSetStatusF(Editor *ed, const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
 
-  TempArena scratch = ScratchBegin1(ed->arena);
-  // PushStr8F is variadic rather than va_list based, so format into scratch by
-  // hand here.
-  char stack_buffer[1024];
-  vsnprintf(stack_buffer, sizeof(stack_buffer), fmt, args);
-  ed->status_message = PushStr8Copy(ed->arena, Str8C(stack_buffer));
-  ScratchEnd(scratch);
+  // PushStr8F is variadic rather than va_list based, so format by hand here.
+  // A status line has nowhere useful to put more than a screenful anyway.
+  char buffer[1024];
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  ed->status_message = PushStr8Copy(ed->arena, Str8C(buffer));
 
   va_end(args);
 }

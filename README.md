@@ -9,11 +9,23 @@ scripting language. All configuration is source code.
 Needs CMake, a C++23 compiler, and SDL3.
 
 ```sh
-cmake -B build -S .
-cmake --build build -j
+cmake -B build -S . && cmake --build build -j
 
 ./build/editor path/to/file      # run
-./build/editor_tests             # 229 tests, needs no display
+./build/editor_tests             # 231 tests, needs no display
+```
+
+With [just](https://github.com/casey/just), `just` on its own lists everything:
+
+```sh
+just build                 # debug
+just release               # optimised
+just test [filter]         # headless test suite, optional name filter
+just run file.c            # build and open
+just ci                    # clean build + tests + boundary check
+just boundary              # fail if core/ has picked up an SDL dependency
+just shot o.bmp f.c --keys '<C-w>v10j'   # render one frame, no display needed
+just compdb                # compile_commands.json for clangd
 ```
 
 `stb_truetype` is vendored in `third_party/`. Nothing else is required.
@@ -138,6 +150,8 @@ replays a binding spec first. Together they capture the editor in any state
 without a display:
 
 ```sh
+just shot out.bmp file.c --keys '<C-w>v10jVj'
+# or, without just:
 SDL_VIDEODRIVER=dummy ./build/editor file.c --keys '<C-w>v10jVj' --screenshot out.bmp
 ```
 
