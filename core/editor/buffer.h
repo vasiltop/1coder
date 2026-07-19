@@ -36,9 +36,8 @@ enum class BufferKind : u8 {
 enum class BufferFlags : u32 {
   None = 0,
   Dirty = 1 << 0,      // has unsaved changes
-  ReadOnly = 1 << 1,   // rejects edits from commands
-  NoVim = 1 << 2,      // modal editing does not apply (command line, explorer)
-  SingleLine = 1 << 3, // newlines are not accepted
+  ReadOnly = 1 << 1,   // rejects every edit
+  SingleLine = 1 << 2, // newlines are dropped; the command window is one line
 };
 ENUM_FLAG_OPS(BufferFlags)
 
@@ -68,8 +67,10 @@ struct BufferHooks {
   // Text changed. Where a syntax provider marks its tree dirty.
   void (*on_edit)(Editor *ed, Buffer *buffer, RangeU64 old_range, u64 new_len);
   void (*on_close)(Editor *ed, Buffer *buffer);
-  // Bindings that apply only while this buffer is focused, layered above the
-  // current vim mode's map.
+  // Bindings that apply only while this buffer is focused. These layer *above*
+  // whichever vim mode map is active rather than replacing it, so a buffer can
+  // claim a few keys -- <CR> to run a command, or to open a search hit -- while
+  // every motion, operator and mode change keeps working as usual.
   Keymap *keymap;
 };
 

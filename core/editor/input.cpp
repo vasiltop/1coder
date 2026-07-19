@@ -74,18 +74,9 @@ void InsertText(Editor *ed, View *view, Buffer *buffer, u32 codepoint) {
 
 }  // namespace
 
-Keymap *EditorActiveKeymap(Editor *ed) {
-  View *view = EditorInputView(ed);
-  Buffer *buffer = EditorBufferForView(ed, view);
-  if (!view) return ed->global_map;
+namespace {
 
-  // A buffer-local map layers above whichever mode map applies.
-  if (buffer && buffer->hooks.keymap) return buffer->hooks.keymap;
-
-  // Buffers that opt out of modal editing always use the insert map, so typing
-  // into the command line behaves like a text field.
-  if (buffer && HasFlag(buffer->flags, BufferFlags::NoVim)) return ed->insert_map;
-
+[[nodiscard]] Keymap *ModeKeymap(Editor *ed, const View *view) {
   switch (view->vim.mode) {
     case VimMode::Insert:
     case VimMode::Replace:
@@ -99,6 +90,24 @@ Keymap *EditorActiveKeymap(Editor *ed) {
     default:
       return ed->normal_map;
   }
+}
+
+}  // namespace
+
+Keymap *EditorActiveKeymap(Editor *ed) {
+  View *view = EditorInputView(ed);
+  Buffer *buffer = EditorBufferForView(ed, view);
+  if (!view) return ed->global_map;
+
+  Keymap *mode_map = ModeKeymap(ed, view);
+  if (!buffer || !buffer->hooks.keymap) return mode_map;
+
+  // Reparent onto the current mode's map so the buffer's own bindings sit on
+  // top of it rather than in place of it. The mode changes as the user works,
+  // so the link is made here rather than fixed when the map was created --
+  // which is what lets a buffer bind <CR> without losing every motion.
+  buffer->hooks.keymap->parent = mode_map;
+  return buffer->hooks.keymap;
 }
 
 void EditorProcessChord(Editor *ed, KeyChord chord) {
@@ -153,8 +162,7 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
   } else {
     // A digit before a command is a count, not a binding -- except '0', which
     // is the start-of-line motion unless a count is already under way.
-    bool modal = !VimModeIsInsert(view->vim.mode) &&
-                 !HasFlag(buffer->flags, BufferFlags::NoVim);
+    bool modal = !VimModeIsInsert(view->vim.mode);
     if (modal && KeyChordIsChar(chord) && CharIsDigit((u8)chord.codepoint)) {
       u64 digit = chord.codepoint - '0';
       if (digit != 0 || view->vim.has_count) {
@@ -186,7 +194,7 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
       PushPendingChord(input, chord);
       return;
     }
-  } else if (VimModeIsInsert(view->vim.mode) || HasFlag(buffer->flags, BufferFlags::NoVim)) {
+  } else if (VimModeIsInsert(view->vim.mode)) {
     // Unbound printable keys are text.
     if (ChordIsPrintable(chord)) InsertText(ed, view, buffer, chord.codepoint);
     ClearPending(input);
@@ -210,10 +218,19 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
 }
 
 void EditorProcessSpec(Editor *ed, String8 spec) {
-  TempArena scratch = ScratchBegin1(ed->arena);
-  KeyChordSequence seq = KeyChordParseSequence(scratch.arena, spec);
-  for (u64 i = 0; i < seq.count; i += 1) EditorProcessChord(ed, seq.chords[i]);
-  ScratchEnd(scratch);
+  // Parsed and fed one chord at a time rather than built into a
+  // KeyChordSequence first: that type is sized for a *binding*, and rejects
+  // anything longer than kMaxChordSequence. Replayed input has no such limit --
+  // it is a whole editing session, not one keystroke combination.
+  KeyChord leader = ed->normal_map ? ed->normal_map->leader : KeyChordDefaultLeader();
+
+  u64 offset = 0;
+  while (offset < spec.size) {
+    u64 before = offset;
+    KeyChord chord = KeyChordParse(spec, &offset, leader);
+    if (!KeyChordValid(chord) || offset == before) break;
+    EditorProcessChord(ed, chord);
+  }
 }
 
 void EditorProcessSpec(Editor *ed, const char *spec) {

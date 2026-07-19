@@ -644,13 +644,33 @@ static void Cmd_quit_all(CommandArgs *a) {
 // Command line
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// Closes the command window and clears it, leaving the view ready for next
+// time. Resetting the view matters because its cursor would otherwise be left
+// pointing past the end of the now-empty buffer.
+void CommandLineDismiss(Editor *ed) {
+  ed->command_line_active = false;
+
+  Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
+  if (buffer) BufferSetText(ed, buffer, String8{nullptr, 0});
+  if (ed->command_view) ViewInit(ed->command_view, ed->command_buffer);
+}
+
+}  // namespace
+
 static void Cmd_command_line_open(CommandArgs *a) {
   Editor *ed = a->ed;
   Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
-  if (!buffer) return;
+  if (!buffer || !ed->command_view) return;
 
-  // Opening clears whatever was typed last time.
   BufferSetText(ed, buffer, String8{nullptr, 0});
+  ViewInit(ed->command_view, ed->command_buffer);
+
+  // Open in insert mode, as `q:i` does in vim: you are usually here to type a
+  // command, but Esc drops to normal mode and every motion and operator works
+  // on the line.
+  ed->command_view->vim.mode = VimMode::Insert;
   ed->command_line_active = true;
 }
 
@@ -660,16 +680,31 @@ static void Cmd_command_line_submit(CommandArgs *a) {
   if (!buffer) return;
 
   TempArena scratch = ScratchBegin();
-  String8 line = BufferTextAll(scratch.arena, buffer);
+  String8 line = PushStr8Copy(scratch.arena, BufferTextAll(scratch.arena, buffer));
 
-  ed->command_line_active = false;
+  // Close first, so the command runs against the window underneath rather than
+  // against the command line it was typed into.
+  CommandLineDismiss(ed);
   (void)CommandExecLine(ed, line);
 
   ScratchEnd(scratch);
 }
 
-static void Cmd_command_line_cancel(CommandArgs *a) {
-  a->ed->command_line_active = false;
+static void Cmd_command_line_cancel(CommandArgs *a) { CommandLineDismiss(a->ed); }
+
+// Esc means "leave insert mode" the first time and "give up on this command"
+// the second, so the window behaves like any other buffer until there is
+// nothing left for Esc to do.
+static void Cmd_command_line_escape(CommandArgs *a) {
+  Editor *ed = a->ed;
+  View *view = ed->command_view;
+  if (!view) return;
+
+  if (VimModeIsInsert(view->vim.mode)) {
+    Cmd_normal_mode(a);
+    return;
+  }
+  CommandLineDismiss(ed);
 }
 
 static void Cmd_command_line_complete(CommandArgs *a) {
@@ -868,7 +903,11 @@ void CommandExecArgs(Editor *ed, CommandId id, CommandArgs *supplied) {
   const Command *command = CommandFromId(id);
   if (!command || !command->proc) return;
 
-  View *view = EditorFocusedView(ed);
+  // The window receiving input, which is the command window while it is open.
+  // Motions and edits must act on what the user is actually typing into; a
+  // command *submitted* from there still reaches the file underneath, because
+  // submitting closes the window before running the line.
+  View *view = EditorInputView(ed);
   Buffer *buffer = EditorBufferForView(ed, view);
   if (!view || !buffer) return;
 

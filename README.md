@@ -12,7 +12,7 @@ Needs CMake, a C++23 compiler, and SDL3.
 cmake -B build -S . && cmake --build build -j
 
 ./build/editor path/to/file      # run
-./build/editor_tests             # 231 tests, needs no display
+./build/editor_tests             # 239 tests, needs no display
 ```
 
 With [just](https://github.com/casey/just), `just` on its own lists everything:
@@ -74,6 +74,14 @@ Two things make that work:
 their hooks, and a `void *user_data` payload. A file explorer or git client is a
 new file in `core/buffers/` providing a `BufferHooks` table — no core changes.
 
+**Vim bindings work in every buffer**, including the command window. A buffer
+claims the few keys it needs through a buffer-local keymap, and that map layers
+*above* whichever mode map is active rather than replacing it — the input layer
+reparents it onto the current mode on each lookup. So the command window binds
+`<CR>`, `<Tab>` and `<Esc>`, and everything else — `dw`, `ciw`, `b`, `$`, `u`,
+counts, insert mode — is inherited. Nothing opts out of modal editing, and a
+future explorer or grep pane gets it for free.
+
 **One mutation path.** All text changes go through `BufferReplace`, which
 updates the gap buffer, patches the line index, pushes undo, sets the dirty flag
 and fires hooks. Consistency is structural rather than remembered, and read-only
@@ -103,6 +111,10 @@ Windows: `<C-h/j/k/l>` moves focus, `<leader>v` splits vertically and
 forms — `<C-w>v` `<C-w>s` `<C-w>hjkl` `<C-w>c` `<C-w>o` — work too.
 
 Insert mode: `<C-w>`, `<C-h>` and `<C-BS>` all rub out the previous word.
+
+The command window opens in insert mode, as `q:i` does in vim. `<Esc>` drops to
+normal mode where every motion and operator applies to the line being typed;
+`<Esc>` again abandons it. `<CR>` submits from any mode.
 
 ## Command window
 

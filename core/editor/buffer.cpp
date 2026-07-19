@@ -51,6 +51,13 @@ void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
   // changes, so one check covers every caller.
   if (BufferIsReadOnly(buffer)) return;
 
+  // A one-line buffer takes the text up to the first newline and drops the
+  // rest, so no command -- typing, pasting, joining -- can turn it into two.
+  if (HasFlag(buffer->flags, BufferFlags::SingleLine)) {
+    u64 newline = Str8FindFirstChar(new_text, '\n');
+    if (newline < new_text.size) new_text = Str8Prefix(new_text, newline);
+  }
+
   u64 size = BufferSize(buffer);
   RangeU64 clamped = RangeU64{Min(range.min, size), Min(range.max, size)};
   if (clamped.max < clamped.min) clamped.max = clamped.min;

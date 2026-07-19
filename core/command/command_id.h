@@ -167,6 +167,7 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(command_line_open,     "command-line-open",     "Open the command window",         CommandArg::None, CmdHidden)      \
   X(command_line_submit,   "command-line-submit",   "Run the typed command",           CommandArg::None, CmdHidden)      \
   X(command_line_cancel,   "command-line-cancel",   "Dismiss the command window",      CommandArg::None, CmdHidden)      \
+  X(command_line_escape,   "command-line-escape",   "Leave insert mode, then dismiss", CommandArg::None, CmdHidden)      \
   X(command_line_complete, "command-line-complete", "Complete the current word",       CommandArg::None, CmdHidden)
 
 enum class CommandId : u16 {

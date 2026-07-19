@@ -371,21 +371,203 @@ TEST(command_window_typing_and_submitting) {
   Destroy(&f);
 }
 
-TEST(command_window_escape_cancels) {
+TEST(command_window_escape_leaves_insert_then_dismisses) {
   Fixture f = MakeFixture("one\ntwo");
 
   EditorProcessSpec(&f.ed, ":");
   CHECK(f.ed.command_line_active);
+  // It opens in insert mode, as `q:i` does in vim.
+  CHECK_EQ((u32)f.ed.command_view->vim.mode, (u32)VimMode::Insert);
 
   Buffer *command = BufferFromHandle(&f.ed.buffers, f.ed.command_buffer);
-
   EditorProcessSpec(&f.ed, "1d");
-  EditorProcessSpec(&f.ed, "<Esc>");
 
+  // The first Escape leaves insert mode without abandoning what was typed.
+  EditorProcessSpec(&f.ed, "<Esc>");
+  CHECK(f.ed.command_line_active);
+  CHECK_EQ((u32)f.ed.command_view->vim.mode, (u32)VimMode::Normal);
+  CHECK_STR(BufferTextAll(f.arena, command), Str8Lit("1d"));
+
+  // The second gives up on the command.
+  EditorProcessSpec(&f.ed, "<Esc>");
   CHECK(!f.ed.command_line_active);
-  // The text is untouched, and the prompt is cleared.
   CHECK_STR(TextOf(&f), Str8Lit("one\ntwo"));
   CHECK_EQ(BufferSize(command), 0);
+
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Modal editing inside the command window
+//
+// The command window is a vim buffer like any other. These pin that down,
+// because the whole point of the buffer-local keymap layering above the mode
+// map -- rather than replacing it -- is that a buffer can claim a key or two
+// without giving up modal editing. A file explorer or grep pane will rely on
+// exactly this.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Opens the command window and types `text` into it.
+void OpenCommandLine(Fixture *f, const char *text) {
+  EditorProcessSpec(&f->ed, ":");
+  EditorProcessSpec(&f->ed, text);
+}
+
+String8 CommandText(Fixture *f) {
+  Buffer *command = BufferFromHandle(&f->ed.buffers, f->ed.command_buffer);
+  return BufferTextAll(f->arena, command);
+}
+
+}  // namespace
+
+TEST(command_window_supports_vim_motions) {
+  Fixture f = MakeFixture("hello");
+
+  OpenCommandLine(&f, "split-vertical");
+  EditorProcessSpec(&f.ed, "<Esc>");
+
+  View *view = f.ed.command_view;
+  Buffer *command = BufferFromHandle(&f.ed.buffers, f.ed.command_buffer);
+
+  // Leaving insert steps back onto the last character, as vim does.
+  CHECK_EQ(ViewCursorColumn(view, command), 13);
+
+  EditorProcessSpec(&f.ed, "0");
+  CHECK_EQ(ViewCursorColumn(view, command), 0);
+  EditorProcessSpec(&f.ed, "$");
+  CHECK_EQ(ViewCursorColumn(view, command), 13);
+  EditorProcessSpec(&f.ed, "b");
+  CHECK_EQ(ViewCursorColumn(view, command), 6);  // start of "vertical"
+  EditorProcessSpec(&f.ed, "w");
+  CHECK_EQ(ViewCursorColumn(view, command), 13);
+
+  Destroy(&f);
+}
+
+TEST(command_window_supports_vim_operators) {
+  Fixture f = MakeFixture("hello");
+
+  OpenCommandLine(&f, "split-vertical");
+  EditorProcessSpec(&f.ed, "<Esc>");
+
+  // dw on the command line edits the command line, not the file underneath.
+  // `w` stops at the hyphen, since punctuation is its own word class.
+  EditorProcessSpec(&f.ed, "0dw");
+  CHECK_STR(CommandText(&f), Str8Lit("-vertical"));
+  CHECK_STR(TextOf(&f), Str8Lit("hello"));
+
+  // A text object reaches the whole word regardless.
+  EditorProcessSpec(&f.ed, "u0dW");
+  CHECK_STR(CommandText(&f), Str8Lit(""));
+
+  // Undo works here too.
+  EditorProcessSpec(&f.ed, "u");
+  CHECK_STR(CommandText(&f), Str8Lit("split-vertical"));
+
+  Destroy(&f);
+}
+
+TEST(command_window_supports_counts_and_insert_variants) {
+  Fixture f = MakeFixture("hello");
+
+  OpenCommandLine(&f, "abcdef");
+  EditorProcessSpec(&f.ed, "<Esc>");
+
+  // A count in normal mode is a count, not text.
+  EditorProcessSpec(&f.ed, "0");
+  EditorProcessSpec(&f.ed, "3x");
+  CHECK_STR(CommandText(&f), Str8Lit("def"));
+
+  // Append at the end, then insert at the start.
+  EditorProcessSpec(&f.ed, "Aghi<Esc>");
+  CHECK_STR(CommandText(&f), Str8Lit("defghi"));
+  EditorProcessSpec(&f.ed, "Ixyz<Esc>");
+  CHECK_STR(CommandText(&f), Str8Lit("xyzdefghi"));
+
+  Destroy(&f);
+}
+
+TEST(command_window_stays_one_line) {
+  Fixture f = MakeFixture("hello");
+
+  OpenCommandLine(&f, "quit");
+  EditorProcessSpec(&f.ed, "<Esc>");
+
+  // `o` and `O` would ordinarily add a line; a SingleLine buffer drops it.
+  EditorProcessSpec(&f.ed, "oxyz<Esc>");
+  EditorProcessSpec(&f.ed, "Oabc<Esc>");
+
+  Buffer *command = BufferFromHandle(&f.ed.buffers, f.ed.command_buffer);
+  CHECK_EQ(BufferLineCount(command), 1);
+
+  Destroy(&f);
+}
+
+TEST(command_window_submits_from_normal_mode) {
+  Fixture f = MakeFixture("one\ntwo\nthree");
+
+  OpenCommandLine(&f, "1d");
+  EditorProcessSpec(&f.ed, "<Esc>");
+  CHECK_EQ((u32)f.ed.command_view->vim.mode, (u32)VimMode::Normal);
+
+  // <CR> is bound in the buffer-local map, so it works in every mode.
+  EditorProcessSpec(&f.ed, "<CR>");
+  CHECK(!f.ed.command_line_active);
+  CHECK_STR(TextOf(&f), Str8Lit("two\nthree"));
+
+  Destroy(&f);
+}
+
+TEST(command_window_editing_does_not_touch_the_file) {
+  Fixture f = MakeFixture("one\ntwo\nthree");
+
+  View *file_view = EditorFocusedView(&f.ed);
+  u64 cursor_before = file_view->cursor;
+
+  OpenCommandLine(&f, "quit");
+  EditorProcessSpec(&f.ed, "<Esc>");
+  // Motions, deletions and undo, all aimed at the command line.
+  EditorProcessSpec(&f.ed, "0dwu$b");
+
+  CHECK_STR(TextOf(&f), Str8Lit("one\ntwo\nthree"));
+  CHECK_EQ(file_view->cursor, cursor_before);
+
+  Destroy(&f);
+}
+
+TEST(buffer_local_keymap_layers_over_the_mode_map) {
+  Fixture f = MakeFixture("hello");
+
+  Buffer *command = BufferFromHandle(&f.ed.buffers, f.ed.command_buffer);
+  CHECK(command->hooks.keymap != nullptr);
+
+  EditorProcessSpec(&f.ed, ":");
+
+  // In insert mode the buffer's own <CR> wins, and the insert map is reachable
+  // underneath it.
+  Keymap *active = EditorActiveKeymap(&f.ed);
+  CHECK(active == command->hooks.keymap);
+  CHECK(active->parent == f.ed.insert_map);
+  CHECK_EQ((u32)KeymapLookupSequence(active, Str8Lit("<CR>")).command,
+           (u32)CommandId::command_line_submit);
+  CHECK_EQ((u32)KeymapLookupSequence(active, Str8Lit("<BS>")).command,
+           (u32)CommandId::backspace);
+
+  // Dropping to normal mode reparents onto the normal map, so motions resolve
+  // without the buffer having to bind any of them.
+  EditorProcessSpec(&f.ed, "<Esc>");
+  active = EditorActiveKeymap(&f.ed);
+  CHECK(active == command->hooks.keymap);
+  CHECK(active->parent == f.ed.normal_map);
+  CHECK_EQ((u32)KeymapLookupSequence(active, Str8Lit("w")).command,
+           (u32)CommandId::word_forward);
+  CHECK_EQ((u32)KeymapLookupSequence(active, Str8Lit("d")).command,
+           (u32)CommandId::operator_delete);
+  // And the buffer's own binding still wins over the mode map.
+  CHECK_EQ((u32)KeymapLookupSequence(active, Str8Lit("<CR>")).command,
+           (u32)CommandId::command_line_submit);
 
   Destroy(&f);
 }

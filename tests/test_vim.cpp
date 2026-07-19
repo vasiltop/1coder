@@ -825,6 +825,21 @@ TEST(vim_ctrl_hjkl_moves_window_focus) {
   Destroy(&f);
 }
 
+TEST(vim_long_key_sequences_replay_in_full) {
+  Fixture f = MakeFixture("");
+
+  // Well past the length a single binding may have. Replayed input is a whole
+  // session, so it must not be truncated -- or silently dropped, which is what
+  // a bounded sequence would do.
+  Type(&f, "iabcdefghijklmnopqrstuvwxyz0123456789<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("abcdefghijklmnopqrstuvwxyz0123456789"));
+
+  Type(&f, "0dwdw");
+  CHECK_EQ(BufferSize(BufferOf(&f)), 0);
+
+  Destroy(&f);
+}
+
 TEST(vim_insert_mode_word_rubout) {
   Fixture f = MakeFixture("");
 
@@ -885,11 +900,11 @@ TEST(command_line_is_a_buffer) {
 
   Buffer *command = BufferFromHandle(&f.ed.buffers, f.ed.command_buffer);
   CHECK(command != nullptr);
-  // It is an ordinary buffer that happens to opt out of modal editing.
+  // An ordinary buffer that claims a few keys through a buffer-local keymap.
+  // Nothing about it opts out of modal editing.
   CHECK_EQ((u32)command->kind, (u32)BufferKind::Command);
-  CHECK(HasFlag(command->flags, BufferFlags::NoVim));
   CHECK(HasFlag(command->flags, BufferFlags::SingleLine));
-  CHECK(command->hooks.on_submit != nullptr);
+  CHECK(command->hooks.keymap != nullptr);
 
   Destroy(&f);
 }

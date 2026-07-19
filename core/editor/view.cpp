@@ -30,12 +30,8 @@ u64 ViewClampCursorToMode(const View *view, const Buffer *buffer, u64 offset) {
   u64 line_end = BufferLineEnd(buffer, line);
 
   // Normal mode rests *on* a character, so it cannot sit past the last one.
-  // Insert and visual mode may sit one past, where new text would land -- and
-  // so may a buffer that opts out of modal editing, which behaves as a plain
-  // text field and would otherwise refuse to place the cursor after what you
-  // just typed.
-  bool allow_past_end = VimModeIsInsert(view->vim.mode) || VimModeIsVisual(view->vim.mode) ||
-                        HasFlag(buffer->flags, BufferFlags::NoVim);
+  // Insert and visual mode may sit one past, where new text would land.
+  bool allow_past_end = VimModeIsInsert(view->vim.mode) || VimModeIsVisual(view->vim.mode);
   if (!allow_past_end && clamped >= line_end && line_end > line_start) {
     return BufferPrevCodepoint(buffer, line_end);
   }
