@@ -73,19 +73,11 @@ void DrawSelectionOnLine(RenderContext *ctx, const Buffer *buffer, const View *v
            ctx->theme.selection);
 }
 
-void DrawCursor(RenderContext *ctx, const Buffer *buffer, const View *view, RectF32 text_rect,
-                RangeU64 visible, i32 columns, bool focused) {
-  u64 cursor_line = ViewCursorLine(view, buffer);
-  if (cursor_line < visible.min || cursor_line >= visible.max) return;
-
-  u64 cursor_column = ViewCursorColumn(view, buffer);
-  if (cursor_column < view->scroll_column ||
-      cursor_column - view->scroll_column >= (u64)columns) {
-    return;
-  }
-
-  f32 x = ColumnX(ctx, text_rect, cursor_column, view->scroll_column);
-  f32 y = text_rect.y0 + (f32)(cursor_line - visible.min) * ctx->cell_height;
+// Draws the cursor in the cell whose top-left corner is (x, y). Shared by
+// panels and the command window, so the shape always reflects the mode of
+// whichever view owns it.
+void DrawCursorCell(RenderContext *ctx, const Buffer *buffer, const View *view, f32 x, f32 y,
+                    bool focused) {
   RectF32 cell = {x, y, x + ctx->cell_width, y + ctx->cell_height};
 
   if (!focused) {
@@ -113,6 +105,22 @@ void DrawCursor(RenderContext *ctx, const Buffer *buffer, const View *view, Rect
     DrawGlyph(ctx->draw, under.codepoint, cell.x0, cell.y0 + ctx->atlas->ascent,
               ctx->theme.cursor_text);
   }
+}
+
+void DrawCursor(RenderContext *ctx, const Buffer *buffer, const View *view, RectF32 text_rect,
+                RangeU64 visible, i32 columns, bool focused) {
+  u64 cursor_line = ViewCursorLine(view, buffer);
+  if (cursor_line < visible.min || cursor_line >= visible.max) return;
+
+  u64 cursor_column = ViewCursorColumn(view, buffer);
+  if (cursor_column < view->scroll_column ||
+      cursor_column - view->scroll_column >= (u64)columns) {
+    return;
+  }
+
+  f32 x = ColumnX(ctx, text_rect, cursor_column, view->scroll_column);
+  f32 y = text_rect.y0 + (f32)(cursor_line - visible.min) * ctx->cell_height;
+  DrawCursorCell(ctx, buffer, view, x, y, focused);
 }
 
 void DrawStatusLine(RenderContext *ctx, Editor *ed, const Buffer *buffer, const View *view,
@@ -182,7 +190,10 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
                    columns);
   }
 
-  DrawCursor(ctx, buffer, view, text_rect, visible, columns, focused);
+  // While the command window is open it holds the cursor, so the panel's own
+  // is drawn as an outline rather than competing with a second block.
+  DrawCursor(ctx, buffer, view, text_rect, visible, columns,
+             focused && !ed->command_line_active);
   DrawPopClip(ctx->draw);
 
   DrawStatusLine(ctx, ed, buffer, view, panel_rect, focused);
@@ -220,11 +231,22 @@ void RenderCommandLine(RenderContext *ctx, Editor *ed, f32 pixel_width, f32 pixe
 
   if (ed->command_line_active) {
     Buffer *command = BufferFromHandle(&ed->buffers, ed->command_buffer);
-    if (command) {
-      String8 text = BufferTextAll(scratch.arena, command);
-      f32 pen = DrawText(ctx->draw, Str8Lit(":"), 0.0f, baseline, ctx->theme.text);
-      pen += DrawText(ctx->draw, text, pen, baseline, ctx->theme.text);
-      DrawRect(ctx->draw, RectF32{pen, rect.y0, pen + 2.0f, rect.y1}, ctx->theme.cursor);
+    View *view = ed->command_view;
+
+    if (command && view) {
+      // The ':' prompt occupies the first cell, so the text -- and the cursor
+      // with it -- is shifted one column right.
+      constexpr u64 kPromptColumns = 1;
+      f32 text_x = ctx->cell_width * (f32)kPromptColumns;
+
+      DrawText(ctx->draw, Str8Lit(":"), 0.0f, baseline, ctx->theme.text);
+      DrawText(ctx->draw, BufferTextAll(scratch.arena, command), text_x, baseline,
+               ctx->theme.text);
+
+      // Same cursor as a panel: a block in normal mode, a bar in insert, with
+      // the covered character redrawn through it.
+      u64 column = BufferColumnFromOffset(command, view->cursor) + kPromptColumns;
+      DrawCursorCell(ctx, command, view, (f32)column * ctx->cell_width, rect.y0, true);
     }
   } else if (ed->status_message.size > 0) {
     DrawText(ctx->draw, ed->status_message, 0.0f, baseline, ctx->theme.message);
