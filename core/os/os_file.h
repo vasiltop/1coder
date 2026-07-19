@@ -20,6 +20,23 @@ struct FileContents {
 // cannot truncate the original.
 [[nodiscard]] bool OsFileWrite(String8 path, String8 data);
 
+// A read-only memory mapping of a file.
+//
+// For large assets this beats reading into an arena: the pages are shared,
+// read-only, and only fault in as they are touched. A font collection can run
+// to hundreds of megabytes while the handful of tables and outlines actually
+// used costs a fraction of that.
+//
+// The mapping must outlive every pointer taken into it.
+struct FileMapping {
+  u8 *data;
+  u64 size;
+  bool ok;
+};
+
+[[nodiscard]] FileMapping OsFileMap(String8 path);
+void OsFileUnmap(FileMapping *mapping);
+
 [[nodiscard]] bool OsFileExists(String8 path);
 [[nodiscard]] bool OsDirExists(String8 path);
 

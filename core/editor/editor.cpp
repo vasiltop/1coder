@@ -25,6 +25,8 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   ed->operator_pending_map = KeymapAlloc(arena, ed->global_map);
 
   ed->cwd = OsGetCwd(arena);
+  ed->status_arena = ArenaAlloc(MB(1));
+  ed->font_size = kFontSizeDefault;
 
   // Start on an empty scratch buffer so there is always something focused.
   BufferHandle scratch = BufferOpen(&ed->buffers, BufferKind::Scratch, Str8Lit("[scratch]"));
@@ -43,7 +45,16 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   EditorLayout(ed);
 }
 
-void EditorDestroy(Editor *ed) { BufferRegistryDestroy(&ed->buffers); }
+void EditorDestroy(Editor *ed) {
+  BufferRegistryDestroy(&ed->buffers);
+
+  for (u64 i = 0; i < kRegisterCount; i += 1) {
+    if (ed->register_arenas[i]) ArenaRelease(ed->register_arenas[i]);
+    ed->register_arenas[i] = nullptr;
+  }
+  if (ed->status_arena) ArenaRelease(ed->status_arena);
+  ed->status_arena = nullptr;
+}
 
 void EditorLayout(Editor *ed) {
   // The bottom row belongs to the command line and global status, so panels
@@ -197,7 +208,8 @@ void EditorShowBuffer(Editor *ed, BufferHandle buffer) {
 }
 
 void EditorSetStatus(Editor *ed, String8 message) {
-  ed->status_message = PushStr8Copy(ed->arena, message);
+  ArenaClear(ed->status_arena);
+  ed->status_message = PushStr8Copy(ed->status_arena, message);
 }
 
 void EditorSetStatusF(Editor *ed, const char *fmt, ...) {
@@ -208,18 +220,56 @@ void EditorSetStatusF(Editor *ed, const char *fmt, ...) {
   // A status line has nowhere useful to put more than a screenful anyway.
   char buffer[1024];
   vsnprintf(buffer, sizeof(buffer), fmt, args);
-  ed->status_message = PushStr8Copy(ed->arena, Str8C(buffer));
+
+  ArenaClear(ed->status_arena);
+  ed->status_message = PushStr8Copy(ed->status_arena, Str8C(buffer));
 
   va_end(args);
 }
 
 void EditorSetRegister(Editor *ed, u8 name, String8 text, bool linewise) {
   if (name >= kRegisterCount) return;
-  ed->registers[name].text = PushStr8Copy(ed->arena, text);
+
+  if (RegisterIsClipboard(name)) {
+    if (ed->clipboard.write) ed->clipboard.write(text);
+    return;
+  }
+
+  // Clearing first keeps a register's storage to the size of its current
+  // contents rather than every value it has ever held.
+  if (!ed->register_arenas[name]) ed->register_arenas[name] = ArenaAlloc(MB(64));
+  ArenaClear(ed->register_arenas[name]);
+
+  ed->registers[name].text = PushStr8Copy(ed->register_arenas[name], text);
   ed->registers[name].linewise = linewise;
 }
 
 Register EditorGetRegister(Editor *ed, u8 name) {
   if (name >= kRegisterCount) return Register{};
+
+  if (RegisterIsClipboard(name)) {
+    if (!ed->clipboard.read) return Register{};
+
+    // The clipboard's contents are not ours, so they are copied into the
+    // register's own storage on the way through.
+    if (!ed->register_arenas[name]) ed->register_arenas[name] = ArenaAlloc(MB(64));
+    ArenaClear(ed->register_arenas[name]);
+
+    String8 text = ed->clipboard.read(ed->register_arenas[name]);
+    // Text ending in a newline came from a linewise yank, here or elsewhere.
+    bool linewise = (text.size > 0 && text.str[text.size - 1] == '\n');
+    return Register{text, linewise};
+  }
+
   return ed->registers[name];
+}
+
+void EditorSetFontSize(Editor *ed, f32 size) {
+  f32 clamped = Clamp(kFontSizeMin, size, kFontSizeMax);
+  if (clamped == ed->font_size) return;
+
+  ed->font_size = clamped;
+  // The app owns the glyph atlas and watches this flag, so the core never has
+  // to know what a font is.
+  ed->font_size_changed = true;
 }

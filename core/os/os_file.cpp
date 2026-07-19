@@ -8,7 +8,9 @@
 #  include <windows.h>
 #else
 #  include <dirent.h>
+#  include <fcntl.h>
 #  include <limits.h>
+#  include <sys/mman.h>
 #  include <stdio.h>
 #  include <sys/stat.h>
 #  include <unistd.h>
@@ -93,6 +95,40 @@ bool OsFileWrite(String8 path, String8 data) {
 
   ScratchEnd(scratch);
   return ok;
+}
+
+FileMapping OsFileMap(String8 path) {
+  FileMapping mapping = {};
+
+  TempArena scratch = ScratchBegin();
+  const char *cpath = PushCStr(scratch.arena, path);
+  int fd = open(cpath, O_RDONLY);
+  ScratchEnd(scratch);
+
+  if (fd < 0) return mapping;
+
+  struct stat st;
+  if (fstat(fd, &st) != 0 || st.st_size <= 0) {
+    close(fd);
+    return mapping;
+  }
+
+  void *data = mmap(nullptr, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  // The mapping survives the descriptor, so there is no reason to hold it.
+  close(fd);
+
+  if (data == MAP_FAILED) return mapping;
+
+  mapping.data = (u8 *)data;
+  mapping.size = (u64)st.st_size;
+  mapping.ok = true;
+  return mapping;
+}
+
+void OsFileUnmap(FileMapping *mapping) {
+  if (!mapping->ok) return;
+  munmap(mapping->data, (size_t)mapping->size);
+  *mapping = FileMapping{};
 }
 
 bool OsFileExists(String8 path) {

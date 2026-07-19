@@ -11,6 +11,7 @@ void VimClearPending(VimState *vim) {
   vim->pending_operator = OperatorKind::None;
   vim->operator_count = 0;
   vim->has_operator_count = false;
+  vim->pending_register = 0;
 }
 
 String8 VimModeName(VimMode mode) {

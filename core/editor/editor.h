@@ -13,6 +13,14 @@
 
 inline constexpr u64 kMaxRecordedChords = 128;
 
+// The system clipboard, reached through function pointers so that core stays
+// free of any platform dependency. The app installs SDL's implementation; a
+// test can install a fake one and exercise "+y and "+p with no window.
+struct ClipboardHooks {
+  String8 (*read)(Arena *arena);
+  void (*write)(String8 text);
+};
+
 // Where a partly-typed chord sequence has got to, plus the machinery for
 // repeating the last change with `.`.
 struct InputState {
@@ -24,6 +32,12 @@ struct InputState {
   // f/F/t/T take the next keystroke as their target rather than as a binding,
   // so the command waits here for one chord.
   CommandId awaiting_char_command;
+
+  // `"` selects the register the next yank, delete or paste should use, so the
+  // chord after it names a register rather than running a command. Insert
+  // mode's <C-r> uses the same wait but runs a command once the name arrives.
+  bool awaiting_register;
+  CommandId register_follow_up;
 
   // `.` replays the chords that produced the last change, which is enough to
   // reproduce operators, counts and inserted text without a separate
@@ -60,11 +74,24 @@ struct Editor {
   InputState input;
 
   // Yank and delete registers, indexed by ASCII name. Slot 0 is the unnamed
-  // register that a bare p pastes from.
+  // register that a bare p pastes from; '+' and '*' are routed to the system
+  // clipboard instead of being stored here.
   Register registers[kRegisterCount];
+  // One arena per register, allocated on first use and cleared on each write.
+  // A single shared arena would grow without bound over a long session, since
+  // overwriting a register cannot free what the previous value took.
+  Arena *register_arenas[kRegisterCount];
+
+  ClipboardHooks clipboard;
 
   String8 cwd;
   String8 status_message;
+  Arena *status_arena;  // cleared per message, for the same reason
+
+  // Font size in pixels. The app owns the atlas, so it watches this and
+  // rebuilds when it changes -- which is how zoom stays out of the core.
+  f32 font_size;
+  bool font_size_changed;
 
   // The command window: a buffer like any other, plus its own view. It needs a
   // view of its own because it has a cursor and a scroll position that must not
@@ -120,8 +147,21 @@ void EditorSetStatusF(Editor *ed, const char *fmt, ...) PrintfFormat(2, 3);
 // Registers
 // ---------------------------------------------------------------------------
 
+// Reading or writing '+' or '*' goes to the system clipboard when the app has
+// installed the hooks, and is a no-op otherwise.
 void EditorSetRegister(Editor *ed, u8 name, String8 text, bool linewise);
 [[nodiscard]] Register EditorGetRegister(Editor *ed, u8 name);
+[[nodiscard]] inline bool RegisterIsClipboard(u8 name) { return name == '+' || name == '*'; }
+
+// ---------------------------------------------------------------------------
+// Font size
+// ---------------------------------------------------------------------------
+
+inline constexpr f32 kFontSizeDefault = 16.0f;
+inline constexpr f32 kFontSizeMin = 6.0f;
+inline constexpr f32 kFontSizeMax = 72.0f;
+
+void EditorSetFontSize(Editor *ed, f32 size);
 
 // ---------------------------------------------------------------------------
 // Input

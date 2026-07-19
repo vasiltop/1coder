@@ -760,6 +760,171 @@ TEST(vim_repeat_insert) {
 }
 
 // ---------------------------------------------------------------------------
+// Registers and the system clipboard
+//
+// The clipboard reaches core through function pointers, so a fake one here
+// exercises "+y and "+p with no window and no SDL.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Stands in for the system clipboard.
+Arena *g_fake_clipboard_arena;
+String8 g_fake_clipboard;
+u32 g_fake_clipboard_writes;
+
+String8 FakeClipboardRead(Arena *arena) { return PushStr8Copy(arena, g_fake_clipboard); }
+
+void FakeClipboardWrite(String8 text) {
+  ArenaClear(g_fake_clipboard_arena);
+  g_fake_clipboard = PushStr8Copy(g_fake_clipboard_arena, text);
+  g_fake_clipboard_writes += 1;
+}
+
+void InstallFakeClipboard(Fixture *f) {
+  if (!g_fake_clipboard_arena) g_fake_clipboard_arena = ArenaAlloc(MB(4));
+  ArenaClear(g_fake_clipboard_arena);
+  g_fake_clipboard = String8{nullptr, 0};
+  g_fake_clipboard_writes = 0;
+
+  f->ed.clipboard.read = FakeClipboardRead;
+  f->ed.clipboard.write = FakeClipboardWrite;
+}
+
+}  // namespace
+
+TEST(vim_yank_to_system_clipboard) {
+  Fixture f = MakeFixture("hello world");
+  InstallFakeClipboard(&f);
+
+  Type(&f, "\"+yw");
+  CHECK_STR(g_fake_clipboard, Str8Lit("hello "));
+  CHECK_EQ(g_fake_clipboard_writes, 1);
+
+  // Vim fills the unnamed register alongside a named one, so a bare p still
+  // pastes what was just yanked.
+  Type(&f, "$p");
+  CHECK_STR(TextOf(&f), Str8Lit("hello worldhello "));
+
+  Destroy(&f);
+}
+
+TEST(vim_paste_from_system_clipboard) {
+  Fixture f = MakeFixture("abc");
+  InstallFakeClipboard(&f);
+
+  // Something another program put on the clipboard.
+  FakeClipboardWrite(Str8Lit("XYZ"));
+
+  Type(&f, "\"+p");
+  CHECK_STR(TextOf(&f), Str8Lit("aXYZbc"));
+
+  // The internal register is untouched by a clipboard paste.
+  Type(&f, "0ylp");
+  CHECK_STR(TextOf(&f), Str8Lit("aaXYZbc"));
+
+  Destroy(&f);
+}
+
+TEST(vim_clipboard_register_survives_an_operator) {
+  Fixture f = MakeFixture("one two three");
+  InstallFakeClipboard(&f);
+
+  // The register selected by `"` has to live from there, through the operator,
+  // to the motion that finally completes it.
+  Type(&f, "\"+d2w");
+  CHECK_STR(g_fake_clipboard, Str8Lit("one two "));
+  CHECK_STR(TextOf(&f), Str8Lit("three"));
+
+  Destroy(&f);
+}
+
+TEST(vim_named_registers) {
+  Fixture f = MakeFixture("alpha beta");
+
+  Type(&f, "\"ayw");   // "alpha " into register a
+  Type(&f, "w\"byw");  // "beta" into register b
+
+  CHECK_STR(EditorGetRegister(&f.ed, 'a').text, Str8Lit("alpha "));
+  CHECK_STR(EditorGetRegister(&f.ed, 'b').text, Str8Lit("beta"));
+
+  // Each pastes its own contents.
+  Type(&f, "$\"ap");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha betaalpha "));
+
+  Destroy(&f);
+}
+
+TEST(vim_register_selection_is_cleared_after_use) {
+  Fixture f = MakeFixture("one two three");
+
+  Type(&f, "\"ayw");
+  CHECK_EQ(ViewOf(&f)->vim.pending_register, 0);  // consumed
+
+  // A following yank with no `"` goes to the unnamed register, leaving a alone.
+  Type(&f, "wyw");
+  CHECK_STR(EditorGetRegister(&f.ed, 'a').text, Str8Lit("one "));
+  CHECK_STR(EditorGetRegister(&f.ed, 0).text, Str8Lit("two "));
+
+  Destroy(&f);
+}
+
+TEST(vim_insert_register_with_ctrl_r) {
+  Fixture f = MakeFixture("abc");
+  InstallFakeClipboard(&f);
+  FakeClipboardWrite(Str8Lit("PASTED"));
+
+  // <C-r>{reg} inserts without leaving insert mode.
+  Type(&f, "A <C-r>+!<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("abc PASTED!"));
+
+  Destroy(&f);
+}
+
+TEST(vim_clipboard_absent_is_harmless) {
+  Fixture f = MakeFixture("abc");
+  // No hooks installed, as would be the case in a headless build.
+  f.ed.clipboard.read = nullptr;
+  f.ed.clipboard.write = nullptr;
+
+  Type(&f, "\"+yy");
+  Type(&f, "\"+p");
+  CHECK_STR(TextOf(&f), Str8Lit("abc"));  // nothing happens, nothing crashes
+
+  Destroy(&f);
+}
+
+TEST(vim_zoom_adjusts_font_size) {
+  Fixture f = MakeFixture("abc");
+
+  CHECK_EQ((i64)f.ed.font_size, (i64)kFontSizeDefault);
+
+  Type(&f, "<C-=>");
+  CHECK(f.ed.font_size > kFontSizeDefault);
+  // The app watches this to know it must rebuild the atlas.
+  CHECK(f.ed.font_size_changed);
+
+  f.ed.font_size_changed = false;
+  Type(&f, "<C-->");
+  CHECK_EQ((i64)f.ed.font_size, (i64)kFontSizeDefault);
+  CHECK(f.ed.font_size_changed);
+
+  // A count zooms by that many steps, and reset returns to the default.
+  Type(&f, "5<C-=>");
+  CHECK_EQ((i64)f.ed.font_size, (i64)kFontSizeDefault + 5);
+  Type(&f, "<C-0>");
+  CHECK_EQ((i64)f.ed.font_size, (i64)kFontSizeDefault);
+
+  // It clamps rather than running away.
+  for (u32 i = 0; i < 200; i += 1) Type(&f, "<C-->");
+  CHECK_EQ((i64)f.ed.font_size, (i64)kFontSizeMin);
+  for (u32 i = 0; i < 400; i += 1) Type(&f, "<C-=>");
+  CHECK_EQ((i64)f.ed.font_size, (i64)kFontSizeMax);
+
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
 // Windows, buffers and the command line
 // ---------------------------------------------------------------------------
 

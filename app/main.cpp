@@ -15,7 +15,6 @@ namespace {
 
 constexpr i32 kInitialWidth = 1200;
 constexpr i32 kInitialHeight = 800;
-constexpr f32 kDefaultFontSize = 16.0f;
 
 // Renders one frame to a file and exits. Useful for checking the renderer
 // without a display, and for capturing what the editor actually looks like.
@@ -33,6 +32,10 @@ bool SaveScreenshot(SDL_Renderer *renderer, const char *path) {
 
 struct App {
   Arena *arena;
+  // The atlas is rebuilt whenever the font size changes, so it gets an arena of
+  // its own that can be cleared wholesale rather than growing on every zoom.
+  Arena *font_arena;
+
   SDL_Window *window;
   SDL_Renderer *renderer;
 
@@ -40,7 +43,34 @@ struct App {
   DrawList draw;
   RenderContext render;
   Editor editor;
+
+  String8 font_path;
+  String8 font_face;
 };
+
+// ---------------------------------------------------------------------------
+// Clipboard
+//
+// Installed into the editor as function pointers, so nothing in core/ has to
+// know that SDL exists.
+// ---------------------------------------------------------------------------
+
+String8 ClipboardRead(Arena *arena) {
+  if (!SDL_HasClipboardText()) return String8{nullptr, 0};
+
+  char *text = SDL_GetClipboardText();
+  if (!text) return String8{nullptr, 0};
+
+  String8 result = PushStr8Copy(arena, Str8C(text));
+  SDL_free(text);
+  return result;
+}
+
+void ClipboardWrite(String8 text) {
+  TempArena scratch = ScratchBegin();
+  SDL_SetClipboardText(PushCStr(scratch.arena, text));
+  ScratchEnd(scratch);
+}
 
 // Feeds a text-input event to the editor, one codepoint at a time. SDL has
 // already resolved layout and dead keys by this point.
@@ -59,6 +89,23 @@ void SyncScreenSize(App *app) {
   i32 width = 0, height = 0;
   SDL_GetWindowSizeInPixels(app->window, &width, &height);
   EditorSetScreen(&app->editor, RenderScreenCells(&app->render, width, height));
+}
+
+// Rebuilds the glyph atlas at the editor's current font size. Because layout is
+// in cells, resizing the grid afterwards is the same path a window resize
+// takes.
+bool RebuildFont(App *app) {
+  GlyphAtlasDestroy(&app->atlas);
+  ArenaClear(app->font_arena);
+
+  if (!GlyphAtlasInit(&app->atlas, app->font_arena, app->renderer, app->font_path,
+                      app->editor.font_size, app->font_face)) {
+    return false;
+  }
+
+  RenderContextInit(&app->render, &app->draw, &app->atlas);
+  SyncScreenSize(app);
+  return true;
 }
 
 }  // namespace
@@ -89,11 +136,17 @@ int main(int argc, char **argv) {
   }
 
   // ---- font ----
-  String8 font_path = GlyphAtlasFindMonospaceFont(arena);
-  f32 font_size = kDefaultFontSize;
+  String8 font_face = String8{nullptr, 0};
+  String8 font_path = GlyphAtlasFindMonospaceFont(arena, &font_face);
+  f32 font_size = kFontSizeDefault;
 
   if (const char *env_font = SDL_getenv("EDITOR_FONT")) {
     font_path = Str8C(env_font);
+    font_face = String8{nullptr, 0};
+  }
+  // Which face to take out of a .ttc collection.
+  if (const char *env_face = SDL_getenv("EDITOR_FONT_FACE")) {
+    font_face = Str8C(env_face);
   }
   if (const char *env_size = SDL_getenv("EDITOR_FONT_SIZE")) {
     f32 parsed = (f32)SDL_atof(env_size);
@@ -113,6 +166,9 @@ int main(int argc, char **argv) {
 
   App *app = PushStruct(arena, App);
   app->arena = arena;
+  app->font_arena = ArenaAlloc(MB(64));
+  app->font_path = PushStr8Copy(arena, font_path);
+  app->font_face = PushStr8Copy(arena, font_face);
 
   app->window = SDL_CreateWindow("1code", kInitialWidth, kInitialHeight,
                                  SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -128,7 +184,8 @@ int main(int argc, char **argv) {
   }
   SDL_SetRenderVSync(app->renderer, 1);
 
-  if (!GlyphAtlasInit(&app->atlas, arena, app->renderer, font_path, font_size)) {
+  if (!GlyphAtlasInit(&app->atlas, app->font_arena, app->renderer, app->font_path, font_size,
+                      app->font_face)) {
     fprintf(stderr, "Could not load font: %.*s\n", (int)font_path.size, (char *)font_path.str);
     return 1;
   }
@@ -141,6 +198,10 @@ int main(int argc, char **argv) {
   SDL_GetWindowSizeInPixels(app->window, &width, &height);
   EditorInit(&app->editor, arena, RenderScreenCells(&app->render, width, height));
 
+  app->editor.font_size = font_size;
+  app->editor.clipboard.read = ClipboardRead;
+  app->editor.clipboard.write = ClipboardWrite;
+
   // Files named on the command line, each in its own split after the first.
   for (int i = 0; i < file_argc; i += 1) {
     BufferHandle handle = EditorOpenFile(&app->editor, Str8C(file_argv[i]));
@@ -150,6 +211,12 @@ int main(int argc, char **argv) {
   }
 
   if (startup_keys) EditorProcessSpec(&app->editor, Str8C(startup_keys));
+
+  // A startup key sequence may have zoomed, so settle the font before drawing.
+  if (app->editor.font_size_changed) {
+    app->editor.font_size_changed = false;
+    if (!RebuildFont(app)) return 1;
+  }
 
   if (screenshot_path) {
     SDL_GetWindowSizeInPixels(app->window, &width, &height);
@@ -226,6 +293,16 @@ int main(int argc, char **argv) {
     } while (!app->editor.quit && SDL_PollEvent(&event));
 
     if (app->editor.quit) break;
+
+    // Zoom asks for a new font size; rebuilding the atlas is the app's job.
+    if (app->editor.font_size_changed) {
+      app->editor.font_size_changed = false;
+      if (!RebuildFont(app)) {
+        fprintf(stderr, "Could not rebuild the font at size %.1f\n",
+                (double)app->editor.font_size);
+        break;
+      }
+    }
 
     SDL_GetWindowSizeInPixels(app->window, &width, &height);
     SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);

@@ -34,6 +34,13 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(global, "<C-w>c", CommandId::close_window);
   KeymapBind(global, "<C-w>o", CommandId::only_window);
 
+  // Zoom, in every mode. The usual window-manager spellings rather than
+  // anything vim has an opinion about.
+  KeymapBind(global, "<C-=>", CommandId::zoom_in);
+  KeymapBind(global, "<C-+>", CommandId::zoom_in);
+  KeymapBind(global, "<C-->", CommandId::zoom_out);
+  KeymapBind(global, "<C-0>", CommandId::zoom_reset);
+
   // ---- motions, shared by normal, visual and operator-pending ----
   // Bound into each map rather than a shared parent so that operator-pending
   // can override individual entries (see `d`, `y`, `c` below).
@@ -88,6 +95,11 @@ void EditorInstallDefaultBindings(Editor *ed) {
 
   KeymapBind(normal, "v", CommandId::visual_mode);
   KeymapBind(normal, "V", CommandId::visual_line_mode);
+
+  // `"x` picks the register for the next yank, delete or paste. "+ and "* are
+  // the system clipboard, so "+y and "+p exchange text with other programs.
+  KeymapBind(normal, "\"", CommandId::select_register);
+  KeymapBind(visual, "\"", CommandId::select_register);
 
   KeymapBind(normal, "d", CommandId::operator_delete);
   KeymapBind(normal, "c", CommandId::operator_change);
@@ -163,6 +175,8 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(insert, "<C-w>", CommandId::delete_word_before);
   KeymapBind(insert, "<C-h>", CommandId::delete_word_before);
   KeymapBind(insert, "<C-BS>", CommandId::delete_word_before);
+  // <C-r>{reg} inserts a register without leaving insert mode, as vim does.
+  KeymapBind(insert, "<C-r>", CommandId::insert_register_prompt);
   KeymapBind(insert, "<Left>", CommandId::cursor_left);
   KeymapBind(insert, "<Down>", CommandId::cursor_down);
   KeymapBind(insert, "<Up>", CommandId::cursor_up);

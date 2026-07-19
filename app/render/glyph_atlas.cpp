@@ -35,23 +35,75 @@ void UploadCoverage(SDL_Texture *texture, Arena *scratch, i32 x, i32 y, i32 w, i
   SDL_UpdateTexture(texture, &rect, pixels, w * (i32)sizeof(u32));
 }
 
+// Compares a font's name-table entry against ASCII. Microsoft-platform names
+// are UTF-16BE; Mac-platform ones are single-byte.
+[[nodiscard]] bool NameEquals(const char *name, i32 length, bool utf16, String8 wanted) {
+  u64 count = utf16 ? (u64)length / 2 : (u64)length;
+  if (count != wanted.size) return false;
+
+  for (u64 i = 0; i < count; i += 1) {
+    u8 c = utf16 ? (u8)name[i * 2 + 1] : (u8)name[i];
+    if (c != wanted.str[i]) return false;
+  }
+  return true;
+}
+
+[[nodiscard]] bool FaceNameMatches(const stbtt_fontinfo *info, i32 name_id, String8 wanted) {
+  i32 length = 0;
+  const char *name = stbtt_GetFontNameString(info, &length, STBTT_PLATFORM_ID_MICROSOFT,
+                                             STBTT_MS_EID_UNICODE_BMP, STBTT_MS_LANG_ENGLISH,
+                                             name_id);
+  if (name && NameEquals(name, length, true, wanted)) return true;
+
+  name = stbtt_GetFontNameString(info, &length, STBTT_PLATFORM_ID_MAC, 0, 0, name_id);
+  return name && NameEquals(name, length, false, wanted);
+}
+
+// Finds the face whose family name is exactly `family` and whose style is
+// "Regular".
+//
+// stbtt_FindMatchingFont is not usable here: it matches loosely, so asking a
+// 162-face Iosevka collection for "Iosevka Fixed" hands back "Iosevka Fixed
+// Thin" -- a real face, just the wrong weight, and one whose thinness is
+// subtle enough to look like a rendering problem rather than a wrong font.
+[[nodiscard]] i32 FindFaceOffset(const u8 *font_data, String8 family) {
+  i32 count = stbtt_GetNumberOfFonts(font_data);
+  if (count <= 0) return -1;
+
+  for (i32 i = 0; i < count; i += 1) {
+    i32 offset = stbtt_GetFontOffsetForIndex(font_data, i);
+    if (offset < 0) continue;
+
+    stbtt_fontinfo info;
+    if (!stbtt_InitFont(&info, font_data, offset)) continue;
+
+    if (FaceNameMatches(&info, 1, family) && FaceNameMatches(&info, 2, Str8Lit("Regular"))) {
+      return offset;
+    }
+  }
+  return -1;
+}
+
 }  // namespace
 
 bool GlyphAtlasInit(GlyphAtlas *atlas, Arena *arena, SDL_Renderer *renderer, String8 font_path,
-                    f32 pixel_height) {
+                    f32 pixel_height, String8 face_name) {
   *atlas = GlyphAtlas{};
   atlas->arena = arena;
   atlas->pixel_height = pixel_height;
 
-  FileContents font = OsFileRead(arena, font_path);
-  if (!font.ok || font.data.size == 0) return false;
-  atlas->font_data = font.data.str;
+  atlas->font_file = OsFileMap(font_path);
+  if (!atlas->font_file.ok) return false;
+  u8 *font_data = atlas->font_file.data;
 
   stbtt_fontinfo *info = PushStruct(arena, stbtt_fontinfo);
   atlas->font_info = info;
 
-  i32 offset = stbtt_GetFontOffsetForIndex(atlas->font_data, 0);
-  if (offset < 0 || !stbtt_InitFont(info, atlas->font_data, offset)) return false;
+  // In a collection, find the requested face by exact name; fall back to the
+  // first one, which is all a plain .ttf has anyway.
+  i32 offset = (face_name.size > 0) ? FindFaceOffset(font_data, face_name) : -1;
+  if (offset < 0) offset = stbtt_GetFontOffsetForIndex(font_data, 0);
+  if (offset < 0 || !stbtt_InitFont(info, font_data, offset)) return false;
 
   atlas->scale = stbtt_ScaleForPixelHeight(info, pixel_height);
 
@@ -99,6 +151,7 @@ bool GlyphAtlasInit(GlyphAtlas *atlas, Arena *arena, SDL_Renderer *renderer, Str
 void GlyphAtlasDestroy(GlyphAtlas *atlas) {
   if (atlas->texture) SDL_DestroyTexture(atlas->texture);
   atlas->texture = nullptr;
+  OsFileUnmap(&atlas->font_file);
   atlas->valid = false;
 }
 
@@ -186,30 +239,43 @@ const Glyph *GlyphAtlasGet(GlyphAtlas *atlas, u32 codepoint) {
   return glyph;
 }
 
-String8 GlyphAtlasFindMonospaceFont(Arena *arena) {
-  // Ordered by preference. Editors live or die on their font, so the ones with
-  // proper programming-face metrics come first.
-  const char *candidates[] = {
-      "/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf",
-      "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
-      "/usr/share/fonts/TTF/FiraCode-Regular.ttf",
-      "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf",
-      "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-      "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-      "/usr/share/fonts/TTF/liberation/LiberationMono-Regular.ttf",
-      "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-      "/usr/share/fonts/liberation-mono/LiberationMono-Regular.ttf",
-      "/usr/share/fonts/TTF/Hack-Regular.ttf",
-      "/usr/share/fonts/TTF/UbuntuMono-R.ttf",
-      "/System/Library/Fonts/Menlo.ttc",
-      "/System/Library/Fonts/SFNSMono.ttf",
-      "C:\\Windows\\Fonts\\consola.ttf",
+String8 GlyphAtlasFindMonospaceFont(Arena *arena, String8 *out_face) {
+  struct Candidate {
+    const char *path;
+    const char *face;  // which face to ask for, when the file is a collection
+  };
+
+  // Ordered by preference. Iosevka first, since that is what the user's i3
+  // config asks for; "Iosevka Fixed" is the strictly monospaced cut of it,
+  // which is what a cell grid wants.
+  const Candidate candidates[] = {
+      {"/usr/share/fonts/TTF/Iosevka.ttc", "Iosevka Fixed"},
+      {"/usr/share/fonts/TTF/Iosevka-Regular.ttf", ""},
+      {"/usr/share/fonts/truetype/iosevka/Iosevka-Regular.ttf", ""},
+      {"/usr/share/fonts/TTF/IosevkaTerm-Regular.ttf", ""},
+      {"/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf", ""},
+      {"/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf", ""},
+      {"/usr/share/fonts/TTF/FiraCode-Regular.ttf", ""},
+      {"/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf", ""},
+      {"/usr/share/fonts/TTF/DejaVuSansMono.ttf", ""},
+      {"/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", ""},
+      {"/usr/share/fonts/TTF/liberation/LiberationMono-Regular.ttf", ""},
+      {"/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf", ""},
+      {"/usr/share/fonts/liberation-mono/LiberationMono-Regular.ttf", ""},
+      {"/usr/share/fonts/TTF/Hack-Regular.ttf", ""},
+      {"/usr/share/fonts/TTF/UbuntuMono-R.ttf", ""},
+      {"/System/Library/Fonts/Menlo.ttc", "Menlo Regular"},
+      {"/System/Library/Fonts/SFNSMono.ttf", ""},
+      {"C:\\Windows\\Fonts\\consola.ttf", ""},
   };
 
   for (u64 i = 0; i < ArrayCount(candidates); i += 1) {
-    String8 path = Str8C(candidates[i]);
-    if (OsFileExists(path)) return PushStr8Copy(arena, path);
+    String8 path = Str8C(candidates[i].path);
+    if (!OsFileExists(path)) continue;
+    if (out_face) *out_face = PushStr8Copy(arena, Str8C(candidates[i].face));
+    return PushStr8Copy(arena, path);
   }
 
+  if (out_face) *out_face = String8{nullptr, 0};
   return String8{nullptr, 0};
 }

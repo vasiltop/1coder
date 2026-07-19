@@ -41,10 +41,17 @@ RangeU64 VimRangeFromMotion(const Buffer *buffer, u64 from, MotionResult motion)
   return range;
 }
 
-void VimYankRange(Editor *ed, Buffer *buffer, RangeU64 range, bool linewise) {
+void VimYankRange(Editor *ed, View *view, Buffer *buffer, RangeU64 range, bool linewise) {
   TempArena scratch = ScratchBegin();
   String8 text = BufferTextRange(scratch.arena, buffer, range);
-  EditorSetRegister(ed, 0, text, linewise);
+
+  u8 name = (u8)view->vim.pending_register;
+  EditorSetRegister(ed, name, text, linewise);
+
+  // Vim fills the unnamed register alongside a named one, so a bare `p` still
+  // pastes what was just yanked.
+  if (name != 0) EditorSetRegister(ed, 0, text, linewise);
+
   ScratchEnd(scratch);
 }
 
@@ -54,13 +61,13 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
 
   switch (op) {
     case OperatorKind::Yank: {
-      VimYankRange(ed, buffer, range, linewise);
+      VimYankRange(ed, view, buffer, range, linewise);
       // Yank leaves the cursor at the start of the yanked span.
       return range.min;
     }
 
     case OperatorKind::Delete: {
-      VimYankRange(ed, buffer, range, linewise);
+      VimYankRange(ed, view, buffer, range, linewise);
       BufferDelete(ed, buffer, range, view->cursor, range.min);
 
       if (linewise) {
@@ -78,7 +85,7 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
     }
 
     case OperatorKind::Change: {
-      VimYankRange(ed, buffer, range, linewise);
+      VimYankRange(ed, view, buffer, range, linewise);
 
       if (linewise) {
         // `cc` empties the lines but keeps one to type on, rather than
@@ -107,7 +114,7 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
 }
 
 u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool after) {
-  Register reg = EditorGetRegister(ed, 0);
+  Register reg = EditorGetRegister(ed, (u8)view->vim.pending_register);
   if (reg.text.size == 0 || BufferIsReadOnly(buffer)) return pos;
 
   TempArena scratch = ScratchBegin();

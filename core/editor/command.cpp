@@ -268,6 +268,20 @@ static void Cmd_open_line_above(CommandArgs *a) {
   ViewSetCursor(a->view, buffer, at);
 }
 
+// `"` -- the chord after it names the register rather than running a command,
+// which the input layer handles.
+static void Cmd_select_register(CommandArgs *a) {
+  a->ed->input.awaiting_register = true;
+  a->ed->input.register_follow_up = CommandId::None;
+}
+
+// Insert mode's <C-r> waits the same way, but acts as soon as the name lands
+// instead of storing it for a later operator.
+static void Cmd_insert_register_prompt(CommandArgs *a) {
+  a->ed->input.awaiting_register = true;
+  a->ed->input.register_follow_up = CommandId::insert_register;
+}
+
 static void Cmd_visual_mode(CommandArgs *a) { EnterVisual(a, VimMode::Visual); }
 static void Cmd_visual_line_mode(CommandArgs *a) { EnterVisual(a, VimMode::VisualLine); }
 
@@ -307,7 +321,7 @@ static void Cmd_delete_char(CommandArgs *a) {
   }
   if (end == view->cursor) return;
 
-  VimYankRange(a->ed, buffer, RangeU64{view->cursor, end}, false);
+  VimYankRange(a->ed, view, buffer, RangeU64{view->cursor, end}, false);
   BufferDelete(a->ed, buffer, RangeU64{view->cursor, end}, view->cursor, view->cursor);
   ViewSetCursor(view, buffer, view->cursor);
 }
@@ -337,7 +351,7 @@ static void Cmd_delete_to_line_end(CommandArgs *a) {
   u64 end = BufferLineEnd(buffer, ViewCursorLine(view, buffer));
   if (end <= view->cursor) return;
 
-  VimYankRange(a->ed, buffer, RangeU64{view->cursor, end}, false);
+  VimYankRange(a->ed, view, buffer, RangeU64{view->cursor, end}, false);
   BufferDelete(a->ed, buffer, RangeU64{view->cursor, end}, view->cursor, view->cursor);
   ViewSetCursor(view, buffer, view->cursor);
 }
@@ -348,7 +362,7 @@ static void Cmd_change_to_line_end(CommandArgs *a) {
   u64 end = BufferLineEnd(buffer, ViewCursorLine(view, buffer));
 
   if (end > view->cursor) {
-    VimYankRange(a->ed, buffer, RangeU64{view->cursor, end}, false);
+    VimYankRange(a->ed, view, buffer, RangeU64{view->cursor, end}, false);
     BufferDelete(a->ed, buffer, RangeU64{view->cursor, end}, view->cursor, view->cursor);
   }
   EnterInsertMode(a->ed, view, buffer, view->cursor);
@@ -487,6 +501,35 @@ static void Cmd_delete_word_before(CommandArgs *a) {
   BufferDelete(a->ed, buffer, RangeU64{start, view->cursor}, view->cursor, start);
   ViewSetCursor(view, buffer, start);
 }
+
+// <C-r>{reg} in insert mode, which is how vim pastes without leaving it.
+static void Cmd_insert_register(CommandArgs *a) {
+  Register reg = EditorGetRegister(a->ed, (u8)a->view->vim.pending_register);
+  if (reg.text.size == 0) return;
+
+  TempArena scratch = ScratchBegin();
+  String8 text = PushStr8Copy(scratch.arena, reg.text);
+  BufferInsert(a->ed, a->buffer, a->view->cursor, text, a->view->cursor,
+               a->view->cursor + text.size);
+  ViewSetCursor(a->view, a->buffer, a->view->cursor + text.size);
+  ScratchEnd(scratch);
+}
+
+// ---------------------------------------------------------------------------
+// Zoom
+//
+// The core holds only a number; the app watches it and rebuilds the glyph
+// atlas. Because layout is in cells, a size change resizes the grid through
+// exactly the same path a window resize takes.
+// ---------------------------------------------------------------------------
+
+static void Cmd_zoom_in(CommandArgs *a) {
+  EditorSetFontSize(a->ed, a->ed->font_size + (f32)a->count);
+}
+static void Cmd_zoom_out(CommandArgs *a) {
+  EditorSetFontSize(a->ed, a->ed->font_size - (f32)a->count);
+}
+static void Cmd_zoom_reset(CommandArgs *a) { EditorSetFontSize(a->ed, kFontSizeDefault); }
 
 // ---------------------------------------------------------------------------
 // Scrolling
@@ -938,10 +981,12 @@ void CommandExecArgs(Editor *ed, CommandId id, CommandArgs *supplied) {
 
   command->proc(&args);
 
-  // The operator count survives only until the motion that consumes it.
+  // The operator count and the selected register survive only until the motion
+  // that consumes them, so `"+d2w` carries both through to the end.
   if (view->vim.mode != VimMode::OperatorPending) {
     view->vim.operator_count = 0;
     view->vim.has_operator_count = false;
+    view->vim.pending_register = 0;
   }
 
   EditorScrollFocusedToCursor(ed);

@@ -108,6 +108,12 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(visual_mode,           "visual-mode",           "Enter visual mode",               CommandArg::None, CmdHidden)      \
   X(visual_line_mode,      "visual-line-mode",      "Enter linewise visual mode",      CommandArg::None, CmdHidden)      \
   X(replace_mode,          "replace-mode",          "Enter replace mode",              CommandArg::None, CmdHidden)      \
+  X(select_register,       "select-register",       "Choose the register to use",      CommandArg::None, CmdHidden)      \
+  X(insert_register,       "insert-register",       "Insert a register's contents",    CommandArg::None, CmdHidden)      \
+  X(insert_register_prompt, "insert-register-prompt", "Ask which register to insert",   CommandArg::None, CmdHidden)      \
+  X(zoom_in,               "zoom-in",               "Increase the font size",          CommandArg::None, CmdNone)        \
+  X(zoom_out,              "zoom-out",              "Decrease the font size",          CommandArg::None, CmdNone)        \
+  X(zoom_reset,            "zoom-reset",            "Restore the default font size",   CommandArg::None, CmdNone)        \
   /* ---- operators ---- */                                                                                              \
   X(operator_delete,       "operator-delete",       "Delete over a motion",            CommandArg::None, CmdHidden)      \
   X(operator_change,       "operator-change",       "Change over a motion",            CommandArg::None, CmdHidden)      \

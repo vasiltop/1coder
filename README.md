@@ -12,7 +12,7 @@ Needs CMake, a C++23 compiler, and SDL3.
 cmake -B build -S . && cmake --build build -j
 
 ./build/editor path/to/file      # run
-./build/editor_tests             # 241 tests, needs no display
+./build/editor_tests             # 249 tests, needs no display
 ```
 
 With [just](https://github.com/casey/just), `just` on its own lists everything:
@@ -30,8 +30,9 @@ just compdb                # compile_commands.json for clangd
 
 `stb_truetype` is vendored in `third_party/`. Nothing else is required.
 
-Set `EDITOR_FONT` to a `.ttf` path and `EDITOR_FONT_SIZE` to override font
-selection.
+Font selection prefers Iosevka, then the usual programming faces. Override with
+`EDITOR_FONT` (a path), `EDITOR_FONT_FACE` (which face to take out of a `.ttc`
+collection) and `EDITOR_FONT_SIZE`.
 
 ## Architecture
 
@@ -110,11 +111,29 @@ Windows: `<C-h/j/k/l>` moves focus, `<leader>v` splits vertically and
 `<leader>h` horizontally (as `:vsplit` and `:split` do). The built-in `<C-w>`
 forms — `<C-w>v` `<C-w>s` `<C-w>hjkl` `<C-w>c` `<C-w>o` — work too.
 
-Insert mode: `<C-w>`, `<C-h>` and `<C-BS>` all rub out the previous word.
+Insert mode: `<C-w>`, `<C-h>` and `<C-BS>` all rub out the previous word;
+`<C-r>{reg}` inserts a register.
+
+Registers work as in vim: `"a` picks one for the next yank, delete or paste,
+and `"+` / `"*` are the system clipboard — so `"+y` and `"+p` exchange text with
+other programs while a bare `y`/`p` stays internal. A named yank fills the
+unnamed register too.
+
+Zoom with `<C-=>` / `<C-->` / `<C-0>`, in any mode. The core holds only a font
+size; the app watches it and rebuilds the glyph atlas, and because layout is in
+cells the grid resizes through the same path a window resize takes.
 
 The command window opens in insert mode, as `q:i` does in vim. `<Esc>` drops to
 normal mode where every motion and operator applies to the line being typed;
 `<Esc>` again abandons it. `<CR>` submits from any mode.
+
+## Fonts
+
+Font files are memory-mapped rather than read, which matters more than it
+sounds: Iosevka ships as a single 421 MB collection of 162 faces, and mapping it
+means only the tables and outlines actually used become resident. Faces are
+matched by exact family name — `stbtt_FindMatchingFont` matches loosely enough
+to hand back "Iosevka Fixed Thin" when asked for "Iosevka Fixed".
 
 ## Colours
 

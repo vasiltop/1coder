@@ -25,8 +25,9 @@ struct Editor;
 u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, RangeU64 range,
                      bool linewise);
 
-// Yanks without modifying the buffer.
-void VimYankRange(Editor *ed, Buffer *buffer, RangeU64 range, bool linewise);
+// Yanks without modifying the buffer, into whichever register `view` has
+// selected -- including the system clipboard via "+ or "*.
+void VimYankRange(Editor *ed, View *view, Buffer *buffer, RangeU64 range, bool linewise);
 
 // Pastes the unnamed register. Linewise content lands on its own line, which is
 // why the register remembers how it was captured.

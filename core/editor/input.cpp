@@ -130,13 +130,30 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
   }
   RecordChord(input, chord);
 
-  // 1. The buffer gets first refusal, which is how the command line and later
-  //    the explorer behave unmodally without the core knowing about them.
+  // 1. The buffer gets first refusal, which is how the command window and
+  //    later the explorer claim the keys they need.
   if (buffer->hooks.on_key && buffer->hooks.on_key(ed, buffer, view, chord)) {
     return;
   }
 
-  // 2. A command waiting on a target character takes this chord as its
+  // 2. `"` was pressed, so this chord names a register rather than running a
+  //    command. It stays on the view until the operation that uses it finishes.
+  if (input->awaiting_register) {
+    input->awaiting_register = false;
+
+    CommandId follow_up = input->register_follow_up;
+    input->register_follow_up = CommandId::None;
+
+    // Anything that is not a character -- Escape, most likely -- abandons the
+    // selection rather than naming a nonsense register.
+    if (KeyChordIsChar(chord)) {
+      view->vim.pending_register = chord.codepoint;
+      if (follow_up != CommandId::None) CommandExec(ed, follow_up, String8{nullptr, 0}, chord);
+    }
+    return;
+  }
+
+  // 3. A command waiting on a target character takes this chord as its
   //    argument, whatever it happens to be bound to.
   if (input->awaiting_char_command != CommandId::None) {
     CommandId id = input->awaiting_char_command;

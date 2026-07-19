@@ -6,6 +6,7 @@
 #include "base/base_math.h"
 #include "base/base_string.h"
 #include "base/base_types.h"
+#include "os/os_file.h"
 
 // Glyphs rasterised on demand into one texture.
 //
@@ -46,7 +47,10 @@ struct GlyphAtlas {
   Glyph *glyphs;  // open-addressed, keyed by codepoint
   u64 capacity;
 
-  u8 *font_data;
+  // The font file stays mapped for the atlas's lifetime, because the parsed
+  // font points straight into it. Mapping rather than reading matters here:
+  // Iosevka ships as a single 400MB collection.
+  FileMapping font_file;
   void *font_info;  // stbtt_fontinfo, hidden to keep stb out of this header
   f32 scale;
 
@@ -54,10 +58,14 @@ struct GlyphAtlas {
   bool valid;
 };
 
-// Loads a TTF and prepares an empty atlas. Returns false if the font cannot be
+// Loads a font and prepares an empty atlas. Returns false if the font cannot be
 // read or parsed.
+//
+// `face_name` picks a face out of a TrueType *collection* (.ttc), which is how
+// Iosevka ships -- one file holding dozens of variants, where index 0 is
+// whichever the builder happened to put first. Empty means "the first face".
 bool GlyphAtlasInit(GlyphAtlas *atlas, Arena *arena, SDL_Renderer *renderer, String8 font_path,
-                    f32 pixel_height);
+                    f32 pixel_height, String8 face_name = String8{nullptr, 0});
 void GlyphAtlasDestroy(GlyphAtlas *atlas);
 
 // Looks a glyph up, rasterising and uploading it on first use. Never returns
@@ -69,5 +77,6 @@ const Glyph *GlyphAtlasGet(GlyphAtlas *atlas, u32 codepoint);
 [[nodiscard]] RectF32 GlyphAtlasWhiteUV(const GlyphAtlas *atlas);
 
 // Searches the usual locations for a monospace font. Returns an empty string if
-// nothing suitable turns up.
-[[nodiscard]] String8 GlyphAtlasFindMonospaceFont(Arena *arena);
+// nothing suitable turns up; `out_face` receives the face to ask for when the
+// file is a collection.
+[[nodiscard]] String8 GlyphAtlasFindMonospaceFont(Arena *arena, String8 *out_face);

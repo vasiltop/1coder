@@ -68,6 +68,11 @@ struct VimState {
   // Anchor for visual mode; the selection runs between this and the cursor.
   u64 visual_anchor;
 
+  // Register chosen with `"`, or 0 for the unnamed one. '+' and '*' reach the
+  // system clipboard. Survives from the `"` through an operator to the motion
+  // that completes it, so `"+dw` works.
+  u32 pending_register;
+
   // Last f/F/t/T, so `;` and `,` can repeat it.
   u32 last_find_char;
   bool last_find_forward;
