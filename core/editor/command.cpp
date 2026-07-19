@@ -1036,6 +1036,32 @@ void ShowListing(Editor *ed, String8 name, String8 text) {
 // Provided by core/buffers/buf_picker.cpp.
 BufferHandle GrepBufferOpen(Editor *ed, String8 pattern);
 BufferHandle FinderBufferOpen(Editor *ed);
+BufferHandle LiveGrepBufferOpen(Editor *ed);
+
+// Opens a picker whose first line is the query, ready to type into. Shared by
+// the file finder and the live search, which differ only in what they do with
+// what is typed.
+static void OpenQueryPicker(CommandArgs *a, BufferHandle handle) {
+  if (handle.index == 0) return;
+  EditorShowBuffer(a->ed, handle);
+
+  View *view = EditorFocusedView(a->ed);
+  Buffer *buffer = EditorFocusedBuffer(a->ed);
+  if (!view || !buffer) return;
+
+  ViewSetCursorLineColumn(view, buffer, 0, 0);
+  view->vim.mode = VimMode::Insert;
+
+  // A query given up front skips the typing.
+  if (a->text.size > 0) {
+    BufferInsert(a->ed, buffer, 0, a->text, 0, a->text.size);
+    ViewSetCursor(view, buffer, a->text.size);
+  }
+}
+
+static void Cmd_live_grep(CommandArgs *a) {
+  OpenQueryPicker(a, LiveGrepBufferOpen(a->ed));
+}
 
 static void Cmd_grep(CommandArgs *a) {
   // A keybinding carries no argument, so with nothing to search for the only
@@ -1058,26 +1084,7 @@ static void Cmd_grep(CommandArgs *a) {
   }
 }
 
-static void Cmd_find_file(CommandArgs *a) {
-  BufferHandle handle = FinderBufferOpen(a->ed);
-  if (handle.index == 0) return;
-
-  EditorShowBuffer(a->ed, handle);
-
-  View *view = EditorFocusedView(a->ed);
-  Buffer *buffer = EditorFocusedBuffer(a->ed);
-  if (!view || !buffer) return;
-
-  // The query line is the point of the thing, so start in insert mode on it.
-  ViewSetCursorLineColumn(view, buffer, 0, 0);
-  view->vim.mode = VimMode::Insert;
-
-  // A query given up front skips the typing.
-  if (a->text.size > 0) {
-    BufferInsert(a->ed, buffer, 0, a->text, 0, a->text.size);
-    ViewSetCursor(view, buffer, a->text.size);
-  }
-}
+static void Cmd_find_file(CommandArgs *a) { OpenQueryPicker(a, FinderBufferOpen(a->ed)); }
 
 // <CR> in a results buffer. The buffer's own on_submit knows what its lines
 // mean; this just hands the current one over.

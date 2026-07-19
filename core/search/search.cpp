@@ -155,7 +155,49 @@ PathList SearchWalkFiles(Arena *arena, String8 root, u64 max_files) {
   return list;
 }
 
-GrepResults SearchGrep(Arena *arena, String8 root, String8 pattern, u64 max_matches) {
+SearchCorpus SearchLoadCorpus(Arena *arena, String8 root, u64 max_bytes) {
+  SearchCorpus corpus = {};
+
+  TempArena scratch = ScratchBegin1(arena);
+  PathList files = SearchWalkFiles(scratch.arena, root);
+
+  corpus.paths = PushArrayNoZero(arena, String8, Max(files.count, (u64)1));
+  corpus.contents = PushArrayNoZero(arena, String8, Max(files.count, (u64)1));
+
+  for (u64 i = 0; i < files.count; i += 1) {
+    if (corpus.total_bytes >= max_bytes) {
+      corpus.truncated = true;
+      break;
+    }
+
+    // Both the output arena and the walk's scratch are declared as conflicts.
+    // Naming only one lets the per-file scratch land on the other -- and since
+    // it is popped after every file, that would discard the corpus entries
+    // collected so far, silently losing files.
+    Arena *conflicts[] = {arena, scratch.arena};
+    TempArena file_scratch = ScratchBegin(conflicts, ArrayCount(conflicts));
+
+    String8 absolute = OsPathJoin(file_scratch.arena, root, files.paths[i]);
+    FileContents contents = OsFileRead(file_scratch.arena, absolute);
+
+    bool usable = contents.ok && contents.data.size <= kSearchMaxFileSize &&
+                  !LooksBinary(contents.data);
+    if (usable) {
+      corpus.paths[corpus.count] = PushStr8Copy(arena, files.paths[i]);
+      corpus.contents[corpus.count] = PushStr8Copy(arena, contents.data);
+      corpus.total_bytes += contents.data.size;
+      corpus.count += 1;
+    }
+
+    ScratchEnd(file_scratch);
+  }
+
+  ScratchEnd(scratch);
+  return corpus;
+}
+
+GrepResults SearchGrepCorpus(Arena *arena, const SearchCorpus *corpus, String8 pattern,
+                             u64 max_matches) {
   GrepResults results = {};
   if (pattern.size == 0) return results;
 
@@ -167,79 +209,60 @@ GrepResults SearchGrep(Arena *arena, String8 root, String8 pattern, u64 max_matc
   }
   StringMatch match_flags = has_upper ? StringMatch::None : StringMatch::CaseInsensitive;
 
-  TempArena scratch = ScratchBegin1(arena);
-  PathList files = SearchWalkFiles(scratch.arena, root);
-
-  struct MatchNode {
-    MatchNode *next;
-    GrepMatch match;
-  };
-  MatchNode *first = nullptr, *last = nullptr;
+  // Counted first so the results can go straight into one array, which keeps a
+  // live search from building a linked list on every keystroke.
   u64 count = 0;
-
-  for (u64 i = 0; i < files.count && count < max_matches; i += 1) {
-    // Each file is read into its own scratch and released again, so a large
-    // tree costs one file's worth of memory rather than the whole project's.
-    // The match nodes cannot live here for that reason; they stay in `scratch`.
-    TempArena file_scratch = ScratchBegin1(scratch.arena);
-
-    String8 absolute = OsPathJoin(file_scratch.arena, root, files.paths[i]);
-    FileContents contents = OsFileRead(file_scratch.arena, absolute);
-
-    if (!contents.ok || contents.data.size > kSearchMaxFileSize ||
-        LooksBinary(contents.data)) {
-      ScratchEnd(file_scratch);
-      continue;
+  for (u64 f = 0; f < corpus->count && count < max_matches; f += 1) {
+    String8 data = corpus->contents[f];
+    u64 line_start = 0;
+    for (u64 p = 0; p <= data.size && count < max_matches; p += 1) {
+      if (p != data.size && data.str[p] != '\n') continue;
+      String8 line = String8{data.str + line_start, p - line_start};
+      if (Str8FindFirst(line, pattern, 0, match_flags) < line.size) count += 1;
+      line_start = p + 1;
     }
+  }
 
-    results.files_searched += 1;
+  results.matches = PushArrayNoZero(arena, GrepMatch, Max(count, (u64)1));
+  results.files_searched = corpus->count;
 
+  for (u64 f = 0; f < corpus->count && results.count < count; f += 1) {
+    String8 data = corpus->contents[f];
     u64 line_number = 1;
     u64 line_start = 0;
-    String8 data = contents.data;
 
-    for (u64 p = 0; p <= data.size; p += 1) {
-      bool at_end = (p == data.size);
-      if (!at_end && data.str[p] != '\n') continue;
+    for (u64 p = 0; p <= data.size && results.count < count; p += 1) {
+      if (p != data.size && data.str[p] != '\n') continue;
 
       String8 line = String8{data.str + line_start, p - line_start};
       u64 hit = Str8FindFirst(line, pattern, 0, match_flags);
 
       if (hit < line.size) {
-        // The path and text outlive the scratch this file was read into.
-        MatchNode *node = PushStruct(scratch.arena, MatchNode);
-        node->match.path = PushStr8Copy(arena, files.paths[i]);
-        node->match.line = line_number;
-        node->match.column = hit + 1;
-        node->match.text = PushStr8Copy(arena, Str8SkipChopWhitespace(line));
-
-        if (last) {
-          last->next = node;
-          last = node;
-        } else {
-          first = last = node;
-        }
-        count += 1;
-        if (count >= max_matches) {
-          results.truncated = true;
-          break;
-        }
+        GrepMatch *match = &results.matches[results.count];
+        // Copied rather than referenced: a one-shot search frees the corpus it
+        // loaded, and the results have to outlive it.
+        match->path = PushStr8Copy(arena, corpus->paths[f]);
+        match->line = line_number;
+        match->column = hit + 1;
+        match->text = PushStr8Copy(arena, Str8SkipChopWhitespace(line));
+        results.count += 1;
       }
 
       line_start = p + 1;
       line_number += 1;
-      if (at_end) break;
     }
-
-    ScratchEnd(file_scratch);
   }
 
-  results.matches = PushArrayNoZero(arena, GrepMatch, Max(count, (u64)1));
-  results.count = count;
+  results.truncated = (count >= max_matches);
+  return results;
+}
 
-  u64 i = 0;
-  for (MatchNode *node = first; node; node = node->next) results.matches[i++] = node->match;
-
+GrepResults SearchGrep(Arena *arena, String8 root, String8 pattern, u64 max_matches) {
+  // A one-shot search loads the corpus into scratch and throws it away again,
+  // so it costs the same memory as the tree it searched rather than keeping it.
+  TempArena scratch = ScratchBegin1(arena);
+  SearchCorpus corpus = SearchLoadCorpus(scratch.arena, root);
+  GrepResults results = SearchGrepCorpus(arena, &corpus, pattern, max_matches);
   ScratchEnd(scratch);
   return results;
 }

@@ -12,7 +12,7 @@ Needs CMake, a C++23 compiler, and SDL3.
 cmake -B build -S . && cmake --build build -j
 
 ./build/editor path/to/file      # run
-./build/editor_tests             # 274 tests, needs no display
+./build/editor_tests             # 276 tests, needs no display
 ```
 
 With [just](https://github.com/casey/just), `just` on its own lists everything:
@@ -159,18 +159,22 @@ the desktop. Syntax colours are not in that palette and are set separately.
 
 ## Search
 
-`:grep <pattern>` searches the project and `:find [query]` fuzzy-finds a file.
-Both are bound where the neovim config puts them: `<leader>pg`, `<leader>pf`,
-and `<leader>pb` for the buffer list.
+`<leader>pg` searches the project as you type, `<leader>pf` fuzzy-finds a file,
+and `<leader>pb` lists buffers — where the neovim config puts them. By name:
+`:live-grep`, `:find`, `:buffers`, plus `:grep <pattern>` for a fixed list.
 
-Neither adds a UI concept, which was the point of the buffer system:
+None of them adds a UI concept, which was the point of the buffer system:
 
-- **Grep results** are a read-only buffer whose keymap claims `<CR>`, with the
-  matches hanging off `user_data`. Pressing `<CR>` opens the file at that line.
-- **The fuzzy finder** is the same thing with an editable query on its first
-  line. Its `on_edit` hook refilters everything below as you type, so it starts
-  in insert mode and narrows live. `<Esc>` drops to normal mode to navigate the
-  results with `j`/`k`, and `<CR>` opens one.
+- **A results list** is a read-only buffer whose keymap claims `<CR>`, with the
+  matches hanging off `user_data`. `<CR>` opens the file at that line.
+- **A picker** is the same thing with an editable query on its first line. Its
+  `on_edit` hook rewrites everything below as you type, so it opens in insert
+  mode and narrows live. `<Esc>` drops to normal mode to navigate results with
+  `j`/`k`, and `<CR>` opens one.
+
+Live search reads the tree once into memory and rescans those bytes per
+keystroke; re-reading the project on every character would not be usable. The
+corpus is capped, and reopening reuses it.
 
 Everything else — scrolling, splits, vim motions, undo — is inherited, because
 these are ordinary buffers. Matching is literal with vim's 'smartcase'; there

@@ -23,19 +23,41 @@ namespace {
 struct GrepPayload {
   GrepResults results;
   String8 root;
-  Arena *arena;
+
+  // Which buffer line the first result sits on: below a header for a one-shot
+  // search, below the query for a live one.
+  u64 first_result_line;
+
+  // Live search only. The corpus is read once and rescanned on every keystroke;
+  // re-reading the tree per keystroke would not be usable.
+  bool live;
+  bool updating;
+  SearchCorpus corpus;
+  Arena *corpus_arena;   // holds the corpus for the buffer's lifetime
+  Arena *results_arena;  // cleared and refilled on every query
 };
+
+// Releases what the payload owns. Buffers can be closed, and a corpus is large
+// enough that leaking one matters.
+void GrepClose(Editor *ed, Buffer *buffer) {
+  GrepPayload *payload = (GrepPayload *)buffer->user_data;
+  if (!payload) return;
+
+  if (payload->corpus_arena) ArenaRelease(payload->corpus_arena);
+  if (payload->results_arena) ArenaRelease(payload->results_arena);
+  payload->corpus_arena = nullptr;
+  payload->results_arena = nullptr;
+}
 
 // <CR> on a result opens the file at that line.
 void GrepSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
   GrepPayload *payload = (GrepPayload *)buffer->user_data;
   if (!payload) return;
 
-  // The buffer's first two lines are the header, so results start below them.
   u64 cursor_line = ViewCursorLine(view, buffer);
-  if (cursor_line < 2) return;
+  if (cursor_line < payload->first_result_line) return;
 
-  u64 index = cursor_line - 2;
+  u64 index = cursor_line - payload->first_result_line;
   if (index >= payload->results.count) return;
 
   GrepMatch *match = &payload->results.matches[index];
@@ -55,6 +77,46 @@ void GrepSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
     ViewSetCursorLineColumn(target, opened, match->line - 1, match->column - 1);
     EditorScrollFocusedToCursor(ed);
   }
+}
+
+// Reruns the search for whatever is on the query line and rewrites the results
+// below it. Same shape as the file finder: the buffer's first line is the
+// input, everything under it is output.
+void LiveGrepRefilter(Editor *ed, Buffer *buffer) {
+  GrepPayload *payload = (GrepPayload *)buffer->user_data;
+  if (!payload || !payload->live || payload->updating) return;
+
+  payload->updating = true;
+
+  TempArena scratch = ScratchBegin();
+  String8 query = Str8SkipChopWhitespace(BufferLineText(scratch.arena, buffer, 0));
+
+  // The previous query's results are thrown away wholesale rather than
+  // accumulating one set per keystroke.
+  ArenaClear(payload->results_arena);
+  payload->results = SearchGrepCorpus(payload->results_arena, &payload->corpus, query, 200);
+
+  String8List lines = {};
+  Str8ListPush(scratch.arena, &lines, String8{nullptr, 0});  // keeps the query line
+
+  for (u64 i = 0; i < payload->results.count; i += 1) {
+    GrepMatch *m = &payload->results.matches[i];
+    Str8ListPush(scratch.arena, &lines,
+                 PushStr8F(scratch.arena, "%.*s:%llu: %.*s", (int)m->path.size,
+                           (char *)m->path.str, (unsigned long long)m->line, (int)m->text.size,
+                           (char *)m->text.str));
+  }
+
+  u64 query_end = BufferLineEnd(buffer, 0);
+  String8 body = Str8ListJoin(scratch.arena, &lines, Str8Lit("\n"));
+  BufferReplace(ed, buffer, RangeU64{query_end, BufferSize(buffer)}, body, query_end, query_end);
+
+  ScratchEnd(scratch);
+  payload->updating = false;
+}
+
+void LiveGrepOnEdit(Editor *ed, Buffer *buffer, RangeU64 range, u64 new_len) {
+  LiveGrepRefilter(ed, buffer);
 }
 
 // ---------------------------------------------------------------------------
@@ -142,8 +204,8 @@ BufferHandle GrepBufferOpen(Editor *ed, String8 pattern) {
   if (!buffer) return BufferHandleZero();
 
   GrepPayload *payload = PushStruct(buffer->arena, GrepPayload);
-  payload->arena = buffer->arena;
   payload->root = PushStr8Copy(buffer->arena, ed->cwd);
+  payload->first_result_line = 2;  // below the header and its blank line
   payload->results = SearchGrep(buffer->arena, payload->root, pattern);
 
   buffer->user_data = payload;
@@ -175,6 +237,42 @@ BufferHandle GrepBufferOpen(Editor *ed, String8 pattern) {
     buffer->hooks.keymap = keymap;
   }
   buffer->hooks.on_submit = GrepSubmit;
+
+  return handle;
+}
+
+BufferHandle LiveGrepBufferOpen(Editor *ed) {
+  BufferHandle handle = BufferFromName(&ed->buffers, Str8Lit("[live-grep]"));
+  bool fresh = (handle.index == 0);
+  if (fresh) handle = BufferOpen(&ed->buffers, BufferKind::Grep, Str8Lit("[live-grep]"));
+
+  Buffer *buffer = BufferFromHandle(&ed->buffers, handle);
+  if (!buffer) return BufferHandleZero();
+
+  // Reopening reuses the corpus already in memory, so only the first open pays
+  // for reading the tree.
+  GrepPayload *payload = (GrepPayload *)buffer->user_data;
+  if (!payload) {
+    payload = PushStruct(buffer->arena, GrepPayload);
+    payload->live = true;
+    payload->first_result_line = 1;
+    payload->root = PushStr8Copy(buffer->arena, ed->cwd);
+    payload->corpus_arena = ArenaAlloc(MB(256));
+    payload->results_arena = ArenaAlloc(MB(64));
+    payload->corpus = SearchLoadCorpus(payload->corpus_arena, payload->root);
+
+    buffer->user_data = payload;
+    buffer->hooks.on_edit = LiveGrepOnEdit;
+    buffer->hooks.on_submit = GrepSubmit;
+    buffer->hooks.on_close = GrepClose;
+
+    Keymap *keymap = KeymapAlloc(ed->arena, ed->normal_map);
+    KeymapBind(keymap, "<CR>", CommandId::result_open);
+    buffer->hooks.keymap = keymap;
+  }
+
+  BufferSetText(ed, buffer, String8{nullptr, 0});
+  LiveGrepRefilter(ed, buffer);
 
   return handle;
 }

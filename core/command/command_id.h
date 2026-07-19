@@ -177,6 +177,7 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   /* ---- search ---- */                                                                                                 \
   X(grep,                  "grep",                  "Search the project",              CommandArg::Text, CmdArg)         \
   X(find_file,             "find",                  "Fuzzy-find a file",               CommandArg::Text, CmdNone)        \
+  X(live_grep,             "live-grep",             "Search the project as you type",  CommandArg::Text, CmdNone)        \
   X(result_open,           "result-open",           "Open the result under the cursor", CommandArg::None, CmdHidden)     \
   /* ---- meta ---- */                                                                                                   \
   X(list_commands,         "commands",              "List every command",              CommandArg::None, CmdNone)        \

@@ -144,7 +144,9 @@ void EditorInstallDefaultBindings(Editor *ed) {
 
   // The neovim config's mini.pick bindings, pointed at the equivalents here.
   KeymapBind(normal, "<leader>pf", CommandId::find_file);
-  KeymapBind(normal, "<leader>pg", CommandId::grep);
+  // The neovim config's grep binding is the live one; the one-shot `:grep` is
+  // still there for when a fixed list is what is wanted.
+  KeymapBind(normal, "<leader>pg", CommandId::live_grep);
   KeymapBind(normal, "<leader>pb", CommandId::list_buffers);
 
   // ---- text objects ----

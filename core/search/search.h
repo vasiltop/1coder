@@ -50,6 +50,28 @@ struct GrepResults {
 };
 
 inline constexpr u64 kGrepMaxMatches = 5000;
+// A live search rescans on every keystroke, so the text is held in memory
+// rather than re-read from disk each time. This caps how much of it.
+inline constexpr u64 kSearchMaxCorpusBytes = MB(64);
+
+// Every searchable file, read once. Loading the tree up front is what makes a
+// live search viable: scanning a few hundred kilobytes already in memory is
+// immediate, whereas re-reading the project on each keystroke is not.
+struct SearchCorpus {
+  String8 *paths;
+  String8 *contents;
+  u64 count;
+  u64 total_bytes;
+  bool truncated;
+};
+
+[[nodiscard]] SearchCorpus SearchLoadCorpus(Arena *arena, String8 root,
+                                            u64 max_bytes = kSearchMaxCorpusBytes);
+
+// Searches an already-loaded corpus. Same matching rules as SearchGrep.
+[[nodiscard]] GrepResults SearchGrepCorpus(Arena *arena, const SearchCorpus *corpus,
+                                           String8 pattern,
+                                           u64 max_matches = kGrepMaxMatches);
 
 // Literal substring search -- no regular expressions. Matching is
 // case-sensitive only when the pattern contains an uppercase letter, which is

@@ -132,22 +132,73 @@ TEST(grep_without_a_pattern_prompts) {
   EditorInit(&ed, arena, RectS32{0, 0, 80, 25});
   ed.cwd = PushStr8Copy(arena, tree.root);
 
-  // A keybinding carries no argument text. Searching for nothing and reporting
-  // no matches would look like a broken command, so it opens the command window
-  // ready for a pattern instead.
-  EditorProcessSpec(&ed, "<leader>pg");
+  // A binding carries no argument text. Searching for nothing and reporting no
+  // matches would look like a broken command, so it asks for a pattern instead.
+  CommandExec(&ed, CommandId::grep);
 
   CHECK(ed.command_line_active);
   Buffer *command = BufferFromHandle(&ed.buffers, ed.command_buffer);
   CHECK_STR(BufferTextAll(arena, command), Str8Lit("grep "));
   CHECK_EQ((u32)ed.command_view->vim.mode, (u32)VimMode::Insert);
-  // The cursor waits at the end, so typing continues the command.
-  CHECK_EQ(ed.command_view->cursor, 5);
+  CHECK_EQ(ed.command_view->cursor, 5);  // waiting at the end, ready to type
 
-  // Finishing the line runs the search for real.
   EditorProcessSpec(&ed, "needle<CR>");
   CHECK(!ed.command_line_active);
   CHECK_STR(EditorFocusedBuffer(&ed)->name, Str8Lit("[grep]"));
+
+  EditorDestroy(&ed);
+  ArenaRelease(arena);
+  Destroy(&tree);
+}
+
+TEST(live_grep_searches_as_you_type) {
+  Tree tree = MakeTree("live");
+
+  Arena *arena = ArenaAlloc(MB(64));
+  Editor ed = {};
+  EditorInit(&ed, arena, RectS32{0, 0, 80, 25});
+  ed.cwd = PushStr8Copy(arena, tree.root);
+
+  // <leader>pg opens it directly -- no pattern to supply up front, because the
+  // search reruns on every keystroke.
+  EditorProcessSpec(&ed, "<leader>pg");
+
+  Buffer *live = EditorFocusedBuffer(&ed);
+  CHECK_STR(live->name, Str8Lit("[live-grep]"));
+  CHECK_EQ((u32)EditorFocusedView(&ed)->vim.mode, (u32)VimMode::Insert);
+  CHECK(live->hooks.on_edit != nullptr);
+
+  // An empty query matches nothing, so the buffer is just the query line.
+  CHECK_EQ(BufferLineCount(live), 1);
+
+  EditorProcessSpec(&ed, "needle");
+  CHECK_STR(BufferLineText(arena, live, 0), Str8Lit("needle"));
+  // Two files contain it, and smartcase means the lowercase query finds both.
+  CHECK_EQ(BufferLineCount(live), 3);
+
+  // Narrowing the query narrows the results, without disturbing what was typed.
+  // Smartcase still applies, so this lowercase query finds "NEEDLE here".
+  EditorProcessSpec(&ed, " here");
+  CHECK_STR(BufferLineText(arena, live, 0), Str8Lit("needle here"));
+  CHECK_EQ(BufferLineCount(live), 2);
+
+  // Narrowing to something absent leaves the query line alone.
+  EditorProcessSpec(&ed, "zzz");
+  CHECK_EQ(BufferLineCount(live), 1);
+
+  // Backspacing widens them again, which is the whole point of it being live.
+  EditorProcessSpec(&ed, "<BS><BS><BS><BS><BS><BS><BS><BS>");
+  CHECK_STR(BufferLineText(arena, live, 0), Str8Lit("needle"));
+  CHECK_EQ(BufferLineCount(live), 3);
+
+  // <CR> on a result opens the file it names, at the line it names.
+  EditorProcessSpec(&ed, "<Esc>j");
+  String8 selected = BufferLineText(arena, live, 1);
+  u64 colon = Str8FindFirstChar(selected, ':');
+  String8 selected_path = Str8Prefix(selected, colon);
+
+  EditorProcessSpec(&ed, "<CR>");
+  CHECK(Str8EndsWith(EditorFocusedBuffer(&ed)->path, selected_path));
 
   EditorDestroy(&ed);
   ArenaRelease(arena);
