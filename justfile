@@ -41,12 +41,25 @@ shot out *args: build
     SDL_VIDEODRIVER=dummy ./{{build_dir}}/editor "$@" --screenshot "$out"
     echo "wrote $out"
 
+# Differential test against neovim. Optionally filter: just vimdiff dw
+vimdiff filter="": build
+    python3 tools/vimdiff.py -k "{{filter}}"
+
+# A smaller neovim comparison, for a quick check.
+vimdiff-quick: build
+    python3 tools/vimdiff.py --quick
+
 # Build from scratch, run the tests and check the core/app boundary.
 ci:
     rm -rf {{build_dir}}
     @just build
     ./{{build_dir}}/editor_tests
     @just boundary
+    # Release compiles out the arena assertions and NDEBUG has broken the build
+    # before, so it is worth building both.
+    cmake -B {{release_dir}} -S . -DCMAKE_BUILD_TYPE=Release
+    cmake --build {{release_dir}} -j
+    ./{{release_dir}}/editor_tests
 
 # Fail if anything under core/ has picked up a dependency on SDL.
 boundary:

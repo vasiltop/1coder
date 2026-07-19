@@ -15,6 +15,8 @@ constexpr u64 kBufferTextReserve = MB(512);
 void BufferInit(Buffer *buffer, BufferKind kind, String8 name) {
   buffer->kind = kind;
   buffer->flags = BufferFlags::None;
+  // New files conventionally end with a newline.
+  buffer->final_newline = true;
 
   buffer->arena = ArenaAlloc(kBufferArenaReserve);
   buffer->text_arena = ArenaAlloc(kBufferTextReserve);
@@ -257,7 +259,13 @@ bool BufferLoadFile(Editor *ed, Buffer *buffer, String8 path) {
     return false;
   }
 
-  BufferSetText(ed, buffer, contents.data);
+  // The terminating newline is metadata, not text. Keeping it out of the buffer
+  // is what makes a file of one line read as one line.
+  String8 text = contents.data;
+  buffer->final_newline = (text.size > 0 && text.str[text.size - 1] == '\n');
+  if (buffer->final_newline) text = Str8Chop(text, 1);
+
+  BufferSetText(ed, buffer, text);
   buffer->path = PushStr8Copy(buffer->arena, path);
   buffer->name = PushStr8Copy(buffer->arena, Str8PathBase(path));
 
@@ -271,6 +279,11 @@ bool BufferSaveFile(Buffer *buffer, String8 path) {
 
   TempArena scratch = ScratchBegin1(buffer->arena);
   String8 text = BufferTextAll(scratch.arena, buffer);
+  // Put the terminator back on the way out. An empty buffer stays an empty
+  // file rather than becoming a single blank line.
+  if (buffer->final_newline && text.size > 0) {
+    text = PushStr8Cat(scratch.arena, text, Str8Lit("\n"));
+  }
   bool ok = OsFileWrite(target, text);
 
   if (ok) {

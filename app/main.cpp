@@ -8,6 +8,7 @@
 #include "render/draw.h"
 #include "render/glyph_atlas.h"
 #include "render/render_editor.h"
+#include "os/os_file.h"
 
 #include <stdio.h>
 
@@ -117,6 +118,7 @@ int main(int argc, char **argv) {
   // command line is a file to open.
   const char *screenshot_path = nullptr;
   const char *startup_keys = nullptr;
+  const char *dump_path = nullptr;
   int file_argc = 0;
   char *file_argv[64];
   for (int i = 1; i < argc; i += 1) {
@@ -129,6 +131,14 @@ int main(int argc, char **argv) {
     // exercised in a particular state without a human at the keyboard.
     if (SDL_strcmp(argv[i], "--keys") == 0 && i + 1 < argc) {
       startup_keys = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    // --dump writes the final cursor position and mode, in the same shape vim's
+    // line(".") / col(".") report them. Comparing against real vim needs this:
+    // most motions move the cursor without touching the text.
+    if (SDL_strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
+      dump_path = argv[i + 1];
       i += 1;
       continue;
     }
@@ -212,10 +222,37 @@ int main(int argc, char **argv) {
 
   if (startup_keys) EditorProcessSpec(&app->editor, Str8C(startup_keys));
 
+  if (dump_path) {
+    View *view = EditorFocusedView(&app->editor);
+    Buffer *buffer = EditorFocusedBuffer(&app->editor);
+    if (view && buffer) {
+      u64 line = ViewCursorLine(view, buffer);
+      // Byte column, 1-based, which is what vim's col(".") returns.
+      u64 column = view->cursor - BufferOffsetFromLine(buffer, line) + 1;
+      String8 mode = VimModeName(view->vim.mode);
+
+      TempArena scratch = ScratchBegin();
+      String8 text = PushStr8F(scratch.arena, "%llu:%llu %.*s\n",
+                               (unsigned long long)(line + 1), (unsigned long long)column,
+                               (int)mode.size, (char *)mode.str);
+      (void)OsFileWrite(Str8C(dump_path), text);
+      ScratchEnd(scratch);
+    }
+  }
+
   // A startup key sequence may have zoomed, so settle the font before drawing.
   if (app->editor.font_size_changed) {
     app->editor.font_size_changed = false;
     if (!RebuildFont(app)) return 1;
+  }
+
+  if (dump_path && !screenshot_path) {
+    EditorDestroy(&app->editor);
+    GlyphAtlasDestroy(&app->atlas);
+    SDL_DestroyRenderer(app->renderer);
+    SDL_DestroyWindow(app->window);
+    SDL_Quit();
+    return 0;
   }
 
   if (screenshot_path) {

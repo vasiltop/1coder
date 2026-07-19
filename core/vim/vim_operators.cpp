@@ -78,6 +78,10 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
                      bool linewise) {
   if (BufferIsReadOnly(buffer) && op != OperatorKind::Yank) return view->cursor;
 
+  // Neovim leaves 'startofline' off, so a linewise delete keeps the column
+  // rather than jumping to the first non-blank.
+  u64 column = BufferColumnFromOffset(buffer, view->cursor);
+
   switch (op) {
     case OperatorKind::Yank: {
       VimYankRange(ed, view, buffer, range, linewise, true);
@@ -90,15 +94,10 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
       BufferDelete(ed, buffer, range, view->cursor, range.min);
 
       if (linewise) {
-        // Deleting whole lines leaves the cursor on the line that moved up
-        // into their place, at its first non-blank character.
+        // The cursor lands on whichever line moved up into the deleted one,
+        // keeping its column.
         u64 line = Min(BufferLineFromOffset(buffer, range.min), BufferLineCount(buffer) - 1);
-        RangeU64 line_range = BufferLineRange(buffer, line);
-        u64 at = line_range.min;
-        while (at < line_range.max && CharIsSpace(BufferByteAt(buffer, at))) {
-          at = BufferNextCodepoint(buffer, at);
-        }
-        return at;
+        return BufferOffsetFromColumn(buffer, line, column);
       }
       return range.min;
     }
@@ -186,6 +185,7 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
 u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool indent) {
   if (BufferIsReadOnly(buffer)) return view->cursor;
 
+  u64 column = BufferColumnFromOffset(buffer, view->cursor);
   u64 first = BufferLineFromOffset(buffer, lines.min);
   u64 last = BufferLineFromOffset(buffer, (lines.max > lines.min) ? lines.max - 1 : lines.min);
 
@@ -223,13 +223,8 @@ u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool 
   BufferEndEditGroup(buffer);
   ScratchEnd(scratch);
 
-  // Land on the first non-blank of the first affected line, as vim does.
-  RangeU64 line_range = BufferLineRange(buffer, first);
-  u64 at = line_range.min;
-  while (at < line_range.max && CharIsSpace(BufferByteAt(buffer, at))) {
-    at = BufferNextCodepoint(buffer, at);
-  }
-  return at;
+  // Keep the column, matching neovim's 'nostartofline'.
+  return BufferOffsetFromColumn(buffer, first, column);
 }
 
 u64 VimJoinLines(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count) {

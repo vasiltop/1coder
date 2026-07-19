@@ -82,6 +82,14 @@ struct Buffer {
   String8 name;  // shown in the status line
   String8 path;  // empty for buffers with no file
 
+  // Whether the file ends with a newline. It is kept as a flag rather than as
+  // buffer content because the bytes "a\n" are ambiguous -- one line with a
+  // terminator, or two lines the second of which is empty. Vim resolves this
+  // the same way, with 'endofline'. Storing the terminator as content instead
+  // would add a phantom last line, shifting every line number and sending G and
+  // j somewhere that does not exist.
+  bool final_newline;
+
   GapBuffer text;
   LineIndex lines;
   UndoStack undo;

@@ -250,7 +250,13 @@ MotionResult MotionLineEnd(const Buffer *b, const View *, u64 pos, u64 count, u3
   u64 line = BufferLineFromOffset(b, pos);
   // A count on $ moves down that many lines first, as vim does.
   u64 target = Min(line + (count > 0 ? count - 1 : 0), BufferLineCount(b) - 1);
-  return Ok(BufferLineEnd(b, target), MotionKind::Inclusive);
+
+  // $ is inclusive, so it targets the line's last character rather than the
+  // position after it -- otherwise the operator adds one more and `d$` takes
+  // the newline as well, joining the line onto the next.
+  RangeU64 range = BufferLineRange(b, target);
+  u64 at = (range.max > range.min) ? BufferPrevCodepoint(b, range.max) : range.min;
+  return Ok(at, MotionKind::Inclusive);
 }
 
 MotionResult MotionFileStart(const Buffer *b, const View *, u64, u64, u32) {
