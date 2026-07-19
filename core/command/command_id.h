@@ -97,6 +97,8 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(till_char_forward,     "till-char-forward",     "Move before next character",      CommandArg::None, CmdHidden)      \
   X(till_char_backward,    "till-char-backward",    "Move after previous character",   CommandArg::None, CmdHidden)      \
   X(matching_bracket,      "matching-bracket",      "Jump to matching bracket",        CommandArg::None, CmdHidden)      \
+  X(jump_older,            "jump-older",            "Jump to older position",          CommandArg::None, CmdHidden)      \
+  X(jump_newer,            "jump-newer",            "Jump to newer position",          CommandArg::None, CmdHidden)      \
   /* ---- mode changes ---- */                                                                                           \
   X(normal_mode,           "normal-mode",           "Return to normal mode",           CommandArg::None, CmdHidden)      \
   X(insert_mode,           "insert-mode",           "Insert before cursor",            CommandArg::None, CmdHidden)      \

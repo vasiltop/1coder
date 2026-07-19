@@ -119,6 +119,12 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, "<C-r>", CommandId::redo);
   KeymapBind(normal, ".", CommandId::repeat);
 
+  // Jump list: <C-o> older, <C-i> newer. Tab is bound too because this input
+  // path keeps Tab and Ctrl-I as distinct chords, while vim treats them alike.
+  KeymapBind(normal, "<C-o>", CommandId::jump_older);
+  KeymapBind(normal, "<C-i>", CommandId::jump_newer);
+  KeymapBind(normal, "<Tab>", CommandId::jump_newer);
+
   KeymapBind(normal, "<C-d>", CommandId::scroll_half_page_down);
   KeymapBind(normal, "<C-u>", CommandId::scroll_half_page_up);
   KeymapBind(normal, "<C-e>", CommandId::scroll_line_down);

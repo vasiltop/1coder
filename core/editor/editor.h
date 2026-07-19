@@ -173,6 +173,22 @@ void EditorFocusDir(Editor *ed, Dir2 dir);
 BufferHandle EditorOpenFile(Editor *ed, String8 path);
 void EditorShowBuffer(Editor *ed, BufferHandle buffer);
 
+// ---------------------------------------------------------------------------
+// Jump list (<C-o> / <C-i>)
+// ---------------------------------------------------------------------------
+
+// Records the view's current buffer and cursor as a jump origin. No-op for the
+// command window. Call before a jumpy motion that will actually move.
+void EditorPushJump(Editor *ed, View *view);
+
+// Switches to `entry`'s buffer (without resetting the view the way
+// EditorShowBuffer does) and places the cursor at its offset.
+void EditorJumpTo(Editor *ed, View *view, JumpEntry entry);
+
+// Walk the per-view jump list `count` steps. Returns false when nothing moved.
+[[nodiscard]] bool EditorJumpOlder(Editor *ed, View *view, u64 count);
+[[nodiscard]] bool EditorJumpNewer(Editor *ed, View *view, u64 count);
+
 void EditorSetStatus(Editor *ed, String8 message);
 void EditorSetStatusF(Editor *ed, const char *fmt, ...) PrintfFormat(2, 3);
 

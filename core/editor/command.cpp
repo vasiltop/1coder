@@ -33,7 +33,12 @@ void LeaveInsertMode(Editor *ed, View *view, Buffer *buffer) {
 // Runs a motion, either moving the cursor or resolving a pending operator.
 // Every motion command funnels through here, which is what makes operators and
 // motions compose without per-pair code.
-void RunMotion(CommandArgs *a, MotionProc proc, bool keep_column = false, u32 argument = 0) {
+//
+// `is_jump` marks vim jump-motions (gg, G, {, }, %): the origin is pushed onto
+// the per-view jump list before the cursor moves, but only for navigation --
+// an operator consuming the motion does not record a jump.
+void RunMotion(CommandArgs *a, MotionProc proc, bool keep_column = false, u32 argument = 0,
+               bool is_jump = false) {
   Editor *ed = a->ed;
   View *view = a->view;
   Buffer *buffer = a->buffer;
@@ -71,6 +76,8 @@ void RunMotion(CommandArgs *a, MotionProc proc, bool keep_column = false, u32 ar
     }
     return;
   }
+
+  if (is_jump && motion.target != view->cursor) EditorPushJump(ed, view);
 
   if (keep_column) {
     ViewSetCursorKeepColumn(view, buffer, motion.target);
@@ -176,15 +183,26 @@ static void Cmd_line_first_non_blank_linewise(CommandArgs *a) {
 }
 static void Cmd_line_end(CommandArgs *a) { RunMotion(a, MotionLineEnd); }
 
-static void Cmd_file_start(CommandArgs *a) { RunMotion(a, MotionFileStart); }
+static void Cmd_file_start(CommandArgs *a) { RunMotion(a, MotionFileStart, false, 0, true); }
 // G reads its count as a line number, which the motion distinguishes via the
 // argument rather than by inspecting editor state.
-static void Cmd_file_end(CommandArgs *a) { RunMotion(a, MotionFileEnd, false, a->has_count); }
+static void Cmd_file_end(CommandArgs *a) {
+  RunMotion(a, MotionFileEnd, false, a->has_count, true);
+}
 
-static void Cmd_paragraph_forward(CommandArgs *a) { RunMotion(a, MotionParagraphForward); }
-static void Cmd_paragraph_backward(CommandArgs *a) { RunMotion(a, MotionParagraphBackward); }
+static void Cmd_paragraph_forward(CommandArgs *a) {
+  RunMotion(a, MotionParagraphForward, false, 0, true);
+}
+static void Cmd_paragraph_backward(CommandArgs *a) {
+  RunMotion(a, MotionParagraphBackward, false, 0, true);
+}
 
-static void Cmd_matching_bracket(CommandArgs *a) { RunMotion(a, MotionMatchingBracket); }
+static void Cmd_matching_bracket(CommandArgs *a) {
+  RunMotion(a, MotionMatchingBracket, false, 0, true);
+}
+
+static void Cmd_jump_older(CommandArgs *a) { (void)EditorJumpOlder(a->ed, a->view, a->count); }
+static void Cmd_jump_newer(CommandArgs *a) { (void)EditorJumpNewer(a->ed, a->view, a->count); }
 
 // f/F/t/T take the following keystroke as their target, which the input layer
 // supplies as the triggering chord's codepoint.
@@ -790,6 +808,12 @@ static void Cmd_buffer_prev(CommandArgs *a) {
   if (prev.index != 0) EditorShowBuffer(a->ed, prev);
 }
 
+static void ShowBufferRecordingJump(Editor *ed, View *view, BufferHandle handle) {
+  if (handle.index == 0 || !view) return;
+  if (!BufferHandleEqual(view->buffer, handle)) EditorPushJump(ed, view);
+  EditorShowBuffer(ed, handle);
+}
+
 static void Cmd_edit_file(CommandArgs *a) {
   // Opening over unsaved work needs the forced variant.
   if (BufferIsDirty(a->buffer) && !a->bang && a->buffer->kind == BufferKind::File) {
@@ -802,7 +826,7 @@ static void Cmd_edit_file(CommandArgs *a) {
     EditorSetStatusF(a->ed, "Cannot open %.*s", (int)a->arg.size, (char *)a->arg.str);
     return;
   }
-  EditorShowBuffer(a->ed, handle);
+  ShowBufferRecordingJump(a->ed, a->view, handle);
 }
 
 static void Cmd_buffer_switch(CommandArgs *a) {
@@ -811,13 +835,17 @@ static void Cmd_buffer_switch(CommandArgs *a) {
     EditorSetStatusF(a->ed, "No buffer named %.*s", (int)a->arg.size, (char *)a->arg.str);
     return;
   }
-  EditorShowBuffer(a->ed, handle);
+  ShowBufferRecordingJump(a->ed, a->view, handle);
 }
 
 static void Cmd_goto_line(CommandArgs *a) {
   u64 line = a->has_range ? a->line_last : 0;
+  u64 origin = a->view->cursor;
   ViewSetCursorLineColumn(a->view, a->buffer, line, 0);
   a->view->preferred_column = 0;
+  if (a->view->cursor != origin) {
+    JumpListPush(&a->view->jumps, JumpEntry{a->view->buffer, origin});
+  }
 }
 
 static void Cmd_write_file(CommandArgs *a) {
@@ -899,7 +927,8 @@ bool EditorSearchMove(Editor *ed, View *view, bool forward, u64 count) {
     return false;
   }
 
-  u64 at = view->cursor;
+  u64 origin = view->cursor;
+  u64 at = origin;
   bool wrapped = false;
   for (u64 i = 0; i < Max(count, (u64)1); i += 1) {
     SearchHit hit = BufferSearch(buffer, ed->search_pattern, at, forward, true);
@@ -912,6 +941,7 @@ bool EditorSearchMove(Editor *ed, View *view, bool forward, u64 count) {
     wrapped = wrapped || hit.wrapped;
   }
 
+  if (at != origin) EditorPushJump(ed, view);
   ViewSetCursor(view, buffer, at);
   ed->search_highlight = true;
 
@@ -993,14 +1023,30 @@ void SearchWordUnderCursor(Editor *ed, View *view, bool forward) {
   ScratchEnd(scratch);
 
   // Vim starts `*` from the beginning of the word, so a cursor in the middle of
-  // one does not match the very word it started from.
-  u64 saved = view->cursor;
-  SearchHit start = BufferSearch(buffer, ed->search_pattern, saved + 1, false, false);
-  if (start.found && start.offset + ed->search_pattern.size > saved) {
-    ViewSetCursor(view, buffer, start.offset);
+  // one does not match the very word it started from. Compute the search start
+  // without moving yet, so a failed search leaves the jump list alone and the
+  // recorded origin is the real cursor, not the word start.
+  u64 origin = view->cursor;
+  u64 from = origin;
+  SearchHit start = BufferSearch(buffer, ed->search_pattern, origin + 1, false, false);
+  if (start.found && start.offset + ed->search_pattern.size > origin) {
+    from = start.offset;
   }
 
-  if (!EditorSearchMove(ed, view, forward, 1)) ViewSetCursor(view, buffer, saved);
+  SearchHit hit = BufferSearch(buffer, ed->search_pattern, from, forward, true);
+  if (!hit.found) {
+    EditorSetStatusF(ed, "pattern not found: %.*s", (int)ed->search_pattern.size,
+                     (const char *)ed->search_pattern.str);
+    return;
+  }
+
+  if (hit.offset != origin) EditorPushJump(ed, view);
+  ViewSetCursor(view, buffer, hit.offset);
+  ed->search_highlight = true;
+  if (hit.wrapped) {
+    EditorSetStatus(ed, forward ? Str8Lit("search hit BOTTOM, continuing at TOP")
+                                : Str8Lit("search hit TOP, continuing at BOTTOM"));
+  }
 }
 
 }  // namespace
@@ -1258,7 +1304,7 @@ BufferHandle LiveGrepBufferOpen(Editor *ed);
 // what is typed.
 static void OpenQueryPicker(CommandArgs *a, BufferHandle handle) {
   if (handle.index == 0) return;
-  EditorShowBuffer(a->ed, handle);
+  ShowBufferRecordingJump(a->ed, a->view, handle);
 
   View *view = EditorFocusedView(a->ed);
   Buffer *buffer = EditorFocusedBuffer(a->ed);
@@ -1290,7 +1336,7 @@ static void Cmd_grep(CommandArgs *a) {
   BufferHandle handle = GrepBufferOpen(a->ed, a->text);
   if (handle.index == 0) return;
 
-  EditorShowBuffer(a->ed, handle);
+  ShowBufferRecordingJump(a->ed, a->view, handle);
   Buffer *buffer = EditorFocusedBuffer(a->ed);
   View *view = EditorFocusedView(a->ed);
   // Skip the two header lines so the cursor starts on a result.

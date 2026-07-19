@@ -106,7 +106,8 @@ is 4, matching that config.
 
 Motions `h j k l w b e W B E 0 ^ _ $ gg G { } f F t T %` · operators `d c y > <`
 composed with any motion, plus `dd yy cc >> <<` · edits `x X D C p P J u <C-r> .`
-· insert `i I a A o O R` · visual `v V` · scrolling `<C-d> <C-u> <C-e> <C-y> zz`.
+· insert `i I a A o O R` · visual `v V` · scrolling `<C-d> <C-u> <C-e> <C-y> zz`
+· jump list `<C-o>` / `<C-i>` (and `<Tab>` for newer).
 
 Windows: `<C-h/j/k/l>` moves focus, `<leader>v` splits vertically and
 `<leader>h` horizontally (as `:vsplit` and `:split` do). The built-in `<C-w>`
@@ -234,6 +235,5 @@ SDL_VIDEODRIVER=dummy ./build/editor file.c --keys '<C-w>v10jVj' --screenshot ou
 ## Not yet implemented
 
 Tree-sitter highlighting (the `TokenArray` seam and the theme's colour table are
-in place and unused), project-wide grep, fuzzy file finding, a file explorer, a
-git client, macros, marks, visual block mode, and a Windows backend for
-`os_file.cpp`.
+in place and unused), a file explorer, a git client, marks, visual block mode,
+and a Windows backend for `os_file.cpp`.

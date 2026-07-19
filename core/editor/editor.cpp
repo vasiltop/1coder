@@ -210,6 +210,65 @@ void EditorShowBuffer(Editor *ed, BufferHandle buffer) {
   if (b && b->hooks.on_activate) b->hooks.on_activate(ed, b, view);
 }
 
+namespace {
+
+bool JumpBufferAlive(void *ctx, BufferHandle handle) {
+  Editor *ed = (Editor *)ctx;
+  return BufferFromHandle(&ed->buffers, handle) != nullptr;
+}
+
+}  // namespace
+
+void EditorPushJump(Editor *ed, View *view) {
+  if (!ed || !view || view == ed->command_view) return;
+  JumpListPush(&view->jumps, JumpEntry{view->buffer, view->cursor});
+}
+
+void EditorJumpTo(Editor *ed, View *view, JumpEntry entry) {
+  if (!ed || !view) return;
+
+  Buffer *buffer = BufferFromHandle(&ed->buffers, entry.buffer);
+  if (!buffer) return;
+
+  if (!BufferHandleEqual(view->buffer, entry.buffer)) {
+    view->buffer = entry.buffer;
+    if (buffer->hooks.on_activate) buffer->hooks.on_activate(ed, buffer, view);
+  }
+
+  view->vim.mode = VimMode::Normal;
+  VimClearPending(&view->vim);
+  ViewSetCursor(view, buffer, entry.offset);
+  EditorScrollFocusedToCursor(ed);
+}
+
+bool EditorJumpOlder(Editor *ed, View *view, u64 count) {
+  if (!ed || !view) return false;
+
+  JumpEntry current = {view->buffer, view->cursor};
+  bool moved = false;
+  for (u64 i = 0; i < Max(count, (u64)1); i += 1) {
+    JumpEntry entry = {};
+    if (!JumpListOlder(&view->jumps, current, &entry, JumpBufferAlive, ed)) break;
+    EditorJumpTo(ed, view, entry);
+    current = {view->buffer, view->cursor};
+    moved = true;
+  }
+  return moved;
+}
+
+bool EditorJumpNewer(Editor *ed, View *view, u64 count) {
+  if (!ed || !view) return false;
+
+  bool moved = false;
+  for (u64 i = 0; i < Max(count, (u64)1); i += 1) {
+    JumpEntry entry = {};
+    if (!JumpListNewer(&view->jumps, &entry, JumpBufferAlive, ed)) break;
+    EditorJumpTo(ed, view, entry);
+    moved = true;
+  }
+  return moved;
+}
+
 void EditorSetStatus(Editor *ed, String8 message) {
   ArenaClear(ed->status_arena);
   ed->status_message = PushStr8Copy(ed->status_arena, message);

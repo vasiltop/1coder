@@ -2,6 +2,7 @@
 
 #include "base/base_math.h"
 #include "editor/buffer.h"
+#include "vim/vim_jumplist.h"
 #include "vim/vim_state.h"
 
 // A viewport onto a buffer: where the cursor is, what is scrolled into sight,
@@ -28,6 +29,9 @@ struct View {
   u64 scroll_column;
 
   VimState vim;
+
+  // Per-window jump list for <C-o> / <C-i>.
+  JumpList jumps;
 };
 
 void ViewInit(View *view, BufferHandle buffer);

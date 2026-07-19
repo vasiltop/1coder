@@ -72,6 +72,7 @@ void GrepSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
   ScratchEnd(scratch);
 
   if (handle.index == 0) return;
+  EditorPushJump(ed, view);
   EditorShowBuffer(ed, handle);
 
   // Land on the matching line and column rather than the top of the file.
@@ -189,7 +190,10 @@ void FinderSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
   if (relative.size > 0) {
     String8 path = OsPathJoin(scratch.arena, payload->root, relative);
     BufferHandle handle = EditorOpenFile(ed, path);
-    if (handle.index != 0) EditorShowBuffer(ed, handle);
+    if (handle.index != 0) {
+      EditorPushJump(ed, view);
+      EditorShowBuffer(ed, handle);
+    }
   }
   ScratchEnd(scratch);
 }

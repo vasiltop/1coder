@@ -1522,3 +1522,117 @@ TEST(vim_editing_long_file_keeps_line_index_correct) {
 
   Destroy(&f);
 }
+
+// ---------------------------------------------------------------------------
+// Jump list (<C-o> / <C-i>)
+// ---------------------------------------------------------------------------
+
+TEST(vim_jump_list_back_and_forth) {
+  Fixture f = MakeFixture("one\ntwo\nthree\nfour");
+
+  Type(&f, "G");
+  CHECK_EQ(CursorLine(&f), 3);
+  Type(&f, "<C-o>");
+  CHECK_EQ(CursorLine(&f), 0);
+  Type(&f, "<C-i>");
+  CHECK_EQ(CursorLine(&f), 3);
+  // Tab is the same command as <C-i> on this input path.
+  Type(&f, "<C-o>");
+  Type(&f, "<Tab>");
+  CHECK_EQ(CursorLine(&f), 3);
+
+  Destroy(&f);
+}
+
+TEST(vim_jump_list_records_jumps_not_every_motion) {
+  Fixture f = MakeFixture("aaa\n\nbbb\n\n(ccc)");
+
+  Type(&f, "jj");  // onto "bbb" via plain motions -- not a jump
+  u64 mid = ViewOf(&f)->cursor;
+  Type(&f, "G");
+  Type(&f, "<C-o>");
+  // G recorded the position it left, which is where j/j landed.
+  CHECK_EQ(ViewOf(&f)->cursor, mid);
+
+  // Further plain motions do not create entries: after gg, <C-o> returns to mid
+  // rather than to wherever j/w left the cursor.
+  Type(&f, "gg");
+  Type(&f, "wll");
+  Type(&f, "<C-o>");
+  CHECK_EQ(ViewOf(&f)->cursor, mid);
+
+  // Paragraph motion is a jump.
+  Fixture para = MakeFixture("aaa\n\nbbb\n\nccc");
+  Type(&para, "}");
+  CHECK(CursorLine(&para) > 0);
+  u64 para_line = CursorLine(&para);
+  Type(&para, "<C-o>");
+  CHECK_EQ(CursorLine(&para), 0);
+  Type(&para, "<C-i>");
+  CHECK_EQ(CursorLine(&para), para_line);
+  Destroy(&para);
+
+  // % is a jump.
+  Fixture bracket = MakeFixture("(abc)");
+  Type(&bracket, "%");
+  CHECK_EQ(CursorColumn(&bracket), 4);
+  Type(&bracket, "<C-o>");
+  CHECK_EQ(CursorColumn(&bracket), 0);
+  Destroy(&bracket);
+
+  Destroy(&f);
+}
+
+TEST(vim_jump_list_search_and_count) {
+  Fixture f = MakeFixture("alpha\nbeta\nalpha\ngamma\nalpha");
+
+  // `/` starts after the cursor, so the first hit is the second "alpha".
+  Type(&f, "/alpha<CR>");
+  CHECK_EQ(CursorLine(&f), 2);
+  Type(&f, "n");
+  CHECK_EQ(CursorLine(&f), 4);
+  Type(&f, "2<C-o>");
+  CHECK_EQ(CursorLine(&f), 0);
+
+  Destroy(&f);
+}
+
+TEST(vim_jump_list_truncates_forward_on_new_jump) {
+  Fixture f = MakeFixture("a\nb\nc\nd\ne");
+
+  Type(&f, "G");
+  Type(&f, "gg");
+  Type(&f, "3G");
+  CHECK_EQ(CursorLine(&f), 2);
+  Type(&f, "<C-o>");
+  CHECK_EQ(CursorLine(&f), 0);
+  // A new jump from here drops the forward half (the old G destination).
+  Type(&f, "2G");
+  CHECK_EQ(CursorLine(&f), 1);
+  Type(&f, "<C-i>");
+  CHECK_EQ(CursorLine(&f), 1);
+
+  Destroy(&f);
+}
+
+TEST(vim_jump_list_across_buffers) {
+  Fixture f = MakeFixture("first\nsecond\nthird");
+
+  Type(&f, "j");
+  CHECK_EQ(CursorLine(&f), 1);
+  BufferHandle first = ViewOf(&f)->buffer;
+
+  BufferHandle other = BufferOpen(&f.ed.buffers, BufferKind::Scratch, Str8Lit("other"));
+  Buffer *other_buf = BufferFromHandle(&f.ed.buffers, other);
+  BufferSetText(&f.ed, other_buf, Str8Lit("other line\n"));
+
+  EditorPushJump(&f.ed, ViewOf(&f));
+  EditorShowBuffer(&f.ed, other);
+  CHECK(BufferHandleEqual(ViewOf(&f)->buffer, other));
+
+  Type(&f, "<C-o>");
+  CHECK(BufferHandleEqual(ViewOf(&f)->buffer, first));
+  CHECK_EQ(CursorLine(&f), 1);
+
+  Destroy(&f);
+}
