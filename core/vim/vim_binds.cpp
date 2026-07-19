@@ -142,6 +142,11 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, "<leader>h", CommandId::split_horizontal);
   KeymapBind(normal, "<leader>v", CommandId::split_vertical);
 
+  // The neovim config's mini.pick bindings, pointed at the equivalents here.
+  KeymapBind(normal, "<leader>pf", CommandId::find_file);
+  KeymapBind(normal, "<leader>pg", CommandId::grep);
+  KeymapBind(normal, "<leader>pb", CommandId::list_buffers);
+
   // ---- text objects ----
   // `i` and `a` are prefixes: the chord after them names the object. They apply
   // in operator-pending mode (`ciw`) and in visual mode (`vi(`), but mean

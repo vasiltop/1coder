@@ -1,0 +1,229 @@
+#include "editor/command.h"
+#include "editor/editor.h"
+#include "search/search.h"
+#include "test.h"
+
+#include <stdlib.h>
+#include <unistd.h>
+
+namespace {
+
+// A small tree on disk, since walking and grepping are about the filesystem.
+struct Tree {
+  Arena *arena;
+  String8 root;
+};
+
+Tree MakeTree(const char *tag) {
+  Tree tree = {};
+  tree.arena = ArenaAlloc(MB(16));
+
+  const char *base = getenv("TMPDIR");
+  if (!base || !*base) base = "/tmp";
+  tree.root = PushStr8F(tree.arena, "%s/1code_search_%s_%d", base, tag, (int)getpid());
+
+  TempArena scratch = ScratchBegin1(tree.arena);
+  String8 cmd = PushStr8F(
+      scratch.arena,
+      "rm -rf '%.*s' && mkdir -p '%.*s/src/deep' '%.*s/.git' '%.*s/build' && "
+      "printf 'alpha needle\\nbeta\\n' > '%.*s/src/one.cpp' && "
+      "printf 'gamma\\nNEEDLE here\\n' > '%.*s/src/deep/two.cpp' && "
+      "printf 'nothing\\n' > '%.*s/src/three.txt' && "
+      "printf 'needle\\n' > '%.*s/.git/hidden.cpp' && "
+      "printf 'needle\\n' > '%.*s/build/generated.cpp' && "
+      "printf 'needle\\n' > '%.*s/binary.o'",
+      (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size, (char *)tree.root.str,
+      (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size, (char *)tree.root.str,
+      (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size, (char *)tree.root.str,
+      (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size, (char *)tree.root.str,
+      (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size, (char *)tree.root.str);
+  int rc = system((const char *)cmd.str);
+  (void)rc;
+  ScratchEnd(scratch);
+
+  return tree;
+}
+
+void Destroy(Tree *tree) {
+  TempArena scratch = ScratchBegin1(tree->arena);
+  String8 cmd =
+      PushStr8F(scratch.arena, "rm -rf '%.*s'", (int)tree->root.size, (char *)tree->root.str);
+  int rc = system((const char *)cmd.str);
+  (void)rc;
+  ScratchEnd(scratch);
+  ArenaRelease(tree->arena);
+}
+
+bool ListContains(PathList list, const char *want) {
+  for (u64 i = 0; i < list.count; i += 1) {
+    if (Str8Match(list.paths[i], Str8C(want))) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST(search_walk_finds_files_and_skips_noise) {
+  Tree tree = MakeTree("walk");
+  PathList files = SearchWalkFiles(tree.arena, tree.root);
+
+  // Nested files are found, with paths relative to the root.
+  CHECK(ListContains(files, "src/one.cpp"));
+  CHECK(ListContains(files, "src/deep/two.cpp"));
+  CHECK(ListContains(files, "src/three.txt"));
+
+  // Version control, build output and object files are not worth walking.
+  CHECK(!ListContains(files, ".git/hidden.cpp"));
+  CHECK(!ListContains(files, "build/generated.cpp"));
+  CHECK(!ListContains(files, "binary.o"));
+
+  Destroy(&tree);
+}
+
+TEST(search_walk_survives_a_deep_tree) {
+  // The list being accumulated must outlive each directory's own scratch, or
+  // recursing into a subdirectory would discard everything found so far.
+  Tree tree = MakeTree("deep");
+
+  TempArena scratch = ScratchBegin1(tree.arena);
+  String8 cmd = PushStr8F(scratch.arena,
+                          "mkdir -p '%.*s/a/b/c/d/e' && for i in 1 2 3 4 5; do "
+                          "printf 'x\\n' > \"%.*s/a/b/c/d/e/f$i.cpp\"; done",
+                          (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size,
+                          (char *)tree.root.str);
+  int rc = system((const char *)cmd.str);
+  (void)rc;
+  ScratchEnd(scratch);
+
+  PathList files = SearchWalkFiles(tree.arena, tree.root);
+  CHECK(ListContains(files, "a/b/c/d/e/f1.cpp"));
+  CHECK(ListContains(files, "a/b/c/d/e/f5.cpp"));
+  CHECK(ListContains(files, "src/one.cpp"));  // still there after the recursion
+
+  Destroy(&tree);
+}
+
+TEST(search_grep_finds_matches_with_smartcase) {
+  Tree tree = MakeTree("grep");
+
+  // A lowercase pattern matches either case, as vim's 'smartcase' does.
+  GrepResults lower = SearchGrep(tree.arena, tree.root, Str8Lit("needle"));
+  CHECK_EQ(lower.count, 2);
+
+  // An uppercase one is taken literally.
+  GrepResults upper = SearchGrep(tree.arena, tree.root, Str8Lit("NEEDLE"));
+  CHECK_EQ(upper.count, 1);
+  CHECK_EQ(upper.matches[0].line, 2);
+  CHECK_STR(upper.matches[0].text, Str8Lit("NEEDLE here"));
+
+  // Skipped directories stay skipped when grepping, not just when listing.
+  CHECK_EQ(SearchGrep(tree.arena, tree.root, Str8Lit("nothing")).count, 1);
+  CHECK_EQ(SearchGrep(tree.arena, tree.root, Str8Lit("no-such-text")).count, 0);
+  CHECK_EQ(SearchGrep(tree.arena, tree.root, Str8Lit("")).count, 0);
+
+  Destroy(&tree);
+}
+
+TEST(fuzzy_score_ranks_sensibly) {
+  // A subsequence matches; anything else does not.
+  CHECK(FuzzyScore(Str8Lit("core/editor/command.cpp"), Str8Lit("cmd")) != kFuzzyNoMatch);
+  CHECK_EQ(FuzzyScore(Str8Lit("core/editor/command.cpp"), Str8Lit("zzz")), kFuzzyNoMatch);
+  // An empty query matches everything.
+  CHECK_EQ(FuzzyScore(Str8Lit("anything"), Str8Lit("")), 0);
+
+  // Matches on segment boundaries beat the same letters buried mid-word.
+  i32 boundary = FuzzyScore(Str8Lit("core/vim/vim_motions.cpp"), Str8Lit("cvm"));
+  i32 scattered = FuzzyScore(Str8Lit("abcdefghijklmnopqrstuvwxyz"), Str8Lit("cvm"));
+  CHECK(boundary > scattered);
+
+  // Consecutive characters beat spread-out ones.
+  CHECK(FuzzyScore(Str8Lit("command.cpp"), Str8Lit("comm")) >
+        FuzzyScore(Str8Lit("c_o_m_m_a_n_d.cpp"), Str8Lit("comm")));
+}
+
+TEST(fuzzy_filter_orders_best_first) {
+  Arena *arena = ArenaAlloc(MB(4));
+
+  String8 candidates[] = {
+      Str8Lit("app/render/draw.cpp"),
+      Str8Lit("core/vim/vim_motions.cpp"),
+      Str8Lit("core/vim/vim_operators.cpp"),
+      Str8Lit("core/editor/command.cpp"),
+  };
+
+  FuzzyResults results = FuzzyFilter(arena, candidates, ArrayCount(candidates),
+                                     Str8Lit("vimop"), 10);
+  CHECK(results.count >= 1);
+  CHECK_STR(results.items[0].text, Str8Lit("core/vim/vim_operators.cpp"));
+
+  // Non-matches are dropped rather than ranked last.
+  FuzzyResults none = FuzzyFilter(arena, candidates, ArrayCount(candidates),
+                                  Str8Lit("qqqq"), 10);
+  CHECK_EQ(none.count, 0);
+
+  // An empty query keeps everything, in the original order.
+  FuzzyResults all = FuzzyFilter(arena, candidates, ArrayCount(candidates),
+                                 String8{nullptr, 0}, 10);
+  CHECK_EQ(all.count, ArrayCount(candidates));
+  CHECK_STR(all.items[0].text, candidates[0]);
+
+  // The limit is honoured.
+  CHECK_EQ(FuzzyFilter(arena, candidates, ArrayCount(candidates), String8{nullptr, 0}, 2).count, 2);
+
+  ArenaRelease(arena);
+}
+
+TEST(picker_buffers_are_ordinary_buffers) {
+  Tree tree = MakeTree("picker");
+
+  Arena *arena = ArenaAlloc(MB(64));
+  Editor ed = {};
+  EditorInit(&ed, arena, RectS32{0, 0, 80, 25});
+  ed.cwd = PushStr8Copy(arena, tree.root);
+
+  // Grep results: a read-only buffer whose keymap claims <CR>.
+  CHECK(CommandExecLine(&ed, Str8Lit("grep needle")));
+  Buffer *grep = EditorFocusedBuffer(&ed);
+  CHECK_STR(grep->name, Str8Lit("[grep]"));
+  CHECK(BufferIsReadOnly(grep));
+  CHECK(grep->hooks.keymap != nullptr);
+  CHECK(grep->hooks.on_submit != nullptr);
+
+  String8 text = BufferTextAll(arena, grep);
+  CHECK(Str8FindFirst(text, Str8Lit("src/one.cpp")) < text.size);
+
+  // <CR> opens whatever the selected line names, at the line it names. Which
+  // result comes first depends on walk order, so read it rather than assume.
+  String8 selected = BufferLineText(arena, grep, 2);
+  u64 colon = Str8FindFirstChar(selected, ':');
+  String8 selected_path = Str8Prefix(selected, colon);
+  u64 selected_line = 0;
+  for (u64 i = colon + 1; i < selected.size && CharIsDigit(selected.str[i]); i += 1) {
+    selected_line = selected_line * 10 + (u64)(selected.str[i] - '0');
+  }
+  CHECK(selected_path.size > 0);
+  CHECK(selected_line > 0);
+
+  EditorProcessSpec(&ed, "<CR>");
+  Buffer *opened = EditorFocusedBuffer(&ed);
+  CHECK(Str8EndsWith(opened->path, selected_path));
+  CHECK_EQ(ViewCursorLine(EditorFocusedView(&ed), opened), selected_line - 1);
+
+  // The finder: a query on line 0, results below, refiltered as it changes.
+  CHECK(CommandExecLine(&ed, Str8Lit("find")));
+  Buffer *finder = EditorFocusedBuffer(&ed);
+  CHECK_STR(finder->name, Str8Lit("[files]"));
+  CHECK(finder->hooks.on_edit != nullptr);
+  u64 unfiltered = BufferLineCount(finder);
+  CHECK(unfiltered > 1);
+
+  EditorProcessSpec(&ed, "two");
+  CHECK_STR(BufferLineText(arena, finder, 0), Str8Lit("two"));
+  // Typing narrows the list without disturbing the query line.
+  CHECK(BufferLineCount(finder) < unfiltered);
+  CHECK_STR(BufferLineText(arena, finder, 1), Str8Lit("src/deep/two.cpp"));
+
+  EditorDestroy(&ed);
+  ArenaRelease(arena);
+  Destroy(&tree);
+}

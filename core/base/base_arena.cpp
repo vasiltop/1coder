@@ -140,9 +140,12 @@ void TempEnd(TempArena temp) {
 }
 
 TempArena ScratchBegin(Arena **conflicts, u64 conflict_count) {
-  // Two slots is enough: a function needs a scratch distinct from its output
-  // arena, and one level of nesting on top of that.
-  static thread_local Arena *pool[2] = {nullptr, nullptr};
+  // Four slots. Two covers the common case -- a scratch distinct from the
+  // output arena, plus one level of nesting -- but a recursive walk that keeps
+  // an accumulating list in one arena while reading directories into another
+  // goes deeper than that, and running out is an assert rather than a
+  // slowdown. They are allocated on first use and reserve address space only.
+  static thread_local Arena *pool[4] = {};
 
   for (u64 i = 0; i < ArrayCount(pool); i += 1) {
     if (!pool[i]) pool[i] = ArenaAlloc(MB(256));

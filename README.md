@@ -12,7 +12,7 @@ Needs CMake, a C++23 compiler, and SDL3.
 cmake -B build -S . && cmake --build build -j
 
 ./build/editor path/to/file      # run
-./build/editor_tests             # 257 tests, needs no display
+./build/editor_tests             # 274 tests, needs no display
 ```
 
 With [just](https://github.com/casey/just), `just` on its own lists everything:
@@ -47,6 +47,7 @@ core (static lib) ──┤
   input/    Key / KeyChord types, binding parser, keymap trie
   command/  command identity: the COMMAND_LIST table, name <-> id
   editor/   buffers, views, panels, dispatch, command line parsing
+  search/   project walk, grep, fuzzy matching
   vim/      modes, motions, operators, default bindings
   buffers/  per-kind buffer implementations
                     └─ app (executable)
@@ -111,6 +112,13 @@ Windows: `<C-h/j/k/l>` moves focus, `<leader>v` splits vertically and
 `<leader>h` horizontally (as `:vsplit` and `:split` do). The built-in `<C-w>`
 forms — `<C-w>v` `<C-w>s` `<C-w>hjkl` `<C-w>c` `<C-w>o` — work too.
 
+Text objects: `iw` `aw` `i"` `a"` `i(` `a(` `i{` `a{` `i[` `a[` `ip` `ap`, with
+any operator (`ciw`, `da(`) and in visual mode (`vi{`).
+
+Macros: `q{reg}` records, `q` stops, `@{reg}` replays, `@@` repeats. A macro is
+stored as a binding spec in a register, so it can be pasted, edited and yanked
+back like any other text.
+
 Insert mode: `<C-w>`, `<C-h>` and `<C-BS>` all rub out the previous word;
 `<C-r>{reg}` inserts a register.
 
@@ -148,6 +156,25 @@ to hand back "Iosevka Fixed Thin" when asked for "Iosevka Fixed".
 `$text`, and the focused/unfocused window colours, which are reused for the
 panel status bars and the split divider so focus reads the same way it does on
 the desktop. Syntax colours are not in that palette and are set separately.
+
+## Search
+
+`:grep <pattern>` searches the project and `:find [query]` fuzzy-finds a file.
+Both are bound where the neovim config puts them: `<leader>pg`, `<leader>pf`,
+and `<leader>pb` for the buffer list.
+
+Neither adds a UI concept, which was the point of the buffer system:
+
+- **Grep results** are a read-only buffer whose keymap claims `<CR>`, with the
+  matches hanging off `user_data`. Pressing `<CR>` opens the file at that line.
+- **The fuzzy finder** is the same thing with an editable query on its first
+  line. Its `on_edit` hook refilters everything below as you type, so it starts
+  in insert mode and narrows live. `<Esc>` drops to normal mode to navigate the
+  results with `j`/`k`, and `<CR>` opens one.
+
+Everything else — scrolling, splits, vim motions, undo — is inherited, because
+these are ordinary buffers. Matching is literal with vim's 'smartcase'; there
+are no regular expressions yet.
 
 ## Command window
 

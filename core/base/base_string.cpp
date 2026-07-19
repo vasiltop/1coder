@@ -155,11 +155,16 @@ String8 Str8ListJoin(Arena *arena, String8List *list, String8 sep) {
   u8 *dst = PushArrayNoZero(arena, u8, total + 1);
 
   u64 off = 0;
+  bool first = true;
   for (String8Node *n = list->first; n; n = n->next) {
-    if (off && sep.size) {
+    // Keyed off "is this the first node", not off the output position: an empty
+    // leading element leaves the offset at zero, which would swallow the
+    // separator that should follow it.
+    if (!first && sep.size) {
       memcpy(dst + off, sep.str, sep.size);
       off += sep.size;
     }
+    first = false;
     if (n->string.size) memcpy(dst + off, n->string.str, n->string.size);
     off += n->string.size;
   }

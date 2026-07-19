@@ -172,6 +172,15 @@ TEST(string_list_and_split) {
   String8List empty = {};
   CHECK_EQ(Str8ListJoin(arena, &empty, Str8Lit(",")).size, 0);
 
+  // Empty elements still get separators around them, which matters whenever a
+  // list is used to build lines: a blank first line must stay a blank line.
+  String8List blanks = {};
+  Str8ListPush(arena, &blanks, String8{nullptr, 0});
+  Str8ListPush(arena, &blanks, Str8Lit("x"));
+  Str8ListPush(arena, &blanks, String8{nullptr, 0});
+  Str8ListPush(arena, &blanks, Str8Lit("y"));
+  CHECK_STR(Str8ListJoin(arena, &blanks, Str8Lit("\n")), Str8Lit("\nx\n\ny"));
+
   // Empty runs are dropped, so repeated separators collapse.
   String8List parts = Str8SplitChar(arena, Str8Lit("a//b/"), '/');
   CHECK_EQ(parts.node_count, 2);

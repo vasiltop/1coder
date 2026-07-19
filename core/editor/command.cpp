@@ -1014,6 +1014,57 @@ void ShowListing(Editor *ed, String8 name, String8 text) {
 
 }  // namespace
 
+// Provided by core/buffers/buf_picker.cpp.
+BufferHandle GrepBufferOpen(Editor *ed, String8 pattern);
+BufferHandle FinderBufferOpen(Editor *ed);
+
+static void Cmd_grep(CommandArgs *a) {
+  BufferHandle handle = GrepBufferOpen(a->ed, a->text);
+  if (handle.index == 0) return;
+
+  EditorShowBuffer(a->ed, handle);
+  Buffer *buffer = EditorFocusedBuffer(a->ed);
+  View *view = EditorFocusedView(a->ed);
+  // Skip the two header lines so the cursor starts on a result.
+  if (buffer && view && BufferLineCount(buffer) > 2) {
+    ViewSetCursorLineColumn(view, buffer, 2, 0);
+  }
+}
+
+static void Cmd_find_file(CommandArgs *a) {
+  BufferHandle handle = FinderBufferOpen(a->ed);
+  if (handle.index == 0) return;
+
+  EditorShowBuffer(a->ed, handle);
+
+  View *view = EditorFocusedView(a->ed);
+  Buffer *buffer = EditorFocusedBuffer(a->ed);
+  if (!view || !buffer) return;
+
+  // The query line is the point of the thing, so start in insert mode on it.
+  ViewSetCursorLineColumn(view, buffer, 0, 0);
+  view->vim.mode = VimMode::Insert;
+
+  // A query given up front skips the typing.
+  if (a->text.size > 0) {
+    BufferInsert(a->ed, buffer, 0, a->text, 0, a->text.size);
+    ViewSetCursor(view, buffer, a->text.size);
+  }
+}
+
+// <CR> in a results buffer. The buffer's own on_submit knows what its lines
+// mean; this just hands the current one over.
+static void Cmd_result_open(CommandArgs *a) {
+  Buffer *buffer = a->buffer;
+  if (!buffer->hooks.on_submit) return;
+
+  TempArena scratch = ScratchBegin();
+  u64 line = ViewCursorLine(a->view, buffer);
+  String8 text = BufferLineText(scratch.arena, buffer, line);
+  buffer->hooks.on_submit(a->ed, buffer, a->view, text);
+  ScratchEnd(scratch);
+}
+
 static void Cmd_list_commands(CommandArgs *a) {
   TempArena scratch = ScratchBegin();
   String8List lines = {};

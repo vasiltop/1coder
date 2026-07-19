@@ -174,6 +174,10 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(write_quit,            "write-quit",            "Write and close the window",      CommandArg::Path, CmdBang)        \
   X(quit,                  "quit",                  "Close the focused window",        CommandArg::None, CmdBang)        \
   X(quit_all,              "quit-all",              "Exit the editor",                 CommandArg::None, CmdBang)        \
+  /* ---- search ---- */                                                                                                 \
+  X(grep,                  "grep",                  "Search the project",              CommandArg::Text, CmdArg)         \
+  X(find_file,             "find",                  "Fuzzy-find a file",               CommandArg::Text, CmdNone)        \
+  X(result_open,           "result-open",           "Open the result under the cursor", CommandArg::None, CmdHidden)     \
   /* ---- meta ---- */                                                                                                   \
   X(list_commands,         "commands",              "List every command",              CommandArg::None, CmdNone)        \
   X(list_buffers,          "buffers",               "List open buffers",               CommandArg::None, CmdNone)        \
