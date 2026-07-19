@@ -31,6 +31,16 @@ bool CommandLineKey(Editor *ed, Buffer *buffer, View *view, KeyChord chord) {
   return false;
 }
 
+// Every keystroke in a `/` prompt re-runs the search and shows where it would
+// land. Hanging this off on_edit rather than off the keymap means it fires for
+// anything that changes the text -- typing, `dw`, `u`, a pasted register --
+// without search needing to know which of those happened.
+void CommandLineEdit(Editor *ed, Buffer *buffer, RangeU64 old_range, u64 new_len) {
+  if (!ed->command_line_active) return;
+  if (ed->command_line_prompt != '/' && ed->command_line_prompt != '?') return;
+  EditorSearchPreview(ed);
+}
+
 }  // namespace
 
 // Installs the command-window buffer. Called once during editor setup.
@@ -53,6 +63,7 @@ BufferHandle CommandLineBufferOpen(Editor *ed) {
 
   buffer->hooks.keymap = keymap;
   buffer->hooks.on_key = CommandLineKey;
+  buffer->hooks.on_edit = CommandLineEdit;
 
   return handle;
 }

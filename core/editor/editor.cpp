@@ -27,6 +27,8 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   ed->cwd = OsGetCwd(arena);
   ed->status_arena = ArenaAlloc(MB(1));
   ed->font_size = kFontSizeDefault;
+  ed->command_line_prompt = ':';
+  ed->search_forward = true;
 
   // Start on an empty scratch buffer so there is always something focused.
   BufferHandle scratch = BufferOpen(&ed->buffers, BufferKind::Scratch, Str8Lit("[scratch]"));
@@ -53,6 +55,7 @@ void EditorDestroy(Editor *ed) {
     ed->register_arenas[i] = nullptr;
   }
   if (ed->status_arena) ArenaRelease(ed->status_arena);
+  if (ed->search_arena) ArenaRelease(ed->search_arena);
   ed->status_arena = nullptr;
 }
 

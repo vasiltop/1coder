@@ -14,6 +14,7 @@ struct Theme {
   Vec4F32 cursor;
   Vec4F32 cursor_text;      // the character sitting under a block cursor
   Vec4F32 selection;
+  Vec4F32 search_match;     // every `/` match while the highlight is on
   Vec4F32 current_line;     // a faint wash, not a hard highlight
 
   Vec4F32 status_background;

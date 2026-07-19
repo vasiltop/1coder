@@ -119,6 +119,14 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(macro_repeat,          "macro-repeat",          "Replay the last macro again",     CommandArg::None, CmdHidden)      \
   X(insert_register,       "insert-register",       "Insert a register's contents",    CommandArg::None, CmdHidden)      \
   X(insert_register_prompt, "insert-register-prompt", "Ask which register to insert",   CommandArg::None, CmdHidden)      \
+  /* ---- in-file search ---- */                                                                                         \
+  X(search_forward,        "search",                "Search forward in the file",      CommandArg::Text, CmdArg)        \
+  X(search_backward,       "search-backward",       "Search backward in the file",     CommandArg::Text, CmdArg)        \
+  X(search_next,           "search-next",           "Jump to the next match",          CommandArg::None, CmdNone)       \
+  X(search_prev,           "search-prev",           "Jump to the previous match",      CommandArg::None, CmdNone)       \
+  X(search_word_forward,   "search-word",           "Search for the word under the cursor", CommandArg::None, CmdNone)  \
+  X(search_word_backward,  "search-word-backward",  "Search back for the word under the cursor", CommandArg::None, CmdNone) \
+  X(search_clear,          "nohlsearch",            "Stop highlighting search matches", CommandArg::None, CmdNone)      \
   X(zoom_in,               "zoom-in",               "Increase the font size",          CommandArg::None, CmdNone)        \
   X(zoom_out,              "zoom-out",              "Decrease the font size",          CommandArg::None, CmdNone)        \
   X(zoom_reset,            "zoom-reset",            "Restore the default font size",   CommandArg::None, CmdNone)        \

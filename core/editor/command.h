@@ -91,6 +91,23 @@ struct CommandParse {
 bool CommandExecLine(Editor *ed, String8 line);
 
 // ---------------------------------------------------------------------------
+// In-file search
+// ---------------------------------------------------------------------------
+
+// Records the pattern `n` and `N` will repeat, and turns match highlighting
+// back on. Copies the text, so the caller may free it.
+void EditorSetSearchPattern(Editor *ed, String8 pattern, bool forward);
+
+// Moves `view` to the count'th match, wrapping and reporting through the status
+// line as vim does. Returns false when there is no match or no pattern.
+bool EditorSearchMove(Editor *ed, View *view, bool forward, u64 count);
+
+// Incremental preview, called as the text in the search prompt changes: shows
+// where the pattern would land without committing to it. Cancelling the prompt
+// restores the position it was opened at.
+void EditorSearchPreview(Editor *ed);
+
+// ---------------------------------------------------------------------------
 // Completion
 // ---------------------------------------------------------------------------
 

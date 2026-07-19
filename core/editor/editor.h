@@ -116,6 +116,22 @@ struct Editor {
   BufferHandle command_buffer;
   View *command_view;
   bool command_line_active;
+  // What the prompt is for: ':' runs a command, '/' and '?' search. The
+  // character is also what the renderer draws in front of the typed text.
+  u8 command_line_prompt;
+
+  // In-file search. The pattern is editor-wide rather than per-view, as vim's
+  // is: `/` in one window sets what `n` finds in every other.
+  String8 search_pattern;
+  Arena *search_arena;  // cleared per pattern, like the register arenas
+  bool search_forward;
+  bool search_highlight;  // matches are painted until :noh
+
+  // Where the cursor sat when the search prompt opened. Incremental search
+  // moves the cursor as the pattern is typed, so cancelling has to put it back.
+  View *search_origin_view;
+  u64 search_origin;
+  u64 search_origin_scroll;
 
   RectS32 screen;  // whole window, in cells
   bool quit;

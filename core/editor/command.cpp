@@ -3,6 +3,7 @@
 #include "os/os_file.h"
 #include "vim/vim_motions.h"
 #include "vim/vim_operators.h"
+#include "vim/vim_search.h"
 
 // Every command body lives here. The X-macro list in command_id.h generates the
 // enum and the table; a missing body is a link error rather than a silent gap.
@@ -872,6 +873,179 @@ static void Cmd_quit_all(CommandArgs *a) {
 }
 
 // ---------------------------------------------------------------------------
+// In-file search
+// ---------------------------------------------------------------------------
+//
+// `/` and `?` open the ordinary command window with a different prompt
+// character, so search inherits the whole editing model: Esc drops to normal
+// mode, `dw` and `b` work on the pattern being typed, and the line is a buffer
+// like any other. Only the submit path differs.
+
+void EditorSetSearchPattern(Editor *ed, String8 pattern, bool forward) {
+  if (!ed->search_arena) ed->search_arena = ArenaAlloc();
+  ArenaClear(ed->search_arena);
+
+  ed->search_pattern = PushStr8Copy(ed->search_arena, pattern);
+  ed->search_forward = forward;
+  ed->search_highlight = true;
+}
+
+bool EditorSearchMove(Editor *ed, View *view, bool forward, u64 count) {
+  Buffer *buffer = EditorBufferForView(ed, view);
+  if (!buffer) return false;
+
+  if (ed->search_pattern.size == 0) {
+    EditorSetStatus(ed, Str8Lit("no previous search pattern"));
+    return false;
+  }
+
+  u64 at = view->cursor;
+  bool wrapped = false;
+  for (u64 i = 0; i < Max(count, (u64)1); i += 1) {
+    SearchHit hit = BufferSearch(buffer, ed->search_pattern, at, forward, true);
+    if (!hit.found) {
+      EditorSetStatusF(ed, "pattern not found: %.*s", (int)ed->search_pattern.size,
+                       (const char *)ed->search_pattern.str);
+      return false;
+    }
+    at = hit.offset;
+    wrapped = wrapped || hit.wrapped;
+  }
+
+  ViewSetCursor(view, buffer, at);
+  ed->search_highlight = true;
+
+  // Vim announces a wrap rather than leaving you to wonder why the cursor
+  // jumped to the other end of the file.
+  if (wrapped) {
+    EditorSetStatus(ed, forward ? Str8Lit("search hit BOTTOM, continuing at TOP")
+                                : Str8Lit("search hit TOP, continuing at BOTTOM"));
+  }
+  return true;
+}
+
+void EditorSearchPreview(Editor *ed) {
+  View *view = ed->search_origin_view;
+  if (!view) return;
+
+  Buffer *target = EditorBufferForView(ed, view);
+  Buffer *prompt = BufferFromHandle(&ed->buffers, ed->command_buffer);
+  if (!target || !prompt) return;
+
+  TempArena scratch = ScratchBegin();
+  String8 pattern = BufferTextAll(scratch.arena, prompt);
+  bool forward = (ed->command_line_prompt != '?');
+
+  // An empty or unmatched pattern shows the origin, so deleting back to nothing
+  // undoes the preview rather than leaving the cursor at the last match.
+  SearchHit hit = {0, false, false};
+  if (pattern.size > 0) {
+    hit = BufferSearch(target, pattern, ed->search_origin, forward, true);
+  }
+
+  ViewSetCursor(view, target, hit.found ? hit.offset : ed->search_origin);
+  if (!hit.found) view->scroll_line = ed->search_origin_scroll;
+
+  // Highlighting during the preview needs the in-progress pattern, but it must
+  // not become what `n` repeats -- only submitting does that.
+  if (!ed->search_arena) ed->search_arena = ArenaAlloc();
+  ArenaClear(ed->search_arena);
+  ed->search_pattern = PushStr8Copy(ed->search_arena, pattern);
+  ed->search_highlight = true;
+
+  EditorScrollFocusedToCursor(ed);
+  ScratchEnd(scratch);
+}
+
+namespace {
+
+// Opens the search prompt, remembering where to return to if it is abandoned.
+void SearchPromptOpen(Editor *ed, bool forward) {
+  Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
+  View *view = EditorFocusedView(ed);
+  if (!buffer || !ed->command_view || !view) return;
+
+  ed->search_origin_view = view;
+  ed->search_origin = view->cursor;
+  ed->search_origin_scroll = view->scroll_line;
+
+  BufferSetText(ed, buffer, String8{nullptr, 0});
+  ViewInit(ed->command_view, ed->command_buffer);
+  ed->command_view->vim.mode = VimMode::Insert;
+  ed->command_line_active = true;
+  ed->command_line_prompt = forward ? '/' : '?';
+}
+
+// `*` and `#`: search for the word under the cursor without typing it.
+void SearchWordUnderCursor(Editor *ed, View *view, bool forward) {
+  Buffer *buffer = EditorBufferForView(ed, view);
+  if (!buffer || !view) return;
+
+  TempArena scratch = ScratchBegin();
+  String8 word = BufferWordAtCursor(scratch.arena, buffer, view->cursor);
+  if (word.size == 0) {
+    EditorSetStatus(ed, Str8Lit("no word under cursor"));
+    ScratchEnd(scratch);
+    return;
+  }
+
+  EditorSetSearchPattern(ed, word, forward);
+  ScratchEnd(scratch);
+
+  // Vim starts `*` from the beginning of the word, so a cursor in the middle of
+  // one does not match the very word it started from.
+  u64 saved = view->cursor;
+  SearchHit start = BufferSearch(buffer, ed->search_pattern, saved + 1, false, false);
+  if (start.found && start.offset + ed->search_pattern.size > saved) {
+    ViewSetCursor(view, buffer, start.offset);
+  }
+
+  if (!EditorSearchMove(ed, view, forward, 1)) ViewSetCursor(view, buffer, saved);
+}
+
+}  // namespace
+
+static void Cmd_search_forward(CommandArgs *a) {
+  // With an argument the search runs directly, which is what `:search foo` and
+  // a submitted `/foo` both do; without one it opens the prompt.
+  if (a->text.size > 0) {
+    EditorSetSearchPattern(a->ed, a->text, true);
+    EditorSearchMove(a->ed, a->view, true, 1);
+    return;
+  }
+  SearchPromptOpen(a->ed, true);
+}
+
+static void Cmd_search_backward(CommandArgs *a) {
+  if (a->text.size > 0) {
+    EditorSetSearchPattern(a->ed, a->text, false);
+    EditorSearchMove(a->ed, a->view, false, 1);
+    return;
+  }
+  SearchPromptOpen(a->ed, false);
+}
+
+// `n` repeats in the direction the search was made, `N` against it, so `n`
+// after a `?` walks backward.
+static void Cmd_search_next(CommandArgs *a) {
+  EditorSearchMove(a->ed, a->view, a->ed->search_forward, a->count);
+}
+
+static void Cmd_search_prev(CommandArgs *a) {
+  EditorSearchMove(a->ed, a->view, !a->ed->search_forward, a->count);
+}
+
+static void Cmd_search_word_forward(CommandArgs *a) {
+  SearchWordUnderCursor(a->ed, a->view, true);
+}
+
+static void Cmd_search_word_backward(CommandArgs *a) {
+  SearchWordUnderCursor(a->ed, a->view, false);
+}
+
+static void Cmd_search_clear(CommandArgs *a) { a->ed->search_highlight = false; }
+
+// ---------------------------------------------------------------------------
 // Command line
 // ---------------------------------------------------------------------------
 
@@ -880,12 +1054,30 @@ namespace {
 // Closes the command window and clears it, leaving the view ready for next
 // time. Resetting the view matters because its cursor would otherwise be left
 // pointing past the end of the now-empty buffer.
-void CommandLineDismiss(Editor *ed) {
+void CommandLineClose(Editor *ed) {
   ed->command_line_active = false;
+  ed->command_line_prompt = ':';
+  ed->search_origin_view = nullptr;
 
   Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
   if (buffer) BufferSetText(ed, buffer, String8{nullptr, 0});
   if (ed->command_view) ViewInit(ed->command_view, ed->command_buffer);
+}
+
+// Abandoning a search undoes its incremental preview: the cursor goes back to
+// where `/` was pressed, and the highlight goes with it. Abandoning a `:`
+// command has nothing to undo.
+void CommandLineDismiss(Editor *ed) {
+  View *view = ed->search_origin_view;
+  if (view && ed->command_line_prompt != ':') {
+    Buffer *target = EditorBufferForView(ed, view);
+    if (target) {
+      ViewSetCursor(view, target, ed->search_origin);
+      view->scroll_line = ed->search_origin_scroll;
+    }
+    ed->search_highlight = false;
+  }
+  CommandLineClose(ed);
 }
 
 }  // namespace
@@ -905,6 +1097,7 @@ void CommandLineOpenWith(Editor *ed, String8 prefill) {
   ed->command_view->vim.mode = VimMode::Insert;
   ViewSetCursor(ed->command_view, buffer, BufferSize(buffer));
   ed->command_line_active = true;
+  ed->command_line_prompt = ':';
 }
 
 }  // namespace
@@ -922,6 +1115,7 @@ static void Cmd_command_line_open(CommandArgs *a) {
   // on the line.
   ed->command_view->vim.mode = VimMode::Insert;
   ed->command_line_active = true;
+  ed->command_line_prompt = ':';
 }
 
 static void Cmd_command_line_submit(CommandArgs *a) {
@@ -931,6 +1125,27 @@ static void Cmd_command_line_submit(CommandArgs *a) {
 
   TempArena scratch = ScratchBegin();
   String8 line = PushStr8Copy(scratch.arena, BufferTextAll(scratch.arena, buffer));
+  u8 prompt = ed->command_line_prompt;
+  View *origin = ed->search_origin_view;
+
+  if (prompt == '/' || prompt == '?') {
+    bool forward = (prompt == '/');
+    // An empty pattern repeats the previous one, as vim does, so a bare `/<CR>`
+    // is another `n`.
+    if (line.size > 0) EditorSetSearchPattern(ed, line, forward);
+
+    // Search from where the prompt opened, not from where the preview left the
+    // cursor -- otherwise submitting would skip to the match after the one
+    // being shown.
+    if (origin) ViewSetCursor(origin, EditorBufferForView(ed, origin), ed->search_origin);
+    CommandLineClose(ed);
+    if (origin) {
+      EditorSearchMove(ed, origin, forward, 1);
+      EditorScrollFocusedToCursor(ed);
+    }
+    ScratchEnd(scratch);
+    return;
+  }
 
   // Close first, so the command runs against the window underneath rather than
   // against the command line it was typed into.

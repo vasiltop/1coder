@@ -158,6 +158,22 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(visual, "i", CommandId::text_object_inner);
   KeymapBind(visual, "a", CommandId::text_object_around);
 
+  // ---- in-file search ----
+  // `n`/`N` and `*`/`#` also work in visual mode, where they extend the
+  // selection to the match by moving the cursor end of it.
+  KeymapBind(normal, "/", CommandId::search_forward);
+  KeymapBind(normal, "?", CommandId::search_backward);
+  KeymapBind(normal, "n", CommandId::search_next);
+  KeymapBind(normal, "N", CommandId::search_prev);
+  KeymapBind(normal, "*", CommandId::search_word_forward);
+  KeymapBind(normal, "#", CommandId::search_word_backward);
+  KeymapBind(visual, "n", CommandId::search_next);
+  KeymapBind(visual, "N", CommandId::search_prev);
+  KeymapBind(visual, "*", CommandId::search_word_forward);
+  KeymapBind(visual, "#", CommandId::search_word_backward);
+  // Matching the nvim config's `<leader>/ -> :nohlsearch`.
+  KeymapBind(normal, "<leader>/", CommandId::search_clear);
+
   // ---- macros ----
   KeymapBind(normal, "q", CommandId::macro_record);
   // `@@` needs no binding of its own: `@` starts waiting for a register name,

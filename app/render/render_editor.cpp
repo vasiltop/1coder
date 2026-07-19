@@ -1,6 +1,13 @@
 #include "render/render_editor.h"
 
+#include "vim/vim_search.h"
+
 namespace {
+
+// A cap on highlighted matches per frame. Only the visible lines are scanned,
+// so this is reached only by a pattern matching almost every character, where
+// the highlight has stopped being useful anyway.
+constexpr u64 kMaxVisibleSearchMatches = 512;
 
 // Pixel rect of a cell rect.
 [[nodiscard]] RectF32 CellsToPixels(const RenderContext *ctx, RectS32 cells) {
@@ -50,7 +57,8 @@ void DrawBufferLine(RenderContext *ctx, const Buffer *buffer, u64 line, RectF32 
 }
 
 void DrawSelectionOnLine(RenderContext *ctx, const Buffer *buffer, const View *view, u64 line,
-                         RangeU64 selection, RectF32 text_rect, f32 top, i32 columns) {
+                         RangeU64 selection, RectF32 text_rect, f32 top, i32 columns,
+                         Vec4F32 color) {
   RangeU64 line_range = LineRangeWithNewline(&buffer->lines, &buffer->text, line);
   RangeU64 hit = RangeIntersect(selection, line_range);
   if (RangeEmpty(hit)) return;
@@ -69,8 +77,7 @@ void DrawSelectionOnLine(RenderContext *ctx, const Buffer *buffer, const View *v
   f32 x0 = ColumnX(ctx, text_rect, start_column, view->scroll_column);
   f32 x1 = ColumnX(ctx, text_rect, end_column, view->scroll_column);
 
-  DrawRect(ctx->draw, RectF32{x0, top, Min(x1, text_rect.x1), top + ctx->cell_height},
-           ctx->theme.selection);
+  DrawRect(ctx->draw, RectF32{x0, top, Min(x1, text_rect.x1), top + ctx->cell_height}, color);
 }
 
 // Draws the cursor in the cell whose top-left corner is (x, y). Shared by
@@ -186,6 +193,18 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
   bool has_selection = VimModeIsVisual(view->vim.mode) && !RangeEmpty(selection);
   u64 cursor_line = ViewCursorLine(view, buffer);
 
+  // Search matches, gathered once for the visible span rather than per line.
+  // Only what is on screen is scanned, so highlighting costs the same on a
+  // large file as on a small one.
+  RangeU64 matches[kMaxVisibleSearchMatches];
+  u64 match_count = 0;
+  if (ed->search_highlight && ed->search_pattern.size > 0) {
+    RangeU64 span = {BufferOffsetFromLine(buffer, visible.min),
+                     BufferLineEnd(buffer, (visible.max > 0) ? visible.max - 1 : 0)};
+    match_count = BufferSearchAll(buffer, ed->search_pattern, span, matches,
+                                  kMaxVisibleSearchMatches);
+  }
+
   // Only the visible lines are touched, which is what keeps a large file as
   // cheap to draw as a small one.
   for (u64 line = visible.min; line < visible.max; line += 1) {
@@ -195,8 +214,15 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
       DrawRect(ctx->draw, RectF32{text_rect.x0, top, text_rect.x1, top + ctx->cell_height},
                ctx->theme.current_line);
     }
+    // Matches go under the selection, so a selected match still reads as
+    // selected.
+    for (u64 i = 0; i < match_count; i += 1) {
+      DrawSelectionOnLine(ctx, buffer, view, line, matches[i], text_rect, top, columns,
+                          ctx->theme.search_match);
+    }
     if (has_selection) {
-      DrawSelectionOnLine(ctx, buffer, view, line, selection, text_rect, top, columns);
+      DrawSelectionOnLine(ctx, buffer, view, line, selection, text_rect, top, columns,
+                          ctx->theme.selection);
     }
 
     DrawBufferLine(ctx, buffer, line, text_rect, top + ctx->atlas->ascent, view->scroll_column,
@@ -247,12 +273,14 @@ void RenderCommandLine(RenderContext *ctx, Editor *ed, f32 pixel_width, f32 pixe
     View *view = ed->command_view;
 
     if (command && view) {
-      // The ':' prompt occupies the first cell, so the text -- and the cursor
-      // with it -- is shifted one column right.
+      // The prompt occupies the first cell, so the text -- and the cursor with
+      // it -- is shifted one column right. Which character it is says what the
+      // window is for: ':' a command, '/' or '?' a search.
       constexpr u64 kPromptColumns = 1;
       f32 text_x = ctx->cell_width * (f32)kPromptColumns;
 
-      DrawText(ctx->draw, Str8Lit(":"), 0.0f, baseline, ctx->theme.text);
+      u8 prompt = ed->command_line_prompt ? ed->command_line_prompt : (u8)':';
+      DrawText(ctx->draw, String8{&prompt, 1}, 0.0f, baseline, ctx->theme.text);
       DrawText(ctx->draw, BufferTextAll(scratch.arena, command), text_x, baseline,
                ctx->theme.text);
 
