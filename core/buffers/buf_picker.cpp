@@ -54,10 +54,14 @@ void GrepSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
   GrepPayload *payload = (GrepPayload *)buffer->user_data;
   if (!payload) return;
 
+  // Enter while still typing takes the first match, so a search can be run and
+  // followed without ever leaving insert mode. The same applies above a
+  // one-shot search's header, where there is nothing else Enter could mean.
   u64 cursor_line = ViewCursorLine(view, buffer);
-  if (cursor_line < payload->first_result_line) return;
+  u64 index = (cursor_line < payload->first_result_line)
+                  ? 0
+                  : cursor_line - payload->first_result_line;
 
-  u64 index = cursor_line - payload->first_result_line;
   if (index >= payload->results.count) return;
 
   GrepMatch *match = &payload->results.matches[index];

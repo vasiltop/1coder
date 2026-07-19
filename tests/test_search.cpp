@@ -191,14 +191,20 @@ TEST(live_grep_searches_as_you_type) {
   CHECK_STR(BufferLineText(arena, live, 0), Str8Lit("needle"));
   CHECK_EQ(BufferLineCount(live), 3);
 
-  // <CR> on a result opens the file it names, at the line it names.
-  EditorProcessSpec(&ed, "<Esc>j");
-  String8 selected = BufferLineText(arena, live, 1);
-  u64 colon = Str8FindFirstChar(selected, ':');
-  String8 selected_path = Str8Prefix(selected, colon);
+  // Enter while still typing on the query line takes the first match, so a
+  // search can be run and followed without leaving insert mode.
+  String8 first = BufferLineText(arena, live, 1);
+  u64 colon = Str8FindFirstChar(first, ':');
+  String8 first_path = Str8Prefix(first, colon);
+  u64 first_line = 0;
+  for (u64 i = colon + 1; i < first.size && CharIsDigit(first.str[i]); i += 1) {
+    first_line = first_line * 10 + (u64)(first.str[i] - '0');
+  }
 
+  CHECK_EQ(ViewCursorLine(EditorFocusedView(&ed), live), 0);  // still on the query
   EditorProcessSpec(&ed, "<CR>");
-  CHECK(Str8EndsWith(EditorFocusedBuffer(&ed)->path, selected_path));
+  CHECK(Str8EndsWith(EditorFocusedBuffer(&ed)->path, first_path));
+  CHECK_EQ(ViewCursorLine(EditorFocusedView(&ed), EditorFocusedBuffer(&ed)), first_line - 1);
 
   EditorDestroy(&ed);
   ArenaRelease(arena);
@@ -303,6 +309,10 @@ TEST(picker_buffers_are_ordinary_buffers) {
   // Typing narrows the list without disturbing the query line.
   CHECK(BufferLineCount(finder) < unfiltered);
   CHECK_STR(BufferLineText(arena, finder, 1), Str8Lit("src/deep/two.cpp"));
+
+  // Enter while still typing opens the top result, as it does for live search.
+  EditorProcessSpec(&ed, "<CR>");
+  CHECK(Str8EndsWith(EditorFocusedBuffer(&ed)->path, Str8Lit("src/deep/two.cpp")));
 
   EditorDestroy(&ed);
   ArenaRelease(arena);
