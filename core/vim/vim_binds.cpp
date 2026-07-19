@@ -142,6 +142,21 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, "<leader>h", CommandId::split_horizontal);
   KeymapBind(normal, "<leader>v", CommandId::split_vertical);
 
+  // ---- text objects ----
+  // `i` and `a` are prefixes: the chord after them names the object. They apply
+  // in operator-pending mode (`ciw`) and in visual mode (`vi(`), but mean
+  // nothing on their own in normal mode, where `i` and `a` insert.
+  KeymapBind(pending, "i", CommandId::text_object_inner);
+  KeymapBind(pending, "a", CommandId::text_object_around);
+  KeymapBind(visual, "i", CommandId::text_object_inner);
+  KeymapBind(visual, "a", CommandId::text_object_around);
+
+  // ---- macros ----
+  KeymapBind(normal, "q", CommandId::macro_record);
+  // `@@` needs no binding of its own: `@` starts waiting for a register name,
+  // and '@' is itself the name meaning "the last macro".
+  KeymapBind(normal, "@", CommandId::macro_play);
+
   // ---- operator-pending ----
   // A doubled operator acts on whole lines: dd, yy, cc, >>, <<.
   KeymapBind(pending, "d", CommandId::delete_line);

@@ -109,6 +109,14 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(visual_line_mode,      "visual-line-mode",      "Enter linewise visual mode",      CommandArg::None, CmdHidden)      \
   X(replace_mode,          "replace-mode",          "Enter replace mode",              CommandArg::None, CmdHidden)      \
   X(select_register,       "select-register",       "Choose the register to use",      CommandArg::None, CmdHidden)      \
+  X(text_object_inner,     "text-object-inner",     "Select the inside of an object",  CommandArg::None, CmdHidden)      \
+  X(text_object_around,    "text-object-around",    "Select an object and its edges",  CommandArg::None, CmdHidden)      \
+  X(apply_text_object,     "apply-text-object",     "Resolve a pending text object",   CommandArg::None, CmdHidden)      \
+  X(macro_record,          "macro-record",          "Start or stop recording a macro", CommandArg::None, CmdHidden)      \
+  X(macro_start,           "macro-start",           "Begin recording into a register", CommandArg::None, CmdHidden)      \
+  X(macro_play,            "macro-play",            "Replay a macro",                  CommandArg::None, CmdHidden)      \
+  X(macro_replay,          "macro-replay",          "Replay the named macro",          CommandArg::None, CmdHidden)      \
+  X(macro_repeat,          "macro-repeat",          "Replay the last macro again",     CommandArg::None, CmdHidden)      \
   X(insert_register,       "insert-register",       "Insert a register's contents",    CommandArg::None, CmdHidden)      \
   X(insert_register_prompt, "insert-register-prompt", "Ask which register to insert",   CommandArg::None, CmdHidden)      \
   X(zoom_in,               "zoom-in",               "Increase the font size",          CommandArg::None, CmdNone)        \

@@ -39,6 +39,23 @@ struct InputState {
   bool awaiting_register;
   CommandId register_follow_up;
 
+  // `i`/`a` wait for the character naming the object -- `iw`, `a"`, `i(`.
+  bool awaiting_text_object;
+  bool text_object_inner;
+
+  // Macro recording. Chords are stored as a binding spec in a register, so a
+  // macro is just text: it can be pasted, edited and yanked back like any
+  // other register, exactly as vim does it.
+  bool recording_macro;
+  u8 macro_register;
+  KeyChord macro_chords[kMaxRecordedChords];
+  u64 macro_count;
+  u8 last_macro_register;
+  bool replaying_macro;
+  // A count on `@` is typed before the register name, so it has to be held
+  // across the wait for that name.
+  u64 macro_count_pending;
+
   // `.` replays the chords that produced the last change, which is enough to
   // reproduce operators, counts and inserted text without a separate
   // representation of "what changed".

@@ -41,6 +41,15 @@ void PushPendingChord(InputState *input, KeyChord chord) {
   }
 }
 
+// Appends to the macro under record. Called only when recording was already
+// under way before this chord, so the `q{reg}` that starts one and the `q` that
+// ends it stay out of the recording.
+void RecordMacroChord(InputState *input, KeyChord chord) {
+  if (input->macro_count >= kMaxRecordedChords) return;
+  input->macro_chords[input->macro_count] = chord;
+  input->macro_count += 1;
+}
+
 void RecordChord(InputState *input, KeyChord chord) {
   if (!input->recording || input->replaying) return;
   if (input->record_count >= kMaxRecordedChords) return;
@@ -120,6 +129,7 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
   if (!view || !buffer) return;
 
   InputState *input = &ed->input;
+  bool was_recording_macro = input->recording_macro;
 
   // Begin recording at the start of each normal-mode command, so `.` has the
   // chords that produced whatever change follows.
@@ -136,7 +146,18 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
     return;
   }
 
-  // 2. `"` was pressed, so this chord names a register rather than running a
+  // 2. `i` or `a` was pressed after an operator, so this chord names the object
+  //    -- `w`, `"`, `(` -- rather than running a command of its own.
+  if (input->awaiting_text_object) {
+    input->awaiting_text_object = false;
+    if (KeyChordIsChar(chord)) {
+      CommandExec(ed, CommandId::apply_text_object, String8{nullptr, 0}, chord);
+    }
+    if (was_recording_macro && input->recording_macro) RecordMacroChord(input, chord);
+    return;
+  }
+
+  // 3. `"` was pressed, so this chord names a register rather than running a
   //    command. It stays on the view until the operation that uses it finishes.
   if (input->awaiting_register) {
     input->awaiting_register = false;
@@ -150,10 +171,11 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
       view->vim.pending_register = chord.codepoint;
       if (follow_up != CommandId::None) CommandExec(ed, follow_up, String8{nullptr, 0}, chord);
     }
+    if (was_recording_macro && input->recording_macro) RecordMacroChord(input, chord);
     return;
   }
 
-  // 3. A command waiting on a target character takes this chord as its
+  // 4. A command waiting on a target character takes this chord as its
   //    argument, whatever it happens to be bound to.
   if (input->awaiting_char_command != CommandId::None) {
     CommandId id = input->awaiting_char_command;
@@ -161,6 +183,7 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
 
     // Escape abandons the pending f/t rather than searching for it.
     if (KeyChordIsChar(chord)) CommandExec(ed, id, String8{nullptr, 0}, chord);
+    if (was_recording_macro && input->recording_macro) RecordMacroChord(input, chord);
     return;
   }
 
@@ -218,6 +241,8 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
   } else {
     ClearPending(input);
   }
+
+  if (was_recording_macro && input->recording_macro) RecordMacroChord(input, chord);
 
   // Finish a recording once the buffer has changed and we are back in normal
   // mode -- that span of chords is exactly what `.` should replay.

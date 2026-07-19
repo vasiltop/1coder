@@ -838,6 +838,134 @@ TEST(vim_repeat_insert) {
 }
 
 // ---------------------------------------------------------------------------
+// Text objects
+// ---------------------------------------------------------------------------
+
+TEST(vim_text_object_word) {
+  Fixture f = MakeFixture("foo(barbaz) end");
+
+  // The point of a text object: it acts on the whole word regardless of where
+  // in it the cursor happens to be, unlike `dw` which runs from the cursor.
+  Type(&f, "lldiw");
+  CHECK_STR(TextOf(&f), Str8Lit("(barbaz) end"));
+
+  Fixture g = MakeFixture("alpha beta gamma");
+  Type(&g, "wdaw");  // `aw` takes the trailing whitespace too
+  CHECK_STR(TextOf(&g), Str8Lit("alpha gamma"));
+  Destroy(&g);
+
+  Destroy(&f);
+}
+
+TEST(vim_text_object_delimited_and_quoted) {
+  Fixture f = MakeFixture("foo(barbaz) end");
+  Type(&f, "f(lci(X<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("foo(X) end"));
+  Destroy(&f);
+
+  // `a(` includes the parentheses themselves.
+  Fixture g = MakeFixture("foo(barbaz) end");
+  Type(&g, "f(lda(");
+  CHECK_STR(TextOf(&g), Str8Lit("foo end"));
+  Destroy(&g);
+
+  Fixture h = MakeFixture("say \"hello there\" ok");
+  Type(&h, "f\"lci\"Q<Esc>");
+  CHECK_STR(TextOf(&h), Str8Lit("say \"Q\" ok"));
+  Destroy(&h);
+
+  // Braces and brackets spell the same object.
+  Fixture i = MakeFixture("x = {a, b};");
+  Type(&i, "f{ldi{");
+  CHECK_STR(TextOf(&i), Str8Lit("x = {};"));
+  Destroy(&i);
+}
+
+TEST(vim_text_object_in_visual_mode) {
+  Fixture f = MakeFixture("foo(barbaz) end");
+
+  // In visual mode the object becomes the selection rather than being consumed.
+  Type(&f, "f(lvi(");
+  RangeU64 selection = ViewSelection(ViewOf(&f), BufferOf(&f));
+  CHECK_EQ(selection.min, 4);
+  CHECK_EQ(selection.max, 10);
+
+  Type(&f, "d");
+  CHECK_STR(TextOf(&f), Str8Lit("foo() end"));
+
+  Destroy(&f);
+}
+
+TEST(vim_text_object_that_does_not_match_aborts) {
+  Fixture f = MakeFixture("no parens here");
+
+  // The cursor is not inside any pair, so the operator is abandoned rather than
+  // acting on an empty range.
+  Type(&f, "di(");
+  CHECK_STR(TextOf(&f), Str8Lit("no parens here"));
+  CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Normal);
+
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Macros
+// ---------------------------------------------------------------------------
+
+TEST(vim_macro_record_and_replay) {
+  Fixture f = MakeFixture("one\ntwo\nthree");
+
+  Type(&f, "qaA!<Esc>q");   // record "append a bang"
+  CHECK_STR(TextOf(&f), Str8Lit("one!\ntwo\nthree"));
+
+  Type(&f, "j@a");
+  CHECK_STR(TextOf(&f), Str8Lit("one!\ntwo!\nthree"));
+
+  // `@@` repeats the last macro; '@' is itself the register name meaning that.
+  Type(&f, "j@@");
+  CHECK_STR(TextOf(&f), Str8Lit("one!\ntwo!\nthree!"));
+
+  Destroy(&f);
+}
+
+TEST(vim_macro_takes_a_count) {
+  Fixture f = MakeFixture("abcdefgh");
+
+  Type(&f, "qaxq");   // records a single delete, and performs one
+  CHECK_STR(TextOf(&f), Str8Lit("bcdefgh"));
+
+  Type(&f, "3@a");
+  CHECK_STR(TextOf(&f), Str8Lit("efgh"));
+
+  Destroy(&f);
+}
+
+TEST(vim_macro_is_stored_as_register_text) {
+  Fixture f = MakeFixture("abc");
+
+  Type(&f, "qbA!<Esc>q");
+  // A macro is just text in a register, so it can be inspected, pasted and
+  // edited like anything else that lands there.
+  CHECK_STR(EditorGetRegister(&f.ed, 'b').text, Str8Lit("A!<Esc>"));
+
+  Destroy(&f);
+}
+
+TEST(vim_macro_containing_an_edit_does_not_overwrite_itself) {
+  Fixture f = MakeFixture("abcdefgh");
+
+  // The delete inside the macro must not capture into the register holding the
+  // macro -- that register is still selected while the macro runs.
+  Type(&f, "qaxq");
+  Type(&f, "@a");
+  Type(&f, "@a");
+  CHECK_STR(TextOf(&f), Str8Lit("defgh"));
+  CHECK_STR(EditorGetRegister(&f.ed, 'a').text, Str8Lit("x"));
+
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
 // Registers and the system clipboard
 //
 // The clipboard reaches core through function pointers, so a fake one here

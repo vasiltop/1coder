@@ -268,6 +268,191 @@ static void Cmd_open_line_above(CommandArgs *a) {
   ViewSetCursor(a->view, buffer, at);
 }
 
+// ---------------------------------------------------------------------------
+// Text objects
+//
+// A text object names a *thing* rather than a direction, so `ciw` changes the
+// word the cursor is standing in wherever in it that happens to be. They yield
+// a range directly, which is the same currency motions are converted into --
+// so the operator machinery below needs no special case for them.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+[[nodiscard]] TextObjectResult ResolveTextObject(const Buffer *buffer, u64 pos, u64 count,
+                                                 bool inner, u32 object) {
+  switch (object) {
+    case 'w': return TextObjectWord(buffer, pos, count, inner, false);
+    case 'W': return TextObjectWord(buffer, pos, count, inner, true);
+    case 'p': return TextObjectParagraph(buffer, pos, inner);
+
+    case '"':
+    case '\'':
+    case '`':
+      return TextObjectQuoted(buffer, pos, (u8)object, inner);
+
+    // vim spells the paren pair three ways: either bracket, or `b`.
+    case '(':
+    case ')':
+    case 'b':
+      return TextObjectDelimited(buffer, pos, '(', ')', inner);
+    case '{':
+    case '}':
+    case 'B':
+      return TextObjectDelimited(buffer, pos, '{', '}', inner);
+    case '[':
+    case ']':
+      return TextObjectDelimited(buffer, pos, '[', ']', inner);
+    case '<':
+    case '>':
+      return TextObjectDelimited(buffer, pos, '<', '>', inner);
+
+    default:
+      return TextObjectResult{RangeU64{pos, pos}, false, false};
+  }
+}
+
+}  // namespace
+
+static void Cmd_text_object_inner(CommandArgs *a) {
+  a->ed->input.awaiting_text_object = true;
+  a->ed->input.text_object_inner = true;
+}
+
+static void Cmd_text_object_around(CommandArgs *a) {
+  a->ed->input.awaiting_text_object = true;
+  a->ed->input.text_object_inner = false;
+}
+
+static void Cmd_apply_text_object(CommandArgs *a) {
+  View *view = a->view;
+  Buffer *buffer = a->buffer;
+  VimState *vim = &view->vim;
+
+  TextObjectResult object = ResolveTextObject(buffer, view->cursor, a->count,
+                                              a->ed->input.text_object_inner,
+                                              a->chord.codepoint);
+
+  if (!object.valid) {
+    // Nothing to act on, so abandon any operator rather than acting on an
+    // empty range.
+    vim->pending_operator = OperatorKind::None;
+    if (vim->mode == VimMode::OperatorPending) vim->mode = VimMode::Normal;
+    return;
+  }
+
+  // In visual mode the object becomes the selection instead of being consumed.
+  if (VimModeIsVisual(vim->mode)) {
+    vim->visual_anchor = object.range.min;
+    u64 last = (object.range.max > object.range.min)
+                   ? BufferPrevCodepoint(buffer, object.range.max)
+                   : object.range.min;
+    ViewSetCursor(view, buffer, last);
+    return;
+  }
+
+  if (vim->mode != VimMode::OperatorPending || vim->pending_operator == OperatorKind::None) {
+    return;  // `iw` alone does nothing in normal mode, as in vim
+  }
+
+  OperatorKind op = vim->pending_operator;
+  vim->pending_operator = OperatorKind::None;
+  vim->mode = VimMode::Normal;
+
+  u64 cursor = VimApplyOperator(a->ed, view, buffer, op, object.range, object.linewise);
+
+  if (op == OperatorKind::Change) {
+    EnterInsertMode(a->ed, view, buffer, cursor);
+  } else {
+    ViewSetCursor(view, buffer, cursor);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Macros
+//
+// A recorded macro is stored as a binding spec in a register, so replaying it
+// is just feeding that text back through the input layer -- and the macro can
+// be pasted, edited and yanked back like any other register.
+// ---------------------------------------------------------------------------
+
+static void Cmd_macro_start(CommandArgs *a) {
+  InputState *input = &a->ed->input;
+  input->recording_macro = true;
+  input->macro_register = RegisterNormalise(a->view->vim.pending_register);
+  input->macro_count = 0;
+  EditorSetStatusF(a->ed, "recording @%c", (int)input->macro_register);
+}
+
+static void Cmd_macro_record(CommandArgs *a) {
+  Editor *ed = a->ed;
+  InputState *input = &ed->input;
+
+  if (input->recording_macro) {
+    input->recording_macro = false;
+
+    TempArena scratch = ScratchBegin();
+    KeyChordSequence seq = {input->macro_chords, input->macro_count};
+    String8 text = KeyChordSequenceToString(scratch.arena, seq);
+    EditorSetRegister(ed, input->macro_register, text, false);
+    ScratchEnd(scratch);
+
+    EditorSetStatus(ed, Str8Lit(""));
+    return;
+  }
+
+  // Not recording yet, so the next chord names the register to record into.
+  input->awaiting_register = true;
+  input->register_follow_up = CommandId::macro_start;
+}
+
+static void Cmd_macro_replay(CommandArgs *a) {
+  Editor *ed = a->ed;
+  u8 name = RegisterNormalise(a->view->vim.pending_register);
+
+  // `@@` reaches here as the register named '@', because the first `@` already
+  // started waiting for a name. Vim spells "the last one" the same way.
+  if (name == '@') name = ed->input.last_macro_register;
+  if (name == 0) return;
+
+  Register reg = EditorGetRegister(ed, name);
+  if (reg.text.size == 0 || ed->input.replaying_macro) return;
+
+  ed->input.last_macro_register = name;
+
+  TempArena scratch = ScratchBegin();
+  String8 spec = PushStr8Copy(scratch.arena, reg.text);
+
+  u64 repeats = Max(ed->input.macro_count_pending, (u64)1);
+  ed->input.macro_count_pending = 0;
+
+  // Release the register before replaying. It is still selected here -- the
+  // caller clears it only after this returns -- so a macro containing a delete
+  // or a yank would write into the very register holding the macro, replacing
+  // it with the text it just captured.
+  a->view->vim.pending_register = 0;
+
+  // The guard keeps a macro that contains `@` from recursing without end.
+  ed->input.replaying_macro = true;
+  for (u64 i = 0; i < repeats; i += 1) EditorProcessSpec(ed, spec);
+  ed->input.replaying_macro = false;
+
+  ScratchEnd(scratch);
+}
+
+static void Cmd_macro_play(CommandArgs *a) {
+  a->ed->input.awaiting_register = true;
+  a->ed->input.register_follow_up = CommandId::macro_replay;
+  // Held here because the register name has not been typed yet.
+  a->ed->input.macro_count_pending = a->count;
+}
+
+static void Cmd_macro_repeat(CommandArgs *a) {
+  a->view->vim.pending_register = a->ed->input.last_macro_register;
+  a->ed->input.macro_count_pending = a->count;
+  Cmd_macro_replay(a);
+}
+
 // `"` -- the chord after it names the register rather than running a command,
 // which the input layer handles.
 static void Cmd_select_register(CommandArgs *a) {
