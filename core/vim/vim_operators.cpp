@@ -18,8 +18,23 @@ RangeU64 VimRangeFromMotion(const Buffer *buffer, u64 from, MotionResult motion)
   RangeU64 range = RangeMake(from, motion.target);
 
   switch (motion.kind) {
-    case MotionKind::Exclusive:
+    case MotionKind::Exclusive: {
+      // Vim's exclusive-motion adjustment: an exclusive motion ending at the
+      // start of a line instead ends at the end of the line before it. Without
+      // this, `w` on the last word of a line steps onto the next line and so
+      // `dw` and `yw` swallow the line break -- which then reappears as a
+      // stray newline when the yank is pasted.
+      if (range.max > range.min) {
+        u64 line = BufferLineFromOffset(buffer, range.max);
+        u64 line_start = BufferOffsetFromLine(buffer, line);
+
+        if (range.max == line_start && line > 0) {
+          u64 previous_end = BufferLineEnd(buffer, line - 1);
+          if (previous_end > range.min) range.max = previous_end;
+        }
+      }
       break;
+    }
     case MotionKind::Inclusive:
       // The character at the far end is part of the span, so step past it.
       range.max = Min(BufferNextCodepoint(buffer, range.max), BufferSize(buffer));
@@ -41,16 +56,20 @@ RangeU64 VimRangeFromMotion(const Buffer *buffer, u64 from, MotionResult motion)
   return range;
 }
 
-void VimYankRange(Editor *ed, View *view, Buffer *buffer, RangeU64 range, bool linewise) {
+void VimYankRange(Editor *ed, View *view, Buffer *buffer, RangeU64 range, bool linewise,
+                  bool from_yank) {
   TempArena scratch = ScratchBegin();
   String8 text = BufferTextRange(scratch.arena, buffer, range);
 
-  u8 name = (u8)view->vim.pending_register;
+  u8 name = RegisterNormalise(view->vim.pending_register);
   EditorSetRegister(ed, name, text, linewise);
 
   // Vim fills the unnamed register alongside a named one, so a bare `p` still
-  // pastes what was just yanked.
-  if (name != 0) EditorSetRegister(ed, 0, text, linewise);
+  // pastes what was just captured.
+  if (name != kRegisterUnnamed) EditorSetRegister(ed, kRegisterUnnamed, text, linewise);
+
+  // "0 survives deletes, so a yank can still be pasted after one.
+  if (from_yank) EditorSetRegister(ed, kRegisterYank, text, linewise);
 
   ScratchEnd(scratch);
 }
@@ -61,7 +80,7 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
 
   switch (op) {
     case OperatorKind::Yank: {
-      VimYankRange(ed, view, buffer, range, linewise);
+      VimYankRange(ed, view, buffer, range, linewise, true);
       // Yank leaves the cursor at the start of the yanked span.
       return range.min;
     }
@@ -114,7 +133,7 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
 }
 
 u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool after) {
-  Register reg = EditorGetRegister(ed, (u8)view->vim.pending_register);
+  Register reg = EditorGetRegister(ed, RegisterNormalise(view->vim.pending_register));
   if (reg.text.size == 0 || BufferIsReadOnly(buffer)) return pos;
 
   TempArena scratch = ScratchBegin();
@@ -124,6 +143,13 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
   String8List parts = {};
   for (u64 i = 0; i < count; i += 1) Str8ListPush(scratch.arena, &parts, reg.text);
   String8 text = Str8ListJoin(scratch.arena, &parts, String8{nullptr, 0});
+
+  // Linewise content has to end in a newline or it would run into the line it
+  // lands next to. `yy` on a final line with no newline of its own produces
+  // exactly that case.
+  if (reg.linewise && text.size > 0 && text.str[text.size - 1] != '\n') {
+    text = PushStr8Cat(scratch.arena, text, Str8Lit("\n"));
+  }
 
   u64 cursor = pos;
 

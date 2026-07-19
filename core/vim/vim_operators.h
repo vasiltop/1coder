@@ -25,9 +25,12 @@ struct Editor;
 u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, RangeU64 range,
                      bool linewise);
 
-// Yanks without modifying the buffer, into whichever register `view` has
-// selected -- including the system clipboard via "+ or "*.
-void VimYankRange(Editor *ed, View *view, Buffer *buffer, RangeU64 range, bool linewise);
+// Captures a span into whichever register `view` has selected -- including the
+// system clipboard via "+ or "*. `from_yank` distinguishes a real yank from the
+// capture a delete performs, because vim's "0 holds the last yank only, which
+// is what makes `"0p` still work after something has been deleted.
+void VimYankRange(Editor *ed, View *view, Buffer *buffer, RangeU64 range, bool linewise,
+                  bool from_yank = false);
 
 // Pastes the unnamed register. Linewise content lands on its own line, which is
 // why the register remembers how it was captured.

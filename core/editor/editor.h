@@ -153,6 +153,16 @@ void EditorSetRegister(Editor *ed, u8 name, String8 text, bool linewise);
 [[nodiscard]] Register EditorGetRegister(Editor *ed, u8 name);
 [[nodiscard]] inline bool RegisterIsClipboard(u8 name) { return name == '+' || name == '*'; }
 
+// Slot 0 is the unnamed register, which vim spells `""`. Mapping the quote onto
+// it means `""p` and <C-r>" reach the same place a bare `p` does.
+inline constexpr u8 kRegisterUnnamed = 0;
+inline constexpr u8 kRegisterYank = '0';  // vim's "0: the last yank, never a delete
+
+[[nodiscard]] inline u8 RegisterNormalise(u32 name) {
+  if (name == 0 || name == '"') return kRegisterUnnamed;
+  return (u8)name;
+}
+
 // ---------------------------------------------------------------------------
 // Font size
 // ---------------------------------------------------------------------------

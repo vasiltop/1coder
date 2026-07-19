@@ -346,6 +346,32 @@ TEST(vim_delete_inclusive_vs_exclusive_motions) {
   Destroy(&f);
 }
 
+TEST(vim_exclusive_motion_stops_at_end_of_line) {
+  // `w` from the last word of a line lands on the next line, but an operator
+  // over it must stop at the line end rather than taking the break with it.
+  Fixture f = MakeFixture("one two\nthree");
+
+  Type(&f, "wdw");
+  CHECK_STR(TextOf(&f), Str8Lit("one \nthree"));
+  CHECK_EQ(BufferLineCount(BufferOf(&f)), 2);
+
+  // Yank behaves the same way, so pasting cannot introduce a line break that
+  // was never yanked.
+  Fixture g = MakeFixture("abc\ndef");
+  Type(&g, "ywP");
+  CHECK_STR(TextOf(&g), Str8Lit("abcabc\ndef"));
+  CHECK_EQ(BufferLineCount(BufferOf(&g)), 2);
+  Destroy(&g);
+
+  // A motion that ends mid-line is untouched by the rule.
+  Fixture h = MakeFixture("one two three");
+  Type(&h, "dw");
+  CHECK_STR(TextOf(&h), Str8Lit("two three"));
+  Destroy(&h);
+
+  Destroy(&f);
+}
+
 TEST(vim_change_enters_insert_mode) {
   Fixture f = MakeFixture("foo bar");
 
@@ -869,6 +895,35 @@ TEST(vim_register_selection_is_cleared_after_use) {
   Destroy(&f);
 }
 
+TEST(vim_yank_register_survives_deletes) {
+  Fixture f = MakeFixture("alpha beta gamma");
+
+  Type(&f, "yw");            // "0 and unnamed both hold "alpha "
+  Type(&f, "wdw");           // a delete clobbers the unnamed register...
+
+  CHECK_STR(EditorGetRegister(&f.ed, '0').text, Str8Lit("alpha "));
+  CHECK_STR(EditorGetRegister(&f.ed, 0).text, Str8Lit("beta "));
+
+  // ...so "0p is how the yank is still reachable, which is the whole point of
+  // vim keeping them apart.
+  Type(&f, "$\"0p");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha gammaalpha "));
+
+  Destroy(&f);
+}
+
+TEST(vim_quote_names_the_unnamed_register) {
+  Fixture f = MakeFixture("abc def");
+
+  Type(&f, "yw");
+  // `""` is how vim spells the unnamed register, so it must reach the same
+  // place a bare p does.
+  Type(&f, "$\"\"p");
+  CHECK_STR(TextOf(&f), Str8Lit("abc defabc "));
+
+  Destroy(&f);
+}
+
 TEST(vim_insert_register_with_ctrl_r) {
   Fixture f = MakeFixture("abc");
   InstallFakeClipboard(&f);
@@ -877,6 +932,84 @@ TEST(vim_insert_register_with_ctrl_r) {
   // <C-r>{reg} inserts without leaving insert mode.
   Type(&f, "A <C-r>+!<Esc>");
   CHECK_STR(TextOf(&f), Str8Lit("abc PASTED!"));
+
+  Destroy(&f);
+}
+
+TEST(vim_clipboard_paste_is_charwise_for_ordinary_text) {
+  Fixture f = MakeFixture("abc");
+  InstallFakeClipboard(&f);
+
+  // Copied from a browser or a terminal, where a trailing newline usually
+  // comes along with the selection and is not meant as "this is a whole line".
+  FakeClipboardWrite(Str8Lit("XYZ\n"));
+
+  Type(&f, "\"+p");
+  // Should land inside the line, not push a new one.
+  CHECK_STR(TextOf(&f), Str8Lit("aXYZbc"));
+  CHECK_EQ(BufferLineCount(BufferOf(&f)), 1);
+
+  Destroy(&f);
+}
+
+TEST(vim_clipboard_paste_is_linewise_for_multiple_lines) {
+  Fixture f = MakeFixture("one\ntwo");
+  InstallFakeClipboard(&f);
+
+  // Genuinely several lines, so linewise is what was meant.
+  FakeClipboardWrite(Str8Lit("alpha\nbeta\n"));
+
+  Type(&f, "\"+p");
+  CHECK_STR(TextOf(&f), Str8Lit("one\nalpha\nbeta\ntwo"));
+
+  Destroy(&f);
+}
+
+TEST(vim_clipboard_round_trip_keeps_its_kind) {
+  Fixture f = MakeFixture("one\ntwo\nthree");
+  InstallFakeClipboard(&f);
+
+  // A linewise yank of ours must come back linewise, even though the text is a
+  // single line with a trailing newline -- which an external copy would not be.
+  Type(&f, "\"+yy");
+  Type(&f, "j\"+p");
+  CHECK_STR(TextOf(&f), Str8Lit("one\ntwo\none\nthree"));
+
+  // And a charwise yank of ours stays charwise.
+  Fixture g = MakeFixture("abc def");
+  InstallFakeClipboard(&g);
+  Type(&g, "\"+yw");
+  Type(&g, "$\"+p");
+  CHECK_STR(TextOf(&g), Str8Lit("abc defabc "));
+  CHECK_EQ(BufferLineCount(BufferOf(&g)), 1);
+  Destroy(&g);
+
+  Destroy(&f);
+}
+
+TEST(vim_paste_before_with_clipboard) {
+  Fixture f = MakeFixture("abc");
+  InstallFakeClipboard(&f);
+  FakeClipboardWrite(Str8Lit("XYZ\n"));
+
+  // P must behave the same way: inline, before the cursor.
+  Type(&f, "\"+P");
+  CHECK_STR(TextOf(&f), Str8Lit("XYZabc"));
+  CHECK_EQ(BufferLineCount(BufferOf(&f)), 1);
+
+  Destroy(&f);
+}
+
+TEST(vim_linewise_paste_of_last_line_without_trailing_newline) {
+  // `yy` on a final line with no newline of its own yields register text that
+  // does not end in one; pasting it must still make a whole line rather than
+  // running into the neighbouring one.
+  Fixture f = MakeFixture("one\ntwo");
+
+  Type(&f, "jyy");
+  Type(&f, "P");
+  CHECK_STR(TextOf(&f), Str8Lit("one\ntwo\ntwo"));
+  CHECK_EQ(BufferLineCount(BufferOf(&f)), 3);
 
   Destroy(&f);
 }

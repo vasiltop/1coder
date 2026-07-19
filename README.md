@@ -12,7 +12,7 @@ Needs CMake, a C++23 compiler, and SDL3.
 cmake -B build -S . && cmake --build build -j
 
 ./build/editor path/to/file      # run
-./build/editor_tests             # 249 tests, needs no display
+./build/editor_tests             # 257 tests, needs no display
 ```
 
 With [just](https://github.com/casey/just), `just` on its own lists everything:
@@ -115,9 +115,16 @@ Insert mode: `<C-w>`, `<C-h>` and `<C-BS>` all rub out the previous word;
 `<C-r>{reg}` inserts a register.
 
 Registers work as in vim: `"a` picks one for the next yank, delete or paste,
-and `"+` / `"*` are the system clipboard — so `"+y` and `"+p` exchange text with
+`""` is the unnamed register, `"0` holds the last yank and survives deletes, and
+`"+` / `"*` are the system clipboard — so `"+y` and `"+p` exchange text with
 other programs while a bare `y`/`p` stays internal. A named yank fills the
 unnamed register too.
+
+The clipboard carries no notion of charwise versus linewise, so pasting infers
+one. Text the editor put there keeps the kind it was captured with; text from
+another program is linewise only if it really spans lines, and a lone trailing
+newline — what selecting a line in a browser produces — is dropped rather than
+splitting the line it is pasted into.
 
 Zoom with `<C-=>` / `<C-->` / `<C-0>`, in any mode. The core holds only a font
 size; the app watches it and rebuilds the glyph atlas, and because layout is in

@@ -231,7 +231,16 @@ void EditorSetRegister(Editor *ed, u8 name, String8 text, bool linewise) {
   if (name >= kRegisterCount) return;
 
   if (RegisterIsClipboard(name)) {
-    if (ed->clipboard.write) ed->clipboard.write(text);
+    if (!ed->clipboard.write) return;
+    ed->clipboard.write(text);
+
+    // Keep a copy of exactly what was written, along with its kind. The
+    // clipboard itself carries no notion of linewise, so this is the only way a
+    // linewise yank can come back linewise rather than being guessed at.
+    if (!ed->register_arenas[name]) ed->register_arenas[name] = ArenaAlloc(MB(64));
+    ArenaClear(ed->register_arenas[name]);
+    ed->registers[name].text = PushStr8Copy(ed->register_arenas[name], text);
+    ed->registers[name].linewise = linewise;
     return;
   }
 
@@ -250,15 +259,41 @@ Register EditorGetRegister(Editor *ed, u8 name) {
   if (RegisterIsClipboard(name)) {
     if (!ed->clipboard.read) return Register{};
 
-    // The clipboard's contents are not ours, so they are copied into the
-    // register's own storage on the way through.
+    TempArena scratch = ScratchBegin();
+    String8 fresh = ed->clipboard.read(scratch.arena);
+
+    // If the clipboard still holds exactly what we last put there, we know how
+    // it was captured and do not have to guess.
+    bool ours = Str8Match(fresh, ed->registers[name].text);
+
+    String8 text = fresh;
+    bool linewise = false;
+
+    if (ours) {
+      linewise = ed->registers[name].linewise;
+    } else {
+      // Text from another program carries no kind, so infer one. A newline
+      // anywhere but the very end means it is genuinely several lines. A single
+      // line with a trailing newline -- what selecting a line in a browser or a
+      // terminal produces -- is charwise, and that stray newline is dropped so
+      // pasting does not split the line it lands in.
+      u64 first_newline = Str8FindFirstChar(fresh, '\n');
+      bool has_interior_newline = (first_newline + 1 < fresh.size);
+
+      linewise = has_interior_newline;
+      if (!linewise && fresh.size > 0 && fresh.str[fresh.size - 1] == '\n') {
+        text = Str8Chop(fresh, 1);
+      }
+    }
+
+    // Copy into the register's own storage, which also refreshes the cache.
     if (!ed->register_arenas[name]) ed->register_arenas[name] = ArenaAlloc(MB(64));
     ArenaClear(ed->register_arenas[name]);
+    ed->registers[name].text = PushStr8Copy(ed->register_arenas[name], text);
+    ed->registers[name].linewise = linewise;
 
-    String8 text = ed->clipboard.read(ed->register_arenas[name]);
-    // Text ending in a newline came from a linewise yank, here or elsewhere.
-    bool linewise = (text.size > 0 && text.str[text.size - 1] == '\n');
-    return Register{text, linewise};
+    ScratchEnd(scratch);
+    return ed->registers[name];
   }
 
   return ed->registers[name];

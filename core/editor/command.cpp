@@ -504,7 +504,7 @@ static void Cmd_delete_word_before(CommandArgs *a) {
 
 // <C-r>{reg} in insert mode, which is how vim pastes without leaving it.
 static void Cmd_insert_register(CommandArgs *a) {
-  Register reg = EditorGetRegister(a->ed, (u8)a->view->vim.pending_register);
+  Register reg = EditorGetRegister(a->ed, RegisterNormalise(a->view->vim.pending_register));
   if (reg.text.size == 0) return;
 
   TempArena scratch = ScratchBegin();
