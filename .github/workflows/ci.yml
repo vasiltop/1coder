@@ -60,3 +60,15 @@ jobs:
         # hang currently names no test at all. Remove once Windows is green.
         env:
           EDITOR_TESTS_TRACE: 1
+
+      # TEMPORARY: the trace pins the death to command_line_resolves_names, the
+      # first test that calls EditorInit (and so the first to reach the LSP
+      # setup this PR added there). msys reports 127 for everything, so go
+      # through cmd for the real status, with a passing test as a control.
+      - name: Diagnose Windows crash
+        if: failure() && runner.os == 'Windows'
+        run: |
+          echo "--- control: a test that passed ---"
+          cmd.exe /c 'build\editor_tests.exe buffer_save_empty_file & echo EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
+          echo "--- the suspect, in isolation ---"
+          cmd.exe /c 'build\editor_tests.exe command_line_resolves_names & echo EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
