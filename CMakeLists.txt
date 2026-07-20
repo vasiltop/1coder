@@ -10,7 +10,9 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
 endif()
 
-add_compile_options(
+# Applied only to our targets so a vendored SDL build is not forced onto our
+# warning set (and so SDL's own flags stay under its control).
+set(EDITOR_COMPILE_OPTIONS
   -Wall -Wextra
   -Wno-unused-parameter
   -Wno-missing-field-initializers
@@ -25,21 +27,40 @@ file(GLOB_RECURSE CORE_SOURCES CONFIGURE_DEPENDS core/*.cpp)
 
 add_library(editor_core STATIC ${CORE_SOURCES})
 target_include_directories(editor_core PUBLIC core)
+target_compile_options(editor_core PRIVATE ${EDITOR_COMPILE_OPTIONS})
 
 # ---------------------------------------------------------------------------
 # editor -- the application. SDL lives only above this line.
-# Optional so headless CI can build and run editor_tests without SDL.
+# Prefers vendored third_party/SDL; falls back to find_package. Optional so
+# headless CI can build and run editor_tests without SDL.
 # ---------------------------------------------------------------------------
+set(EDITOR_SDL_TARGET "")
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/app/main.cpp)
-  find_package(SDL3 CONFIG QUIET)
-  if(SDL3_FOUND)
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/SDL/CMakeLists.txt)
+    set(SDL_SHARED OFF CACHE BOOL "Build SDL shared library" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "Build SDL static library" FORCE)
+    set(SDL_TEST_LIBRARY OFF CACHE BOOL "Build SDL test library" FORCE)
+    add_subdirectory(third_party/SDL EXCLUDE_FROM_ALL)
+    # With SDL_SHARED=OFF, SDL3::SDL3 aliases the static library.
+    set(EDITOR_SDL_TARGET SDL3::SDL3)
+    message(STATUS "Using vendored SDL3 from third_party/SDL")
+  else()
+    find_package(SDL3 CONFIG QUIET)
+    if(SDL3_FOUND)
+      set(EDITOR_SDL_TARGET SDL3::SDL3)
+      message(STATUS "Using system SDL3")
+    endif()
+  endif()
+
+  if(EDITOR_SDL_TARGET)
     file(GLOB_RECURSE APP_SOURCES CONFIGURE_DEPENDS app/*.cpp)
 
     add_executable(editor ${APP_SOURCES})
     target_include_directories(editor PRIVATE app)
     # Vendored single-header libraries are not ours to keep warning-clean.
     target_include_directories(editor SYSTEM PRIVATE third_party)
-    target_link_libraries(editor PRIVATE editor_core SDL3::SDL3)
+    target_compile_options(editor PRIVATE ${EDITOR_COMPILE_OPTIONS})
+    target_link_libraries(editor PRIVATE editor_core ${EDITOR_SDL_TARGET})
   else()
     message(STATUS "SDL3 not found; skipping editor (tests still build)")
   endif()
@@ -54,6 +75,7 @@ file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS tests/*.cpp)
 
 add_executable(editor_tests ${TEST_SOURCES})
 target_include_directories(editor_tests PRIVATE tests)
+target_compile_options(editor_tests PRIVATE ${EDITOR_COMPILE_OPTIONS})
 target_link_libraries(editor_tests PRIVATE editor_core)
 
 add_test(NAME editor_tests COMMAND editor_tests)
