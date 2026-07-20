@@ -32,6 +32,7 @@ enum class BufferKind : u8 {
   Explorer,   // directory tree
   Image,      // an image file, described by its header
   Git,        // git status / diff
+  Compile,    // shell command output
   COUNT
 };
 

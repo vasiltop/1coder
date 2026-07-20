@@ -83,6 +83,15 @@ grid resizes through the same path a window resize takes.
 `<leader>pb` lists buffers, and `<leader>e` opens the file explorer for the
 current file's directory. See [search](search.md) and [explorer](explorer.md).
 
+## Compile
+
+`:compile <command>` runs any shell command and streams its output into a
+`[compile]` buffer. If that buffer is already visible in some window, that
+window is reused; otherwise it opens in a vertical split beside the current
+one (`:vsplit` / `<leader>v`). With no argument it opens the command window
+prefilled with the last command, or `make -k` if none has been run yet.
+`:recompile` and `<leader>rc` rerun the last command.
+
 ## The command window
 
 Opens in insert mode, as `q:i` does in vim. `<Esc>` drops to normal mode where

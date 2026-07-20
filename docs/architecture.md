@@ -6,7 +6,7 @@ The load-bearing decision is the line between `core/` and `app/`:
                     ┌─ tests/    links core only, no SDL, no display
 core (static lib) ──┤
   base/     arena allocator, String8, UTF-8, ranges, cell rects
-  os/       file and directory access
+  os/       file and directory access, process pipes
   text/     gap buffer, line index, undo stack, syntax tokens
   input/    Key / KeyChord types, binding parser, keymap trie
   command/  command identity: the COMMAND_LIST table, name <-> id

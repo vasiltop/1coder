@@ -55,6 +55,7 @@ struct App {
 
   String8 font_path;
   String8 font_face;
+  u32 wake_event;
 };
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,15 @@ void ClipboardWrite(String8 text) {
   TempArena scratch = ScratchBegin();
   SDL_SetClipboardText(PushCStr(scratch.arena, text));
   ScratchEnd(scratch);
+}
+
+void EditorWake(void *user_data) {
+  App *app = (App *)user_data;
+  if (app == nullptr || app->wake_event == 0) return;
+
+  SDL_Event event = {};
+  event.type = app->wake_event;
+  (void)SDL_PushEvent(&event);
 }
 
 // Feeds a text-input event to the editor, one codepoint at a time. SDL has
@@ -249,6 +259,7 @@ int main(int argc, char **argv) {
 
   DrawInit(&app->draw, arena, app->renderer, &app->atlas);
   RenderContextInit(&app->render, &app->draw, &app->atlas);
+  app->wake_event = SDL_RegisterEvents(1);
 
   // ---- editor ----
   i32 width = 0, height = 0;
@@ -258,6 +269,8 @@ int main(int argc, char **argv) {
   app->editor.font_size = font_size;
   app->editor.clipboard.read = ClipboardRead;
   app->editor.clipboard.write = ClipboardWrite;
+  app->editor.wake = EditorWake;
+  app->editor.wake_user_data = app;
 
   // Files named on the command line, each in its own split after the first.
   for (int i = 0; i < file_argc; i += 1) {
@@ -384,6 +397,8 @@ int main(int argc, char **argv) {
     } while (!app->editor.quit && SDL_PollEvent(&event));
 
     if (app->editor.quit) break;
+
+    (void)EditorTick(&app->editor);
 
     // Zoom asks for a new font size; rebuilding the atlas is the app's job.
     if (app->editor.font_size_changed) {

@@ -128,9 +128,19 @@ struct Editor {
 
   ClipboardHooks clipboard;
 
+  // Wakes the app event loop when background work (compile output) arrives, so
+  // SDL_WaitEvent does not sit idle until the next keypress. Optional: tests
+  // leave it null and pump EditorTick themselves.
+  void (*wake)(void *user_data);
+  void *wake_user_data;
+
   String8 cwd;
   String8 status_message;
   Arena *status_arena;  // cleared per message, for the same reason
+
+  // Last command run by :compile / :recompile. Cleared arena, like search.
+  String8 last_compile_command;
+  Arena *compile_arena;
 
   // Font size in pixels. The app owns the atlas, so it watches this and
   // rebuilds when it changes -- which is how zoom stays out of the core.
@@ -170,6 +180,9 @@ struct Editor {
 
 void EditorInit(Editor *ed, Arena *arena, RectS32 screen);
 void EditorDestroy(Editor *ed);
+// Drains background work (compile output). Returns true when the display should
+// redraw. The app calls this every frame; tests call it until idle.
+[[nodiscard]] bool EditorTick(Editor *ed);
 
 // Recomputes every panel rect. Call after a split, a close or a window resize.
 void EditorLayout(Editor *ed);

@@ -1593,6 +1593,72 @@ static void Cmd_explorer_open(CommandArgs *a) {
 
 static void Cmd_explorer_apply(CommandArgs *a) { ExplorerApplyPending(a->ed, a->buffer); }
 
+// ---------------------------------------------------------------------------
+// Compile
+// ---------------------------------------------------------------------------
+
+BufferHandle CompileBufferRun(Editor *ed, String8 command);
+String8 CompilePrefillCommand(const Editor *ed);
+
+static void PromptCompile(Editor *ed) {
+  TempArena scratch = ScratchBegin();
+  String8 prefill = CompilePrefillCommand(ed);
+  String8 line = PushStr8F(scratch.arena, "compile %.*s", (int)prefill.size, (char *)prefill.str);
+  CommandLineOpenWith(ed, line);
+  ScratchEnd(scratch);
+}
+
+// Shows the compile buffer side by side: if some window already displays it,
+// focus that window; otherwise open it in a vertical split (Axis2::X --
+// :vsplit / <leader>v).
+static void ShowCompileBuffer(Editor *ed, View *origin, BufferHandle handle) {
+  if (!ed || handle.index == 0) return;
+
+  Panel *first = PanelFirstLeaf(ed->root_panel);
+  for (Panel *leaf = first; leaf;) {
+    if (leaf->view && BufferHandleEqual(leaf->view->buffer, handle)) {
+      EditorPushJump(ed, origin);
+      EditorFocusPanel(ed, leaf);
+      return;
+    }
+    leaf = PanelNextLeaf(ed->root_panel, leaf);
+    if (leaf == first) break;
+  }
+
+  EditorPushJump(ed, origin);
+  if (!EditorSplit(ed, Axis2::X)) {
+    EditorShowBuffer(ed, handle);
+    return;
+  }
+  EditorShowBuffer(ed, handle);
+}
+
+static void Cmd_compile(CommandArgs *a) {
+  String8 command = Str8SkipChopWhitespace(a->text);
+  if (command.size == 0) {
+    PromptCompile(a->ed);
+    return;
+  }
+
+  BufferHandle handle = CompileBufferRun(a->ed, command);
+  if (handle.index == 0) return;
+  ShowCompileBuffer(a->ed, a->view, handle);
+}
+
+static void Cmd_recompile(CommandArgs *a) {
+  if (a->ed->last_compile_command.size == 0) {
+    PromptCompile(a->ed);
+    return;
+  }
+
+  BufferHandle handle = CompileBufferRun(a->ed, a->ed->last_compile_command);
+  if (handle.index == 0) return;
+  ShowCompileBuffer(a->ed, a->view, handle);
+}
+
+// ---------------------------------------------------------------------------
+// Meta listings
+// ---------------------------------------------------------------------------
 static void Cmd_list_commands(CommandArgs *a) {
   TempArena scratch = ScratchBegin();
   String8List lines = {};

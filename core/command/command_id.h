@@ -195,6 +195,9 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(explorer_parent,       "explorer",              "Open the containing directory",   CommandArg::Path, CmdNone)        \
   X(explorer_open,         "explorer-open",         "Open the entry under the cursor", CommandArg::None, CmdHidden)      \
   X(explorer_apply,        "explorer-apply",        "Apply the pending listing edits", CommandArg::None, CmdHidden)      \
+  /* ---- compile ---- */                                                                                                \
+  X(compile,               "compile",               "Run a shell command in the compile buffer", CommandArg::Text, CmdNone) \
+  X(recompile,             "recompile",             "Rerun the last compile command",  CommandArg::None, CmdNone)        \
   /* ---- display ---- */                                                                                                \
   X(line_numbers_absolute, "number",                "Show absolute line numbers",      CommandArg::None, CmdNone)        \
   X(line_numbers_relative, "relativenumber",        "Show relative line numbers",      CommandArg::None, CmdNone)        \
