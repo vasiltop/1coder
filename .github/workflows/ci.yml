@@ -54,21 +54,31 @@ jobs:
           esac
 
       - name: CI
+        if: runner.os != 'Windows'
         run: just ci
-        # TEMPORARY: the Windows job alternates between exiting 127 immediately
-        # and deadlocking, and the summary only prints after every test, so a
-        # hang currently names no test at all. Remove once Windows is green.
+
+      # TEMPORARY: Windows alternates between dying at command_line_resolves_names
+      # (msys reports 127 for everything, so the real status is unknown) and
+      # deadlocking. A deadlock inside `just ci` gets the job cancelled on
+      # timeout, and cancellation skips failure() steps, so the diagnostics
+      # never run. Drive the steps directly instead, each individually bounded,
+      # so one run yields the real exit status whichever way it goes.
+      # Restore the plain `just ci` for all platforms once Windows is green.
+      - name: CI (Windows, instrumented)
+        if: runner.os == 'Windows'
         env:
           EDITOR_TESTS_TRACE: 1
-
-      # TEMPORARY: the trace pins the death to command_line_resolves_names, the
-      # first test that calls EditorInit (and so the first to reach the LSP
-      # setup this PR added there). msys reports 127 for everything, so go
-      # through cmd for the real status, with a passing test as a control.
-      - name: Diagnose Windows crash
-        if: failure() && runner.os == 'Windows'
         run: |
-          echo "--- control: a test that passed ---"
+          just build
+          echo "=== control: a test that passes, via cmd for the true status ==="
           cmd.exe /c 'build\editor_tests.exe buffer_save_empty_file & echo EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
-          echo "--- the suspect, in isolation ---"
+          echo "=== the suspect in isolation, via cmd ==="
           cmd.exe /c 'build\editor_tests.exe command_line_resolves_names & echo EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
+          echo "=== the suspect, repeated, to show whether it is intermittent ==="
+          for i in 1 2 3 4 5; do
+            cmd.exe /c 'build\editor_tests.exe command_line_resolves_names >nul 2>&1 & echo attempt EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
+          done
+          echo "=== full suite, bounded ==="
+          timeout 300 ./build/editor_tests > full.log 2>&1 || echo "full exit=$?"
+          echo "--- last 25 lines ---"
+          tail -25 full.log || true
