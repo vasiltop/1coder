@@ -4,6 +4,7 @@
 #include "buffers/buf_image.h"
 #include "editor/command.h"
 #include "os/os_file.h"
+#include "text/syntax.h"
 
 // Provided by core/buffers/buf_command.cpp.
 BufferHandle CommandLineBufferOpen(Editor *ed);
@@ -230,6 +231,12 @@ BufferHandle EditorOpenFile(Editor *ed, String8 path) {
     buffer->path = PushStr8Copy(buffer->arena, absolute);
     buffer->name = PushStr8Copy(buffer->arena, Str8PathBase(absolute));
   }
+
+  // Ordinary file buffers get syntax highlighting keyed off the resolved
+  // path's extension. Scratch, command, explorer and image buffers never
+  // reach here -- they are constructed through their own BufferOpen calls --
+  // so nothing else needs to opt out.
+  SyntaxAttach(buffer, absolute);
 
   ScratchEnd(scratch);
   return handle;

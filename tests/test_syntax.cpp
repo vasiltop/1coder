@@ -1,5 +1,8 @@
 #include "editor/buffer_registry.h"
+#include "editor/editor.h"
+#include "os/os_file.h"
 #include "test.h"
+#include "test_tempdir.h"
 #include "text/syntax.h"
 
 // ---------------------------------------------------------------------------
@@ -1353,4 +1356,226 @@ TEST(syntax_incremental_growth_preserves_suffix) {
   CHECK_EQ((int)shifted_sample.kind, (int)suffix_sample.kind);
 
   Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// EditorOpenFile integration (Task 4): ordinary file buffers get syntax
+// highlighting attached once their path is resolved. Scratch, command,
+// explorer, image and other non-File buffers never go through EditorOpenFile
+// and so must stay unattached.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct EditorFixture {
+  Arena *arena;
+  Editor ed;
+  TempDir dir;
+};
+
+EditorFixture MakeEditorFixture(const char *tag) {
+  EditorFixture f = {};
+  f.arena = ArenaAlloc(MB(16));
+  f.dir = MakeTempDir(tag);
+  EditorInit(&f.ed, f.arena, RectS32{0, 0, 80, 25});
+  return f;
+}
+
+void Destroy(EditorFixture *f) {
+  EditorDestroy(&f->ed);
+  Destroy(&f->dir);
+  ArenaRelease(f->arena);
+}
+
+}  // namespace
+
+TEST(syntax_editor_open_attaches_cpp_language) {
+  EditorFixture f = MakeEditorFixture("syntax_editor_open_cpp");
+
+  const char *on_disk = "int main() {\n  return 0;\n}\n";
+  String8 path = TempPath(&f.dir, "main.cpp");
+  CHECK(OsFileWrite(path, Str8C(on_disk)));
+
+  BufferHandle handle = EditorOpenFile(&f.ed, path);
+  Buffer *buffer = BufferFromHandle(&f.ed.buffers, handle);
+  CHECK(buffer != nullptr);
+  CHECK_EQ((u32)buffer->kind, (u32)BufferKind::File);
+  CHECK(buffer->syntax.language != nullptr);
+  CHECK_EQ((int)buffer->syntax.language->id, (int)LanguageId::Cpp);
+  CHECK(buffer->tokens.count > 0);
+
+  // BufferLoadFile strips the file's final newline before it ever reaches the
+  // buffer, so the expected offset is computed against that stripped text --
+  // not the on-disk literal above, which still has it.
+  const char *buffered = "int main() {\n  return 0;\n}";
+  u64 return_start = Off(buffered, "return");
+  const Token *tok = nullptr;
+  for (u64 i = 0; i < buffer->tokens.count; i += 1) {
+    if (buffer->tokens.tokens[i].start == return_start) {
+      tok = &buffer->tokens.tokens[i];
+      break;
+    }
+  }
+  CHECK(tok != nullptr);
+  CHECK_EQ((int)tok->kind, (int)TokenKind::Keyword);
+
+  Destroy(&f);
+}
+
+TEST(syntax_editor_open_unknown_extension_is_fallback) {
+  EditorFixture f = MakeEditorFixture("syntax_editor_open_unknown_ext");
+
+  const char *text = "return 1;";
+  String8 path = TempPath(&f.dir, "notes.xyz");
+  CHECK(OsFileWrite(path, Str8C(text)));
+
+  BufferHandle handle = EditorOpenFile(&f.ed, path);
+  Buffer *buffer = BufferFromHandle(&f.ed.buffers, handle);
+  CHECK(buffer != nullptr);
+  CHECK(buffer->syntax.language != nullptr);
+  CHECK_EQ((int)buffer->syntax.language->id, (int)LanguageId::Fallback);
+
+  // The fallback language still recognizes a small generic keyword set, so
+  // "return" highlights even without a known extension.
+  u64 return_start = Off(text, "return");
+  TokenKind kind = TokenKindAtOffset(&buffer->tokens, return_start);
+  CHECK_EQ((int)kind, (int)TokenKind::Keyword);
+
+  Destroy(&f);
+}
+
+TEST(syntax_editor_open_extensionless_file_is_fallback) {
+  EditorFixture f = MakeEditorFixture("syntax_editor_open_no_ext");
+
+  String8 path = TempPath(&f.dir, "README");
+  CHECK(OsFileWrite(path, Str8Lit("hello world\n")));
+
+  BufferHandle handle = EditorOpenFile(&f.ed, path);
+  Buffer *buffer = BufferFromHandle(&f.ed.buffers, handle);
+  CHECK(buffer != nullptr);
+  CHECK(buffer->syntax.language != nullptr);
+  CHECK_EQ((int)buffer->syntax.language->id, (int)LanguageId::Fallback);
+
+  Destroy(&f);
+}
+
+TEST(syntax_editor_open_new_file_path_attaches_language) {
+  EditorFixture f = MakeEditorFixture("syntax_editor_open_new_file");
+
+  // A path that does not exist yet is still resolved and attached, so typing
+  // into a brand new `:e foo.py` buffer is highlighted immediately.
+  String8 path = TempPath(&f.dir, "fresh.py");
+  BufferHandle handle = EditorOpenFile(&f.ed, path);
+  Buffer *buffer = BufferFromHandle(&f.ed.buffers, handle);
+  CHECK(buffer != nullptr);
+  CHECK(buffer->syntax.language != nullptr);
+  CHECK_EQ((int)buffer->syntax.language->id, (int)LanguageId::Python);
+
+  Destroy(&f);
+}
+
+TEST(syntax_editor_init_scratch_and_command_buffers_unattached) {
+  EditorFixture f = MakeEditorFixture("syntax_editor_init_unattached");
+
+  Buffer *scratch = EditorFocusedBuffer(&f.ed);
+  CHECK(scratch != nullptr);
+  CHECK_EQ((u32)scratch->kind, (u32)BufferKind::Scratch);
+  CHECK(scratch->syntax.language == nullptr);
+  CHECK_EQ(scratch->tokens.count, (u64)0);
+
+  Buffer *cmd = BufferFromHandle(&f.ed.buffers, f.ed.command_buffer);
+  CHECK(cmd != nullptr);
+  CHECK_EQ((u32)cmd->kind, (u32)BufferKind::Command);
+  CHECK(cmd->syntax.language == nullptr);
+  CHECK_EQ(cmd->tokens.count, (u64)0);
+
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Token lookup boundaries (Task 4): TokenKindAtOffset / TokenIndexAtOffset
+// against an explicit, hand-built sorted TokenArray -- no buffer or lexer
+// involved, just the seam the renderer walks per glyph.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+Token MakeToken(u64 start, u64 end, TokenKind kind) {
+  Token t = {};
+  t.start = start;
+  t.end = end;
+  t.kind = kind;
+  return t;
+}
+
+}  // namespace
+
+TEST(token_lookup_before_first_token_is_default) {
+  Token arr[] = {MakeToken(10, 20, TokenKind::Keyword), MakeToken(30, 40, TokenKind::Type)};
+  TokenArray tokens = {arr, ArrayCount(arr)};
+
+  CHECK_EQ((int)TokenKindAtOffset(&tokens, 5), (int)TokenKind::Default);
+  CHECK_EQ(TokenIndexAtOffset(&tokens, 5), (u64)0);
+}
+
+TEST(token_lookup_inclusive_start_boundary) {
+  Token arr[] = {MakeToken(10, 20, TokenKind::Keyword), MakeToken(30, 40, TokenKind::Type)};
+  TokenArray tokens = {arr, ArrayCount(arr)};
+
+  CHECK_EQ((int)TokenKindAtOffset(&tokens, 10), (int)TokenKind::Keyword);
+  CHECK_EQ(TokenIndexAtOffset(&tokens, 10), (u64)0);
+}
+
+TEST(token_lookup_inside_first_token) {
+  Token arr[] = {MakeToken(10, 20, TokenKind::Keyword), MakeToken(30, 40, TokenKind::Type)};
+  TokenArray tokens = {arr, ArrayCount(arr)};
+
+  CHECK_EQ((int)TokenKindAtOffset(&tokens, 15), (int)TokenKind::Keyword);
+  CHECK_EQ(TokenIndexAtOffset(&tokens, 15), (u64)0);
+}
+
+TEST(token_lookup_exclusive_end_boundary_is_default) {
+  Token arr[] = {MakeToken(10, 20, TokenKind::Keyword), MakeToken(30, 40, TokenKind::Type)};
+  TokenArray tokens = {arr, ArrayCount(arr)};
+
+  // offset == first token's end: the token has already ended, so this lands
+  // in the gap, and the index moves past it to the next candidate.
+  CHECK_EQ((int)TokenKindAtOffset(&tokens, 20), (int)TokenKind::Default);
+  CHECK_EQ(TokenIndexAtOffset(&tokens, 20), (u64)1);
+}
+
+TEST(token_lookup_gap_between_tokens_is_default) {
+  Token arr[] = {MakeToken(10, 20, TokenKind::Keyword), MakeToken(30, 40, TokenKind::Type)};
+  TokenArray tokens = {arr, ArrayCount(arr)};
+
+  CHECK_EQ((int)TokenKindAtOffset(&tokens, 25), (int)TokenKind::Default);
+  CHECK_EQ(TokenIndexAtOffset(&tokens, 25), (u64)1);
+}
+
+TEST(token_lookup_second_token_start_boundary) {
+  Token arr[] = {MakeToken(10, 20, TokenKind::Keyword), MakeToken(30, 40, TokenKind::Type)};
+  TokenArray tokens = {arr, ArrayCount(arr)};
+
+  CHECK_EQ((int)TokenKindAtOffset(&tokens, 30), (int)TokenKind::Type);
+  CHECK_EQ(TokenIndexAtOffset(&tokens, 30), (u64)1);
+}
+
+TEST(token_lookup_after_last_token_is_default) {
+  Token arr[] = {MakeToken(10, 20, TokenKind::Keyword), MakeToken(30, 40, TokenKind::Type)};
+  TokenArray tokens = {arr, ArrayCount(arr)};
+
+  // Exact end boundary of the last token.
+  CHECK_EQ((int)TokenKindAtOffset(&tokens, 40), (int)TokenKind::Default);
+  CHECK_EQ(TokenIndexAtOffset(&tokens, 40), (u64)2);
+
+  // Well past the last token.
+  CHECK_EQ((int)TokenKindAtOffset(&tokens, 100), (int)TokenKind::Default);
+  CHECK_EQ(TokenIndexAtOffset(&tokens, 100), (u64)2);
+}
+
+TEST(token_lookup_empty_array_is_default) {
+  TokenArray tokens = {nullptr, 0};
+
+  CHECK_EQ((int)TokenKindAtOffset(&tokens, 0), (int)TokenKind::Default);
+  CHECK_EQ(TokenIndexAtOffset(&tokens, 0), (u64)0);
 }
