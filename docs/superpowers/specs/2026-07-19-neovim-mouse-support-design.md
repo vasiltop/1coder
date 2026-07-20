@@ -13,7 +13,7 @@
 - Route wheel scrolling from each wheel event's own coordinates, not stored hover or focused-pane state, with vertical, horizontal, and `Shift`-page behavior.
 - Preserve fractional wheel deltas so high-DPI trackpads scroll smoothly.
 - Support command-line cursor placement, panel status-line focus, and split resizing from vertical edges and status-line boundaries.
-- Cancel transient mouse state cleanly on release, focus loss, shutdown, or leaving an active capture.
+- Cancel transient mouse state according to the lifecycle defined below: capture end finalizes a gesture, while focus loss and shutdown can cancel it.
 - Support high-DPI pixel-to-cell translation in SDL without letting SDL own any editing rules.
 
 ## Non-goals
@@ -37,11 +37,13 @@ Add `core/input/mouse.h` as the platform-neutral event and state definition. It 
 - mouse button and wheel enums,
 - click count,
 - modifier snapshot,
-- pixel and cell coordinates in a normalized form,
+- continuous grid coordinates in cell units (`grid_x`, `grid_y`) plus derived integer cell coordinates,
 - hit-region identity,
 - and a transient `MouseState` used while a button is down or wheel motion is being accumulated.
 
 `MouseState` is intentionally short-lived. It records only the current capture, the pointer anchor, the last hovered pane for visual hover or drag-adjacent state, the pre-selection mode, accumulated fractional wheel deltas, and any resize target. Nothing in it is serialized or persisted.
+
+Hit testing and resize handles use the continuous grid coordinates; derived integer cell coordinates are used for buffer text placement and other cell-snapped gestures.
 
 ### Core behavior
 
@@ -56,6 +58,7 @@ Add `core/editor/mouse.cpp` and route every mouse event through a single `Editor
 ### SDL translation
 
 `app/main.cpp` and the SDL platform layer only translate SDL events into `MouseEvent` values. They also perform high-DPI pixel-to-cell conversion using the current render metrics, but they do not decide what a click means.
+SDL computes `grid_x` / `grid_y` from window pixels using the current glyph width and line height; core tests synthesize those values directly.
 
 Mouse capture in SDL is short-lived: it is acquired only while a drag or resize is active and released as soon as the core says the gesture is complete or canceled.
 
@@ -65,6 +68,7 @@ SDL translation explicitly handles mouse button, wheel, motion, window enter/lea
 - wheel routing uses each wheel event's own `mouse_x` / `mouse_y` and never falls back to stored hover;
 - window leave may clear visual hover or drag-adjacent state only when no capture is active;
 - focus loss always cancels any active capture.
+There is no separate pixel slop or platform-dependent fallback.
 
 ### Hit regions
 
@@ -78,7 +82,9 @@ Use explicit hit regions instead of implicit whole-window behavior:
 - and non-interactive background.
 
 The core resolves the region first, then decides the behavior. Nested split boundary discovery walks the split tree so the correct vertical-edge or status-line boundary is chosen even inside multi-level layouts.
-At any shared boundary, vertical split-edge hit testing takes precedence over the gutter.
+At any shared boundary, the vertical split-edge handle takes precedence over buffer, gutter, and status-line regions.
+The vertical split-edge handle is the strip within 0.125 cell of an internal X boundary (`abs(grid_x - boundary_x) <= 0.125`) across that boundary's span.
+A no-drag press on that handle belongs to the pane whose rect starts at `boundary_x` (the right/after pane).
 At a cell where a vertical split edge intersects a panel status line, the vertical split edge wins; a plain click focuses the pane on the owning side only if no drag occurs, and no horizontal status-line resize is armed at that corner.
 
 ## Behavior
@@ -108,7 +114,9 @@ Selections always resolve through UTF-8-safe byte offsets; pointer placement nev
 - **Replace mode:** same as Insert for mouse semantics, but the restored mode after a mouse selection is Replace rather than Insert.
 - **Command-line mode:** only the global bottom command-line/status row is active; clicking places the command-line cursor there, drag selection is supported there, and middle-click inserts clipboard text into the command line.
 
-When a selection starts in Insert or Replace, the editor snapshots the prior mode, enters Visual for the drag, and restores the exact prior insert mode when Visual ends or is canceled.
+When a selection starts in Insert or Replace, the editor snapshots the prior mode and enters temporary Visual only after the drag threshold is crossed. A press/release that never becomes a drag stays in the original mode.
+
+Once a drag crosses the threshold and enters temporary Visual, button release finalizes the range but leaves the editor in Visual with the selection visible. The remembered Insert or Replace mode stays pending and is restored only when that Visual selection is later ended or canceled, including a plain click that collapses it, a replacement or paste that consumes it, keyboard Visual exit, focus-loss cancellation, or shutdown.
 
 ### Clipboard put
 
@@ -131,25 +139,26 @@ Wheel events over the global command-line/status row are always no-ops; they nev
 - The global bottom command-line/status row is command-line only; it never resizes panes.
 - Clicking the command line places the command-line cursor at the clicked cell on that global row.
 - A panel status line focuses the pane attached to that line.
-- A panel status line only arms the resize between the panes above and below it when there is a geometrically adjacent panel below; otherwise it behaves as focus only.
+- A panel status-line horizontal resize uses the entire status-line cell row only where a geometrically adjacent pane begins on the next row; otherwise it is focus only.
+- Existing vertical-edge precedence resolves any intersection with a split edge.
 - Dragging on a vertical edge resizes the left/right split.
 - Dragging on a status-line boundary resizes the top/bottom split only when the hit region is a panel status line with a panel below.
 
-Split resizing clamps to each pane's minimum size. If the requested delta would violate the minimum, the resize stops at the clamp point and the capture stays active until release.
+Split resizing clamps each adjacent direct child to at least 2 full panel cells along the resized axis before leaf chrome is subtracted. Horizontal-width splits keep at least 2 columns per child; vertical-height splits keep at least 2 rows per child, meaning one panel status row plus at least one content row for leaves. If the parent extent cannot satisfy both minima, resizing is a no-op while capture remains active until release. Nested descendants retain their existing proportions; only the two direct children participating in the resize are constrained.
 
 ## Edge handling
 
 - **Outside events:** pointer motion or clicks outside any supported region do nothing except update visual hover if the app tracks it.
 - **Motion without press:** pointer motion without an active press never changes focus.
 - **Captured drags:** once a drag or resize begins, movement remains captured until release, cancellation, or loss of focus.
-- **Release:** ending the active button finalizes selection or resize and clears transient state.
+- **Release:** ending the active button finalizes a drag selection or resize but does not exit temporary Visual; the pending Insert or Replace mode stays restored only when that selection later ends or is canceled.
 - **Window enter/leave:** enter may update visual hover or drag-adjacent state; leave may clear that state only when no capture is active.
 - **Focus loss or shutdown:** cancel any active capture, restore the prior mode if a transient Visual state was in progress, and leave no half-finished resize behind.
 - **Short or empty lines:** cursor placement and selection clamp to legal line bounds, including the empty-line case.
 - **UTF-8:** hit testing uses line-index translation and byte-boundary snapping so multi-byte text remains valid.
 - **Read-only buffers:** selection and focus changes still work; editing gestures such as middle-click put become no-ops.
 - **Missing clipboard:** middle-click put is a no-op and does not disturb the current selection.
-- **Resize minimums:** resizing clamps rather than crossing the minimum cell size for a pane.
+- **Resize minimums:** the 2-cell direct-child constraint defined above is the only resize minimum.
 
 ## Testing and documentation strategy
 
