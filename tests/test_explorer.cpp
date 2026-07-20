@@ -911,3 +911,20 @@ TEST(explorer_enter_on_an_image_opens_an_image_buffer) {
 
   Destroy(&f);
 }
+
+TEST(explorer_leader_e_opens_the_containing_directory) {
+  EditorFixture f = MakeEditorFixture("explorer_leader");
+
+  BufferHandle file = EditorOpenFile(&f.ed, TempPath(&f.dir, "beta.txt"));
+  EditorShowBuffer(&f.ed, file);
+
+  // <leader>e is the discoverable spelling of `-`; leader is space.
+  Keys(&f, " e");
+
+  Buffer *buffer = FocusedBuffer(&f);
+  CHECK_EQ((u32)buffer->kind, (u32)BufferKind::Explorer);
+  CHECK_STR(ExplorerBufferDir(buffer), OsPathAbsolute(f.arena, f.dir.path));
+  CHECK_STR(CursorEntryName(&f), Str8Lit("beta.txt"));
+
+  Destroy(&f);
+}

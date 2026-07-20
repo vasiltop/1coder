@@ -159,6 +159,10 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, "<leader>pg", CommandId::live_grep);
   KeymapBind(normal, "<leader>pb", CommandId::list_buffers);
 
+  // The explorer for the containing directory. `-` does the same thing; this is
+  // the discoverable spelling of it.
+  KeymapBind(normal, "<leader>e", CommandId::explorer_parent);
+
   // ---- text objects ----
   // `i` and `a` are prefixes: the chord after them names the object. They apply
   // in operator-pending mode (`ciw`) and in visual mode (`vi(`), but mean
