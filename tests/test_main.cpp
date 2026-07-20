@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 namespace {
@@ -35,6 +36,10 @@ void TestFail(const char *file, int line, const char *fmt, ...) {
 int main(int argc, char **argv) {
   // Optional substring filter: ./editor_tests gap_buffer
   const char *filter = (argc > 1) ? argv[1] : nullptr;
+  // The summary only prints once every test has finished, and stdout is block
+  // buffered into a pipe under CI, so a test that deadlocks leaves no trace of
+  // which one it was. EDITOR_TESTS_TRACE names each test before running it.
+  const bool trace = getenv("EDITOR_TESTS_TRACE") != nullptr;
 
   u32 run = 0, passed = 0, failed = 0, skipped = 0;
 
@@ -46,6 +51,10 @@ int main(int argc, char **argv) {
 
     g_current_failures = 0;
     run += 1;
+    if (trace) {
+      fprintf(stderr, "[run] %s\n", t->name);
+      fflush(stderr);
+    }
     t->fn();
 
     if (g_current_failures == 0) {

@@ -55,16 +55,8 @@ jobs:
 
       - name: CI
         run: just ci
-
-      # TEMPORARY: the Windows job exits 127 the instant it launches the freshly
-      # built editor_tests.exe, which git-bash also reports when the loader
-      # cannot start an image that does exist. Capture what is actually on disk
-      # and what the loader wants before guessing at another fix. Remove once
-      # the Windows failure is understood.
-      - name: Diagnose Windows launch failure
-        if: failure() && runner.os == 'Windows'
-        run: |
-          echo "--- true Windows exit code (bypasses the msys shell) ---"
-          cmd.exe /c 'build\editor_tests.exe & echo EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
-          echo "--- zero-match filter: separates a load failure from a crashing test ---"
-          cmd.exe /c 'build\editor_tests.exe zzz_matches_nothing & echo EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
+        # TEMPORARY: the Windows job alternates between exiting 127 immediately
+        # and deadlocking, and the summary only prints after every test, so a
+        # hang currently names no test at all. Remove once Windows is green.
+        env:
+          EDITOR_TESTS_TRACE: 1
