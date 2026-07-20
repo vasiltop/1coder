@@ -33,6 +33,7 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(global, "<C-w>l", CommandId::focus_right);
   KeymapBind(global, "<C-w>c", CommandId::close_window);
   KeymapBind(global, "<C-w>o", CommandId::only_window);
+  KeymapBind(global, "<C-f>", CommandId::only_window);
 
   // Zoom, in every mode. The usual window-manager spellings rather than
   // anything vim has an opinion about.

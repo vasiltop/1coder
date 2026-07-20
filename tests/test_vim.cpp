@@ -1770,6 +1770,27 @@ TEST(vim_close_window) {
   Destroy(&f);
 }
 
+TEST(vim_only_window_keeps_focus_editable) {
+  Fixture f = MakeFixture("hello");
+
+  Type(&f, "<C-w>v");
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
+  View *kept = EditorFocusedView(&f.ed);
+
+  // :only / <C-w>o folds the surviving leaf into its parent. Focus must follow
+  // the view onto that live panel, or later edits go nowhere.
+  Type(&f, "<C-w>o");
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 1);
+  CHECK(f.ed.focused_panel == f.ed.root_panel);
+  CHECK(PanelIsLeaf(f.ed.focused_panel));
+  CHECK(EditorFocusedView(&f.ed) == kept);
+
+  Type(&f, "ix");
+  CHECK_STR(TextOf(&f), Str8Lit("xhello"));
+
+  Destroy(&f);
+}
+
 TEST(vim_leader_bindings) {
   Fixture f = MakeFixture("hello");
 
