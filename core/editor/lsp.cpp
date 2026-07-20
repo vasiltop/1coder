@@ -580,6 +580,51 @@ void EditorLspOnFileBufferOpened(Editor *ed, Buffer *buffer) {
   (void)EnsureDocument(state, buffer);
 }
 
+void EditorLspOnCwdChanged(Editor *ed) {
+  EditorLsp *state = GetState(ed);
+  if (state == nullptr || !state->enabled || ed == nullptr) return;
+
+  // A cwd change can make previously missing servers resolvable (PATH / local
+  // installs), and can also imply that open buffers should bind to a different
+  // project root after markers or path context shift. Drop the negative cache
+  // and re-evaluate every attachable buffer.
+  state->missing_servers.clear();
+
+  for (BufferHandle handle = BufferFirst(&ed->buffers); handle.index != 0;
+       handle = BufferNext(&ed->buffers, handle)) {
+    Buffer *buffer = BufferFromHandle(&ed->buffers, handle);
+    if (!IsAttachableBuffer(buffer)) continue;
+
+    TempArena scratch = ScratchBegin();
+    LspLanguage language = {};
+    String8 language_id = {};
+    if (!LspLanguageForPath(buffer->path, &language, &language_id)) {
+      ScratchEnd(scratch);
+      continue;
+    }
+
+    String8 desired_root = LspFindProjectRoot(scratch.arena, language, buffer->path);
+    EditorLspDocument *document = FindDocument(state, buffer);
+    if (document != nullptr && document->session != nullptr) {
+      if (!Str8Match(document->session->root, desired_root)) {
+        SendDidClose(state, document);
+        EraseDocument(state, handle);
+        document = nullptr;
+      } else if (LspClientGetState(&document->session->client) == LspClientState::Failed) {
+        (void)RestartFailedSession(state, document->session);
+        ScratchEnd(scratch);
+        continue;
+      } else {
+        ScratchEnd(scratch);
+        continue;
+      }
+    }
+
+    (void)EnsureDocument(state, buffer);
+    ScratchEnd(scratch);
+  }
+}
+
 void EditorLspBeforeBufferEdit(Editor *ed, Buffer *buffer, RangeU64 old_range, String8 new_text,
                                i64 next_version) {
   EditorLsp *state = GetState(ed);
