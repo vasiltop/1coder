@@ -52,11 +52,13 @@ void RunMotion(CommandArgs *a, MotionProc proc, bool keep_column = false, u32 ar
                            vim->pending_operator != OperatorKind::None);
 
   if (!motion.valid) {
-    // A motion that could not move aborts the operator rather than acting on
-    // an empty range.
     if (operator_pending) {
+      OperatorKind op = vim->pending_operator;
       vim->pending_operator = OperatorKind::None;
       vim->mode = VimMode::Normal;
+      if (op == OperatorKind::Change) {
+        EnterInsertMode(ed, view, buffer, view->cursor);
+      }
     }
     return;
   }
@@ -65,6 +67,14 @@ void RunMotion(CommandArgs *a, MotionProc proc, bool keep_column = false, u32 ar
     OperatorKind op = vim->pending_operator;
     RangeU64 range = VimRangeFromMotion(buffer, view->cursor, motion);
     bool linewise = VimMotionIsLinewise(motion);
+
+    // Vim's exclusive-to-linewise promotion: an exclusive motion spanning
+    // exactly one byte on an empty source line becomes linewise.
+    if (!linewise && motion.kind == MotionKind::Exclusive
+        && range.max == range.min + 1
+        && BufferLineEnd(buffer, BufferLineFromOffset(buffer, range.min)) == range.min) {
+      linewise = true;
+    }
 
     if (cw_trim && !linewise && range.max > range.min) {
       u8 start_char = BufferByteAt(buffer, range.min);

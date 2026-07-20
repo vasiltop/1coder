@@ -479,6 +479,11 @@ TextObjectResult TextObjectDelimited(const Buffer *b, u64 pos, u8 open_ch, u8 cl
     if (p == 0) break;
     p = BufferPrevCodepoint(b, p);
   }
+  if (open == size) {
+    for (u64 p = pos; p < size; p = BufferNextCodepoint(b, p)) {
+      if (BufferByteAt(b, p) == open_ch) { open = p; break; }
+    }
+  }
   if (open == size) return TextObjectResult{RangeU64{pos, pos}, false, false};
 
   depth = 0;

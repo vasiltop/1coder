@@ -24,6 +24,8 @@ struct UndoRecord {
   u64 cursor_after;
   u32 group;
   u64 text_arena_pos;  // arena position before this record's text was stored
+  bool fn_before;      // buffer->final_newline before this edit
+  bool fn_after;       // buffer->final_newline after this edit (may be patched)
 };
 
 // A contiguous run of records forming one undoable action. Records are in the
@@ -31,7 +33,8 @@ struct UndoRecord {
 struct UndoStep {
   UndoRecord *records;
   u64 count;
-  u64 cursor;  // where the cursor belongs after this step
+  u64 cursor;
+  bool final_newline;
 };
 
 struct UndoStack {
@@ -42,6 +45,7 @@ struct UndoStack {
   u32 next_group;
   u32 open_group;
   b32 group_open;
+  u64 group_start_count;
   Arena *record_arena;  // exclusive to the record array, so it grows in place
   Arena *text_arena;    // holds record text; popped when redo history is discarded
   u64 base_pos;
@@ -64,7 +68,7 @@ void UndoEndGroup(UndoStack *undo);
 // may pass views into the buffer being edited. Pushing discards any redo
 // history, which is what makes editing after an undo behave as expected.
 void UndoPush(UndoStack *undo, RangeU64 range, String8 old_text, String8 new_text,
-              u64 cursor_before, u64 cursor_after);
+              u64 cursor_before, u64 cursor_after, bool fn_before = false, bool fn_after = false);
 
 [[nodiscard]] inline bool UndoCanUndo(const UndoStack *undo) { return undo->pos > 0; }
 [[nodiscard]] inline bool UndoCanRedo(const UndoStack *undo) { return undo->pos < undo->count; }

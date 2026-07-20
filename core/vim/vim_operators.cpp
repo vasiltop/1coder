@@ -73,6 +73,7 @@ void VimYankRange(Editor *ed, View *view, Buffer *buffer, RangeU64 range, bool l
                   bool from_yank) {
   TempArena scratch = ScratchBegin();
   String8 text = BufferTextRange(scratch.arena, buffer, range);
+  if (linewise && text.size == 0 && (from_yank || buffer->final_newline)) text = Str8Lit("\n");
 
   u8 name = RegisterNormalise(view->vim.pending_register);
   EditorSetRegister(ed, name, text, linewise);
@@ -105,8 +106,6 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
     case OperatorKind::Delete: {
       VimYankRange(ed, view, buffer, range, linewise);
 
-      // Detect whether the range crosses a line boundary BEFORE the delete so
-      // we can reason about what nvim does with final_newline afterwards.
       u64 del_start_line = BufferLineFromOffset(buffer, range.min);
       u64 del_end_line   = (range.max > range.min)
                                ? BufferLineFromOffset(buffer, range.max - 1)
@@ -116,20 +115,14 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
 
       BufferDelete(ed, buffer, range, view->cursor, range.min);
 
-      // Only update final_newline when the buffer is empty after the delete.
-      // cross-line (linewise or multi-line charwise): all lines removed → ""
-      // single-line charwise that actually deleted: empty line remains → "\n"
-      // single-line charwise no-op on already-empty buffer: leave unchanged
       if (BufferSize(buffer) == 0) {
         if (cross_line)
-          buffer->final_newline = false;
+          BufferSetFinalNewline(buffer, false);
         else if (size_before > 0)
-          buffer->final_newline = true;
+          BufferSetFinalNewline(buffer, true);
       }
 
       if (linewise) {
-        // The cursor lands on whichever line moved up into the deleted one,
-        // keeping its column.
         u64 line = Min(BufferLineFromOffset(buffer, range.min), BufferLineCount(buffer) - 1);
         return BufferOffsetFromColumn(buffer, line, column);
       }
@@ -261,9 +254,9 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
         if (text.str[k] == '\n') { has_newline = true; break; }
       }
       if (!has_newline) {
-        cursor = at + text.size - 1;
+        cursor = BufferPrevCodepoint(buffer, at + text.size);
       } else if (after && text.str[text.size - 1] == '\n') {
-        cursor = at + text.size;
+        cursor = at;
       } else {
         cursor = at;
       }
@@ -283,6 +276,21 @@ u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool 
 
   // Capture cursor codepoint-column before any edits.
   u64 old_col = BufferColumnFromOffset(buffer, view->cursor);
+
+  // For <<: capture the end virtual-column of the cursor character so we can
+  // land on the last codepoint whose end-vcol does not exceed it after dedent.
+  u64 old_end_vcol = 0;
+  if (!indent) {
+    u64 cur_line = BufferLineFromOffset(buffer, view->cursor);
+    RangeU64 clr = BufferLineRange(buffer, cur_line);
+    u64 vcol = 0;
+    for (u64 p = clr.min; p < clr.max; p = BufferNextCodepoint(buffer, p)) {
+      u8 c = BufferByteAt(buffer, p);
+      vcol += (c == '\t') ? ((vcol / kTabStop + 1) * kTabStop - vcol) : 1;
+      if (p == view->cursor) { old_end_vcol = vcol; break; }
+    }
+    if (old_end_vcol == 0) old_end_vcol = vcol + 1;
+  }
 
   // For >>: count leading-whitespace codepoints on the first line so we can
   // compute min(old_col, old_first_nonblank) after the tab is prepended.
@@ -335,14 +343,20 @@ u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool 
     return BufferOffsetFromColumn(buffer, first, Min(old_col, old_first_nonblank));
   }
 
-  // After <<: cursor always lands at the first non-blank (Neovim parity).
+  // After <<: land on the last codepoint whose end virtual-column does not
+  // exceed the cursor's pre-dedent end virtual-column.
   {
     RangeU64 fr = BufferLineRange(buffer, first);
-    u64 fnb = fr.min;
-    while (fnb < fr.max && (BufferByteAt(buffer, fnb) == ' ' ||
-                             BufferByteAt(buffer, fnb) == '\t'))
-      fnb++;
-    return fnb;
+    u64 best = fr.min;
+    u64 vcol = 0;
+    for (u64 p = fr.min; p < fr.max; p = BufferNextCodepoint(buffer, p)) {
+      u8 c = BufferByteAt(buffer, p);
+      u64 w = (c == '\t') ? ((vcol / kTabStop + 1) * kTabStop - vcol) : 1;
+      if (vcol + w > old_end_vcol) break;
+      vcol += w;
+      best = p;
+    }
+    return best;
   }
 }
 
