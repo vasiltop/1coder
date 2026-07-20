@@ -214,7 +214,7 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(line_numbers_off,      "nonumber",              "Hide line numbers",               CommandArg::None, CmdNone)        \
   /* ---- meta ---- */                                                                                                   \
   X(list_commands,         "commands",              "List every command",              CommandArg::None, CmdNone)        \
-  X(list_buffers,          "buffers",               "List open buffers",               CommandArg::None, CmdNone)        \
+  X(list_buffers,          "buffers",               "Pick an open buffer",             CommandArg::None, CmdNone)        \
   X(list_bindings,         "bindings",              "List key bindings",               CommandArg::None, CmdNone)        \
   /* ---- command window ---- */                                                                                         \
   X(command_line_open,     "command-line-open",     "Open the command window",         CommandArg::None, CmdHidden)      \

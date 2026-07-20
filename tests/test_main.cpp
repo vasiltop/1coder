@@ -5,6 +5,38 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_MSC_VER)
+#  include <crtdbg.h>
+#endif
+
+namespace {
+
+// The MSVC debug CRT reports corruption and failed assertions through a modal
+// dialog by default. There is nobody to dismiss it on a build server, so the
+// run blocks until the job times out with nothing written to the log -- which
+// is exactly how this suite has been failing on Windows. Route the reports to
+// stderr so they are printed and the process dies promptly instead.
+//
+// EDITOR_TESTS_HEAPCHECK additionally validates the whole heap on every
+// allocation, which turns a delayed STATUS_HEAP_CORRUPTION into a report
+// naming the block that was overrun. It is very slow, so it stays opt-in.
+void ConfigureCrtDiagnostics() {
+#if defined(_MSC_VER)
+  _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+  _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+  _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+  if (getenv("EDITOR_TESTS_HEAPCHECK") != nullptr) {
+    _CrtSetDbgFlag(_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG) | _CRTDBG_ALLOC_MEM_DF |
+                   _CRTDBG_CHECK_ALWAYS_DF);
+  }
+#endif
+}
+
+}  // namespace
+
 namespace {
 
 // Zero-initialized before any registrar runs, so registration order is safe.
@@ -34,6 +66,8 @@ void TestFail(const char *file, int line, const char *fmt, ...) {
 }
 
 int main(int argc, char **argv) {
+  ConfigureCrtDiagnostics();
+
   // Optional substring filter: ./editor_tests gap_buffer
   const char *filter = (argc > 1) ? argv[1] : nullptr;
   // The summary only prints once every test has finished, and stdout is block

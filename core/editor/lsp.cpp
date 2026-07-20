@@ -47,7 +47,18 @@ struct EditorLsp {
 
 namespace {
 
-EditorLsp *GetState(Editor *ed) { return ed ? ed->lsp : nullptr; }
+// EditorLspInit records a back-pointer to the Editor, but nothing stops the
+// Editor from being relocated afterwards -- a fixture that builds one and
+// returns it by value does exactly that whenever the compiler declines to
+// elide the copy, leaving the back-pointer aimed at a dead frame. Teardown
+// then writes through it (see StopAndClear), which on MSVC Debug corrupted the
+// heap and took the whole suite down. Every entry point arrives here holding
+// the live Editor, so re-seat the pointer rather than trusting init's copy.
+EditorLsp *GetState(Editor *ed) {
+  if (ed == nullptr || ed->lsp == nullptr) return nullptr;
+  ed->lsp->editor = ed;
+  return ed->lsp;
+}
 
 String8 StringView(const std::string &text) { return Str8C(text.c_str()); }
 

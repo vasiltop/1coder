@@ -597,7 +597,11 @@ TEST(listing_buffers_and_bindings) {
   Fixture f = MakeFixture("hello");
 
   CHECK(CommandExecLine(&f.ed, Str8Lit("buffers")));
-  String8 buffers = BufferTextAll(f.arena, EditorFocusedBuffer(&f.ed));
+  Buffer *picker = EditorFocusedBuffer(&f.ed);
+  CHECK_STR(picker->name, Str8Lit("[buffers]"));
+  CHECK(BufferIsQueryOnly(picker));
+  CHECK(picker->hooks.on_submit != nullptr);
+  String8 buffers = BufferTextAll(f.arena, picker);
   CHECK(Str8FindFirst(buffers, Str8Lit("[command]")) < buffers.size);
 
   CHECK(CommandExecLine(&f.ed, Str8Lit("bindings")));
@@ -605,6 +609,47 @@ TEST(listing_buffers_and_bindings) {
   CHECK(Str8FindFirst(bindings, Str8Lit("normal")) < bindings.size);
   // A binding installed by default must show up with its command name.
   CHECK(Str8FindFirst(bindings, Str8Lit("split-vertical")) < bindings.size);
+
+  Destroy(&f);
+}
+
+TEST(buffer_picker_opens_on_enter) {
+  Fixture f = MakeFixture("hello");
+
+  BufferHandle other = BufferOpen(&f.ed.buffers, BufferKind::Scratch, Str8Lit("other"));
+  Buffer *other_buf = BufferFromHandle(&f.ed.buffers, other);
+  CHECK(other_buf != nullptr);
+  BufferSetText(&f.ed, other_buf, Str8Lit("other text"));
+
+  CHECK(CommandExecLine(&f.ed, Str8Lit("buffers")));
+  Buffer *picker = EditorFocusedBuffer(&f.ed);
+  CHECK_STR(picker->name, Str8Lit("[buffers]"));
+
+  // Narrow to the named buffer; Enter while typing takes the top match.
+  EditorProcessSpec(&f.ed, "other");
+  CHECK_STR(BufferLineText(f.arena, picker, 0), Str8Lit("other"));
+  CHECK(BufferLineCount(picker) > 1);
+  String8 top = BufferLineText(f.arena, picker, 1);
+  CHECK(Str8FindFirst(top, Str8Lit("other")) < top.size);
+
+  EditorProcessSpec(&f.ed, "<CR>");
+  Buffer *focused = EditorFocusedBuffer(&f.ed);
+  CHECK_STR(focused->name, Str8Lit("other"));
+  CHECK_STR(BufferTextAll(f.arena, focused), Str8Lit("other text"));
+
+  // Reopen and open by hovering a result in normal mode.
+  CHECK(CommandExecLine(&f.ed, Str8Lit("buffers")));
+  EditorProcessSpec(&f.ed, "<Esc>");
+  // Find the scratch line (default buffer from the fixture) and open it.
+  picker = EditorFocusedBuffer(&f.ed);
+  u64 line = 1;
+  for (; line < BufferLineCount(picker); line += 1) {
+    if (Str8StartsWith(BufferLineText(f.arena, picker, line), Str8Lit("[scratch]"))) break;
+  }
+  CHECK(line < BufferLineCount(picker));
+  ViewSetCursorLineColumn(EditorFocusedView(&f.ed), picker, line, 0);
+  EditorProcessSpec(&f.ed, "<CR>");
+  CHECK_STR(EditorFocusedBuffer(&f.ed)->name, Str8Lit("[scratch]"));
 
   Destroy(&f);
 }
