@@ -81,7 +81,7 @@ struct ScopedEnvVar {
       Set(old_value);
     } else {
 #if defined(_WIN32)
-      CHECK(SetEnvironmentVariableA(name, nullptr) != 0);
+      CHECK(_putenv_s(name, "") == 0);
 #else
       CHECK(unsetenv(name) == 0);
 #endif
@@ -90,7 +90,7 @@ struct ScopedEnvVar {
 
   void Set(String8 value) {
 #if defined(_WIN32)
-    CHECK(SetEnvironmentVariableA(name, PushCStr(arena, value)) != 0);
+    CHECK(_putenv_s(name, PushCStr(arena, value)) == 0);
 #else
     CHECK(setenv(name, PushCStr(arena, value), 1) == 0);
 #endif
