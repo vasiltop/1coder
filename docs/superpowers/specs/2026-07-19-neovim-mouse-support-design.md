@@ -42,6 +42,7 @@ Add `core/input/mouse.h` as the platform-neutral event and state definition. It 
 - and a transient `MouseState` used while a button is down or wheel motion is being accumulated.
 
 `MouseState` is intentionally short-lived. It records only the current capture, the pointer anchor, the last hovered pane for visual hover or drag-adjacent state, the pre-selection mode, accumulated fractional wheel deltas, and any resize target. Nothing in it is serialized or persisted.
+For wheel handling, it also stores the current routed wheel target pane, independent X/Y remainders, and the current per-axis scroll semantics (line or page).
 
 Hit testing and resize handles use the continuous grid coordinates; derived integer cell coordinates are used for buffer text placement and other cell-snapped gestures.
 
@@ -100,6 +101,14 @@ At a cell where a vertical split edge intersects a panel status line, the vertic
 
 Selections always resolve through UTF-8-safe byte offsets; pointer placement never splits a codepoint or lands inside an invalid byte sequence.
 
+### Drag threshold
+
+A pending drag becomes an active selection on the first motion event whose resolved buffer offset differs from the press anchor offset, or whose resolved command-line offset differs for command-line selection.
+Continuous motion within the same resolved character or cell does not start a drag.
+Gutter presses resolve their anchor to line-start before comparison.
+Once active, later motion updates the selection even when clamped to the same endpoint.
+No pixel-distance or platform-dependent slop is used.
+
 ### Panel gutter
 
 - Clicking the panel gutter focuses that pane and places the cursor at column zero of the corresponding visible buffer line.
@@ -110,13 +119,13 @@ Selections always resolve through UTF-8-safe byte offsets; pointer placement nev
 
 - **Normal mode:** left-click places the cursor, drag creates visual selection, right-click extends selection, and middle-click pastes clipboard text.
 - **Visual mode:** mouse motion changes the active selection live; right-click extends the nearest edge; middle-click replaces the selection with clipboard text.
-- **Insert mode:** clicking moves the insertion cursor, middle-click inserts clipboard text at the cursor, and any mouse-started selection temporarily enters Visual mode.
-- **Replace mode:** same as Insert for mouse semantics, but the restored mode after a mouse selection is Replace rather than Insert.
+- **Insert mode:** clicking moves the insertion cursor, middle-click inserts clipboard text at the cursor, and mouse gestures that create a non-empty selection follow the temporary Visual rules below.
+- **Replace mode:** same as Insert for mouse semantics, but the remembered mode restored by the temporary Visual rules below is Replace rather than Insert.
 - **Command-line mode:** only the global bottom command-line/status row is active; clicking places the command-line cursor there, drag selection is supported there, and middle-click inserts clipboard text into the command line.
 
-When a selection starts in Insert or Replace, the editor snapshots the prior mode and enters temporary Visual only after the drag threshold is crossed. A press/release that never becomes a drag stays in the original mode.
-
-Once a drag crosses the threshold and enters temporary Visual, button release finalizes the range but leaves the editor in Visual with the selection visible. The remembered Insert or Replace mode stays pending and is restored only when that Visual selection is later ended or canceled, including a plain click that collapses it, a replacement or paste that consumes it, keyboard Visual exit, focus-loss cancellation, or shutdown.
+In Insert and Replace, any mouse gesture that creates a non-empty selection enters temporary Visual immediately or on drag threshold crossing. Double-click word or matching-bracket selection and triple-click line selection enter Visual immediately; drag selection enters Visual when the threshold defined above is crossed. Those selections remain visible after release just like a completed drag.
+A single click or press-release with no selection stays in the original Insert or Replace mode.
+The remembered Insert or Replace mode is restored only when that Visual selection is later ended or canceled, including a plain click that collapses it, a replacement or paste that consumes it, keyboard Visual exit, focus-loss cancellation, or shutdown.
 
 ### Clipboard put
 
@@ -124,15 +133,18 @@ Middle-click uses the existing clipboard abstraction. If clipboard text is avail
 
 ### Wheel routing
 
-Wheel motion routes solely from the wheel event's own `mouse_x` / `mouse_y` coordinates. Stored hover is never a fallback, and wheel never changes focus.
+Wheel motion routes solely from the wheel event's own `mouse_x` / `mouse_y` coordinates. Wheel never changes focus.
 
 - Vertical wheel scrolls vertically.
 - Horizontal wheel scrolls horizontally.
 - `Shift` plus vertical wheel pages instead of line-scrolls.
 - `Shift` plus horizontal wheel pages horizontally if the platform reports that axis.
 
-Fractional deltas are accumulated per axis in `MouseState`. That keeps touchpads and other high-resolution devices smooth without losing partial motion.
-Wheel events over the global command-line/status row are always no-ops; they never fall back to the focused pane.
+Before accumulating a wheel event, the core hit-tests its coordinates to determine the routed pane and axis semantics.
+If the routed pane differs from the stored wheel target pane, the event is a no-op region, or `Shift` changes an affected axis between line and page semantics, the affected remainders are cleared before processing.
+A no-op event only clears and does not accumulate.
+Fractional deltas accumulate in the routed pane's own X/Y remainders in `MouseState`, keyed by the current scroll semantics for each axis, so deltas from one pane or unit cannot complete in another.
+Wheel events over the global command-line/status row or other no-op regions are always clears-only and never fall back to the focused pane.
 
 ### Command line and status line
 
