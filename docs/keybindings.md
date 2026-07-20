@@ -112,6 +112,10 @@ one (`:vsplit` / `<leader>v`). With no argument it opens the command window
 prefilled with the last command, or `make -k` if none has been run yet.
 `:recompile` and `<leader>rc` rerun the last command.
 
+GNU-style diagnostics (`file:line:col:` / `file:line:`) are collected from the
+output. `<leader>ne` and `<leader>pe` jump to the next and previous error in a
+circle; `<CR>` on an error line in the compile buffer opens that locus.
+
 ## Multiple cursors
 
 `<leader>mc` starts placing cursors and marks the position you are on. Every

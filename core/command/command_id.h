@@ -194,6 +194,7 @@ inline constexpr CommandFlags CmdSingle = CommandFlags::Single;
   X(write_quit,            "write-quit",            "Write and close the window",      CommandArg::Path, CmdBang|CmdSingle)          \
   X(quit,                  "quit",                  "Close the focused window",        CommandArg::None, CmdBang|CmdSingle)          \
   X(quit_all,              "quit-all",              "Exit the editor",                 CommandArg::None, CmdBang|CmdSingle)          \
+  X(set_cwd,               "set-cwd",               "Set the working directory",       CommandArg::Path, CmdSingle)                  \
   /* ---- search ---- */                                                                                                             \
   X(grep,                  "grep",                  "Search the project",              CommandArg::Text, CmdArg|CmdSingle)           \
   X(find_file,             "find",                  "Fuzzy-find a file",               CommandArg::Text, CmdSingle)                  \
@@ -216,6 +217,8 @@ inline constexpr CommandFlags CmdSingle = CommandFlags::Single;
   /* ---- compile ---- */                                                                                                            \
   X(compile,               "compile",               "Run a shell command in the compile buffer", CommandArg::Text, CmdSingle)        \
   X(recompile,             "recompile",             "Rerun the last compile command",  CommandArg::None, CmdSingle)                  \
+  X(next_error,            "next-error",            "Jump to the next compile error",  CommandArg::None, CmdSingle)                  \
+  X(prev_error,            "prev-error",            "Jump to the previous compile error", CommandArg::None, CmdSingle)               \
   /* ---- git ---- */                                                                                                                \
   X(git,                   "git",                   "Open the git status buffer",      CommandArg::None, CmdSingle)                  \
   X(git_refresh,           "git-refresh",           "Reload the git status buffer",    CommandArg::None, CmdHidden|CmdSingle)        \

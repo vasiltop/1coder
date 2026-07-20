@@ -936,3 +936,70 @@ TEST(explorer_leader_e_opens_the_containing_directory) {
 
   Destroy(&f);
 }
+
+// ---------------------------------------------------------------------------
+// :set-cwd
+// ---------------------------------------------------------------------------
+
+TEST(set_cwd_from_file_buffer) {
+  EditorFixture f = MakeEditorFixture("set_cwd_file");
+  String8 original = OsGetCwd(f.arena);
+
+  BufferHandle file = EditorOpenFile(&f.ed, TempPath(&f.dir, "sub/deep.txt"));
+  EditorShowBuffer(&f.ed, file);
+
+  RunCommand(&f, "set-cwd");
+
+  String8 expect = OsPathAbsolute(f.arena, TempPath(&f.dir, "sub"));
+  CHECK_STR(f.ed.cwd, expect);
+  CHECK_STR(OsGetCwd(f.arena), expect);
+
+  CHECK(OsSetCwd(original));
+  Destroy(&f);
+}
+
+TEST(set_cwd_from_explorer_buffer) {
+  EditorFixture f = MakeEditorFixture("set_cwd_explorer");
+  String8 original = OsGetCwd(f.arena);
+
+  String8 sub = OsPathAbsolute(f.arena, TempPath(&f.dir, "sub"));
+  BufferHandle explorer = ExplorerBufferOpen(&f.ed, sub);
+  EditorShowBuffer(&f.ed, explorer);
+
+  RunCommand(&f, "set-cwd");
+
+  CHECK_STR(f.ed.cwd, sub);
+  CHECK_STR(OsGetCwd(f.arena), sub);
+
+  CHECK(OsSetCwd(original));
+  Destroy(&f);
+}
+
+TEST(set_cwd_with_explicit_directory) {
+  EditorFixture f = MakeEditorFixture("set_cwd_arg");
+  String8 original = OsGetCwd(f.arena);
+
+  String8 sub = OsPathAbsolute(f.arena, TempPath(&f.dir, "sub"));
+  TempArena scratch = ScratchBegin1(f.arena);
+  String8 line = PushStr8F(scratch.arena, "set-cwd %.*s", (int)sub.size, (char *)sub.str);
+  RunCommand(&f, PushCStr(scratch.arena, line));
+  ScratchEnd(scratch);
+
+  CHECK_STR(f.ed.cwd, sub);
+  CHECK_STR(OsGetCwd(f.arena), sub);
+
+  CHECK(OsSetCwd(original));
+  Destroy(&f);
+}
+
+TEST(set_cwd_rejects_scratch_without_arg) {
+  EditorFixture f = MakeEditorFixture("set_cwd_scratch");
+  String8 original_cwd = PushStr8Copy(f.arena, f.ed.cwd);
+
+  RunCommand(&f, "set-cwd");
+
+  CHECK_STR(f.ed.cwd, original_cwd);
+  CHECK(StatusContains(&f, "no directory"));
+
+  Destroy(&f);
+}

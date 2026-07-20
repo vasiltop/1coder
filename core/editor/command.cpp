@@ -1,5 +1,6 @@
 #include "editor/command.h"
 
+#include "buffers/buf_compile.h"
 #include "buffers/buf_explorer.h"
 #include "buffers/buf_git.h"
 #include "editor/filetype.h"
@@ -1182,6 +1183,44 @@ static void Cmd_quit_all(CommandArgs *a) {
   a->ed->quit = true;
 }
 
+static void Cmd_set_cwd(CommandArgs *a) {
+  TempArena scratch = ScratchBegin();
+
+  String8 target = {};
+  if (a->arg.size > 0) {
+    target = a->arg;
+  } else if (a->buffer->kind == BufferKind::Explorer) {
+    target = ExplorerBufferDir(a->buffer);
+  } else if (a->buffer->path.size > 0) {
+    target = Str8PathDir(a->buffer->path);
+  }
+
+  if (target.size == 0) {
+    EditorSetStatus(a->ed, Str8Lit("set-cwd: no directory"));
+    ScratchEnd(scratch);
+    return;
+  }
+
+  String8 absolute = OsPathAbsolute(scratch.arena, target);
+  if (!OsDirExists(absolute)) {
+    EditorSetStatusF(a->ed, "set-cwd: not a directory: %.*s", (int)absolute.size,
+                     (char *)absolute.str);
+    ScratchEnd(scratch);
+    return;
+  }
+
+  if (!OsSetCwd(absolute)) {
+    EditorSetStatusF(a->ed, "set-cwd: cannot enter %.*s", (int)absolute.size,
+                     (char *)absolute.str);
+    ScratchEnd(scratch);
+    return;
+  }
+
+  a->ed->cwd = PushStr8Copy(a->ed->arena, absolute);
+  EditorSetStatusF(a->ed, "cwd: %.*s", (int)a->ed->cwd.size, (char *)a->ed->cwd.str);
+  ScratchEnd(scratch);
+}
+
 // ---------------------------------------------------------------------------
 // In-file search
 // ---------------------------------------------------------------------------
@@ -1863,9 +1902,6 @@ static void Cmd_explorer_apply(CommandArgs *a) { ExplorerApplyPending(a->ed, a->
 // Compile
 // ---------------------------------------------------------------------------
 
-BufferHandle CompileBufferRun(Editor *ed, String8 command);
-String8 CompilePrefillCommand(const Editor *ed);
-
 static void PromptCompile(Editor *ed) {
   TempArena scratch = ScratchBegin();
   String8 prefill = CompilePrefillCommand(ed);
@@ -1921,6 +1957,10 @@ static void Cmd_recompile(CommandArgs *a) {
   if (handle.index == 0) return;
   ShowCompileBuffer(a->ed, a->view, handle);
 }
+
+static void Cmd_next_error(CommandArgs *a) { (void)CompileNextError(a->ed, a->view); }
+
+static void Cmd_prev_error(CommandArgs *a) { (void)CompilePrevError(a->ed, a->view); }
 
 // ---------------------------------------------------------------------------
 // Git

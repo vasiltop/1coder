@@ -192,6 +192,21 @@ TEST(os_cwd_and_absolute) {
   ArenaRelease(arena);
 }
 
+TEST(os_set_cwd) {
+  Arena *arena = ArenaAlloc(MB(1));
+  TempDir dir = MakeTempDir("set_cwd");
+
+  String8 original = OsGetCwd(arena);
+  CHECK(OsSetCwd(dir.path));
+  CHECK_STR(OsGetCwd(arena), OsPathAbsolute(arena, dir.path));
+
+  CHECK(OsSetCwd(original));
+  CHECK_STR(OsGetCwd(arena), original);
+
+  Destroy(&dir);
+  ArenaRelease(arena);
+}
+
 // ---------------------------------------------------------------------------
 // Mutation
 // ---------------------------------------------------------------------------

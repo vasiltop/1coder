@@ -177,8 +177,10 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, "<leader>rn", CommandId::lsp_rename);
   KeymapBind(normal, "<leader>d", CommandId::lsp_diagnostic_float);
 
-  // compile-mode.nvim's recompile binding.
+  // compile-mode.nvim's recompile and circular next/prev error bindings.
   KeymapBind(normal, "<leader>rc", CommandId::recompile);
+  KeymapBind(normal, "<leader>ne", CommandId::next_error);
+  KeymapBind(normal, "<leader>pe", CommandId::prev_error);
 
   // ---- multiple cursors ----
   // Placement is staged: <leader>mc starts it and marks the first position,

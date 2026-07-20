@@ -1,6 +1,8 @@
 #include "buffers/buf_compile.h"
 
 #include "editor/editor.h"
+#include "input/keymap.h"
+#include "os/os_file.h"
 #include "os/os_process.h"
 
 #include <mutex>
@@ -13,14 +15,25 @@
 //
 // CompilePayload is heap-allocated: it owns a std::mutex and std::thread, which
 // must be constructed and destroyed, not arena-zeroed.
+//
+// Error navigation reparses the buffer on each jump. Compile output is small,
+// and re-scanning avoids tracking partial lines across async chunks.
 
 namespace {
 
 constexpr u64 kCompileReadChunk = 4096;
+constexpr u64 kNoErrorIndex = ~(u64)0;
 
 struct CompileChunk {
   CompileChunk *next;
   String8 data;
+};
+
+struct CompileError {
+  String8 path;
+  u64 line;         // 1-based
+  u64 column;       // 1-based
+  u64 buffer_line;  // 0-based line in the [compile] buffer
 };
 
 struct CompilePayload {
@@ -41,10 +54,17 @@ struct CompilePayload {
   bool finished_footer_written = false;
   bool process_started = false;
   i32 exit_code = 0;
+
+  // Index into the last rebuilt error list. kNoErrorIndex means none yet.
+  u64 error_index = kNoErrorIndex;
+  // 0-based line in the [compile] buffer painted as the current error. Cleared
+  // when a run restarts; set whenever next/prev/Enter lands on a locus.
+  u64 highlight_line = kNoErrorIndex;
 };
 
-CompilePayload *PayloadOf(Buffer *buffer) {
-  return buffer ? (CompilePayload *)buffer->user_data : nullptr;
+CompilePayload *PayloadOf(const Buffer *buffer) {
+  if (!buffer || buffer->kind != BufferKind::Compile) return nullptr;
+  return (CompilePayload *)buffer->user_data;
 }
 
 Buffer *FindCompileBuffer(Editor *ed) {
@@ -154,6 +174,7 @@ void DestroyPayload(Buffer *buffer) {
   delete payload;
   buffer->user_data = nullptr;
   buffer->hooks.on_close = nullptr;
+  buffer->hooks.on_submit = nullptr;
 }
 
 void CompileClose(Editor *ed, Buffer *buffer) {
@@ -241,6 +262,277 @@ bool StartShellCommand(CompilePayload *payload, String8 command, String8 cwd) {
   return true;
 }
 
+bool PathLooksAbsolute(String8 path) {
+  if (path.size == 0) return false;
+  if (path.str[0] == '/' || path.str[0] == '\\') return true;
+#if defined(_WIN32)
+  if (path.size >= 3 && CharIsAlpha(path.str[0]) && path.str[1] == ':' &&
+      (path.str[2] == '/' || path.str[2] == '\\')) {
+    return true;
+  }
+#endif
+  return false;
+}
+
+bool PathLooksLikeFile(String8 path) {
+  if (path.size == 0) return false;
+  for (u64 i = 0; i < path.size; i += 1) {
+    u8 c = path.str[i];
+    if (c == '/' || c == '\\' || c == '.') return true;
+  }
+  for (u64 i = 0; i < path.size; i += 1) {
+    u8 c = path.str[i];
+    if (CharIsAlnum(c) || c == '_' || c == '-') continue;
+    return false;
+  }
+  return true;
+}
+
+bool ParseLeadingDigits(String8 s, u64 start, u64 *end, u64 *value) {
+  if (start >= s.size || !CharIsDigit(s.str[start])) return false;
+  u64 v = 0;
+  u64 i = start;
+  while (i < s.size && CharIsDigit(s.str[i])) {
+    v = v * 10 + (u64)(s.str[i] - '0');
+    i += 1;
+  }
+  *end = i;
+  *value = v;
+  return true;
+}
+
+// GNU/clang diagnostics: path:line:col: message  or  path:line: message.
+bool ParseGnuErrorLine(String8 line, String8 *out_path, u64 *out_line, u64 *out_col) {
+  while (line.size > 0 && CharIsSpace(line.str[0])) {
+    line = Str8Skip(line, 1);
+  }
+  if (line.size == 0) return false;
+
+  u64 search_from = 0;
+  if (line.size >= 2 && CharIsAlpha(line.str[0]) && line.str[1] == ':') {
+    search_from = 2;
+  }
+
+  for (u64 i = search_from; i < line.size; i += 1) {
+    if (line.str[i] != ':') continue;
+
+    u64 after_line = 0;
+    u64 line_no = 0;
+    if (!ParseLeadingDigits(line, i + 1, &after_line, &line_no)) continue;
+    if (line_no == 0) continue;
+    if (after_line >= line.size || line.str[after_line] != ':') continue;
+
+    String8 path = Str8Prefix(line, i);
+    if (!PathLooksLikeFile(path)) continue;
+
+    u64 after_col = 0;
+    u64 col = 0;
+    if (ParseLeadingDigits(line, after_line + 1, &after_col, &col) && after_col < line.size &&
+        line.str[after_col] == ':') {
+      *out_path = path;
+      *out_line = line_no;
+      *out_col = col == 0 ? 1 : col;
+      return true;
+    }
+
+    *out_path = path;
+    *out_line = line_no;
+    *out_col = 1;
+    return true;
+  }
+  return false;
+}
+
+struct CompileErrorList {
+  CompileError *items;
+  u64 count;
+};
+
+CompileErrorList RebuildErrors(Arena *arena, Buffer *buffer) {
+  CompileErrorList list = {};
+  if (!buffer) return list;
+
+  u64 line_count = BufferLineCount(buffer);
+  // First pass: count.
+  u64 count = 0;
+  for (u64 line = 0; line < line_count; line += 1) {
+    TempArena scratch = ScratchBegin1(arena);
+    String8 text = BufferLineText(scratch.arena, buffer, line);
+    String8 path = {};
+    u64 row = 0;
+    u64 col = 0;
+    if (ParseGnuErrorLine(text, &path, &row, &col)) count += 1;
+    ScratchEnd(scratch);
+  }
+
+  if (count == 0) return list;
+
+  list.items = PushArray(arena, CompileError, count);
+  list.count = count;
+
+  u64 at = 0;
+  for (u64 line = 0; line < line_count; line += 1) {
+    TempArena scratch = ScratchBegin1(arena);
+    String8 text = BufferLineText(scratch.arena, buffer, line);
+    String8 path = {};
+    u64 row = 0;
+    u64 col = 0;
+    if (ParseGnuErrorLine(text, &path, &row, &col)) {
+      list.items[at].path = PushStr8Copy(arena, path);
+      list.items[at].line = row;
+      list.items[at].column = col;
+      list.items[at].buffer_line = line;
+      at += 1;
+    }
+    ScratchEnd(scratch);
+  }
+
+  return list;
+}
+
+// Moves every window showing the compile buffer onto `buffer_line` and centres
+// it, so next/prev error keeps the locus visible beside the source without
+// stealing focus.
+void RevealErrorInCompileViews(Editor *ed, Buffer *compile, u64 buffer_line) {
+  if (!ed || !compile) return;
+
+  CompilePayload *payload = PayloadOf(compile);
+  if (payload) payload->highlight_line = buffer_line;
+
+  Panel *first = PanelFirstLeaf(ed->root_panel);
+  for (Panel *leaf = first; leaf;) {
+    if (leaf->view && BufferHandleEqual(leaf->view->buffer, compile->handle)) {
+      ViewSetCursorLineColumn(leaf->view, compile, buffer_line, 0);
+      i32 height = EditorPanelTextHeight(ed, leaf);
+      if (height > 0) ViewCenterOnCursor(leaf->view, compile, height);
+    }
+    leaf = PanelNextLeaf(ed->root_panel, leaf);
+    if (leaf == first) break;
+  }
+}
+
+// Opens `handle` in a window that is not the compile buffer, so the compile
+// output stays on screen while the locus is shown beside it.
+void ShowLocusAwayFromCompile(Editor *ed, View *origin, Buffer *compile, BufferHandle handle) {
+  if (!ed || handle.index == 0) return;
+
+  View *focused = EditorFocusedView(ed);
+  bool focused_is_compile =
+      focused && compile && BufferHandleEqual(focused->buffer, compile->handle);
+
+  if (focused_is_compile) {
+    Panel *other = nullptr;
+    Panel *first = PanelFirstLeaf(ed->root_panel);
+    for (Panel *leaf = first; leaf;) {
+      if (leaf != ed->focused_panel && leaf->view) {
+        other = leaf;
+        break;
+      }
+      leaf = PanelNextLeaf(ed->root_panel, leaf);
+      if (leaf == first) break;
+    }
+    if (other) {
+      EditorFocusPanel(ed, other);
+    } else {
+      (void)EditorSplit(ed, Axis2::X);
+    }
+  }
+
+  if (origin) EditorPushJump(ed, origin);
+  EditorShowBuffer(ed, handle);
+}
+
+bool JumpToError(Editor *ed, View *origin, Buffer *compile, const CompileError *err) {
+  if (!ed || !err || err->path.size == 0) return false;
+
+  TempArena scratch = ScratchBegin();
+  String8 path = err->path;
+  if (!PathLooksAbsolute(path)) {
+    path = OsPathJoin(scratch.arena, ed->cwd, path);
+  }
+
+  BufferHandle handle = EditorOpenFile(ed, path);
+  ScratchEnd(scratch);
+  if (handle.index == 0) {
+    EditorSetStatusF(ed, "Cannot open %.*s", (int)err->path.size, (char *)err->path.str);
+    return false;
+  }
+
+  RevealErrorInCompileViews(ed, compile, err->buffer_line);
+  ShowLocusAwayFromCompile(ed, origin, compile, handle);
+
+  View *target = EditorFocusedView(ed);
+  Buffer *opened = EditorBufferForView(ed, target);
+  if (target && opened) {
+    u64 line = err->line > 0 ? err->line - 1 : 0;
+    u64 column = err->column > 0 ? err->column - 1 : 0;
+    ViewSetCursorLineColumn(target, opened, line, column);
+    EditorScrollFocusedToCursor(ed);
+  }
+  return true;
+}
+
+bool NavigateError(Editor *ed, View *origin, bool next) {
+  Buffer *buffer = FindCompileBuffer(ed);
+  CompilePayload *payload = PayloadOf(buffer);
+  if (!payload) {
+    EditorSetStatus(ed, Str8Lit("No compile errors"));
+    return false;
+  }
+
+  TempArena scratch = ScratchBegin();
+  CompileErrorList list = RebuildErrors(scratch.arena, buffer);
+  if (list.count == 0) {
+    EditorSetStatus(ed, Str8Lit("No compile errors"));
+    ScratchEnd(scratch);
+    return false;
+  }
+
+  u64 index = 0;
+  if (payload->error_index == kNoErrorIndex || payload->error_index >= list.count) {
+    index = next ? 0 : (list.count - 1);
+  } else if (next) {
+    index = (payload->error_index + 1) % list.count;
+  } else {
+    index = (payload->error_index + list.count - 1) % list.count;
+  }
+
+  payload->error_index = index;
+  bool ok = JumpToError(ed, origin, buffer, &list.items[index]);
+  ScratchEnd(scratch);
+  return ok;
+}
+
+void CompileSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
+  (void)line;
+  CompilePayload *payload = PayloadOf(buffer);
+  if (!payload || !view) return;
+
+  u64 cursor_line = ViewCursorLine(view, buffer);
+
+  TempArena scratch = ScratchBegin();
+  CompileErrorList list = RebuildErrors(scratch.arena, buffer);
+  for (u64 i = 0; i < list.count; i += 1) {
+    if (list.items[i].buffer_line == cursor_line) {
+      payload->error_index = i;
+      JumpToError(ed, view, buffer, &list.items[i]);
+      ScratchEnd(scratch);
+      return;
+    }
+  }
+  ScratchEnd(scratch);
+}
+
+void EnsureCompileKeymap(Editor *ed, Buffer *buffer) {
+  if (!ed || !buffer) return;
+  if (!buffer->hooks.keymap) {
+    Keymap *keymap = KeymapAlloc(ed->arena, ed->normal_map);
+    KeymapBind(keymap, "<CR>", CommandId::result_open);
+    buffer->hooks.keymap = keymap;
+  }
+  buffer->hooks.on_submit = CompileSubmit;
+}
+
 }  // namespace
 
 String8 CompilePrefillCommand(const Editor *ed) {
@@ -292,6 +584,10 @@ BufferHandle CompileBufferRun(Editor *ed, String8 command) {
   payload->exit_code = 0;
   payload->process = OsProcess{};
   payload->process_started = false;
+  payload->error_index = kNoErrorIndex;
+  payload->highlight_line = kNoErrorIndex;
+
+  EnsureCompileKeymap(ed, buffer);
 
   TempArena scratch = ScratchBegin();
   String8 header =
@@ -338,4 +634,16 @@ void CompileBufferShutdown(Editor *ed) {
   Buffer *buffer = FindCompileBuffer(ed);
   if (!buffer) return;
   DestroyPayload(buffer);
+}
+
+bool CompileNextError(Editor *ed, View *origin) { return NavigateError(ed, origin, true); }
+
+bool CompilePrevError(Editor *ed, View *origin) { return NavigateError(ed, origin, false); }
+
+bool CompileHighlightLine(const Buffer *buffer, u64 *out_line) {
+  if (out_line) *out_line = 0;
+  const CompilePayload *payload = PayloadOf(buffer);
+  if (!payload || payload->highlight_line == kNoErrorIndex) return false;
+  if (out_line) *out_line = payload->highlight_line;
+  return true;
 }
