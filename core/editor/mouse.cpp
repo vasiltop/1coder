@@ -121,6 +121,21 @@ void ClearCapture(MouseState *mouse) {
   mouse->selection_kind = MouseSelectionKind::None;
 }
 
+void ClearWheelState(MouseState *mouse) {
+  mouse->wheel_panel = nullptr;
+  mouse->wheel_view = nullptr;
+  mouse->wheel_buffer = nullptr;
+  mouse->wheel_x_remainder = 0.0f;
+  mouse->wheel_y_remainder = 0.0f;
+  mouse->wheel_x_unit = MouseWheelUnit::None;
+  mouse->wheel_y_unit = MouseWheelUnit::None;
+}
+
+[[nodiscard]] bool WheelScrollable(const MouseHit &hit) {
+  return hit.kind == MouseHitKind::Text || hit.kind == MouseHitKind::Gutter ||
+         hit.kind == MouseHitKind::Image;
+}
+
 [[nodiscard]] bool PanelTreeContains(Panel *root, const Panel *target) {
   if (!root || !target) return false;
   if (root == target) return true;
@@ -354,6 +369,18 @@ void BeginCommandCapture(Editor *ed, const MouseHit &hit) {
   ed->mouse.selection_kind = MouseSelectionKind::Character;
 }
 
+void BeginBoundaryCapture(Editor *ed, const MouseHit &hit, const MouseEvent &event) {
+  ed->mouse.capture = MakeCapture(MouseCaptureKind::Boundary, hit, MouseButton::Left);
+  ed->mouse.pointer_anchor = hit;
+  ed->mouse.selection_anchor = hit;
+  ed->mouse.latest_hit = hit;
+  ed->mouse.selection_kind = MouseSelectionKind::None;
+  ed->mouse.latest_grid_x = event.grid_x;
+  ed->mouse.latest_grid_y = event.grid_y;
+  ed->mouse.latest_x = event.x;
+  ed->mouse.latest_y = event.y;
+}
+
 void HandleLeftPanelPress(Editor *ed, MouseHit hit, const MouseEvent &event) {
   EditorFocusPanel(ed, hit.panel);
   View *view = hit.view;
@@ -517,6 +544,84 @@ void HandleMiddleCommandLinePress(Editor *ed, MouseHit hit) {
   ScrollViewToOwnCursor(ed, nullptr, view, buffer);
 }
 
+i32 ConsumeWheel(f32 *remainder, f32 delta) {
+  *remainder += delta;
+  i32 whole = (i32)(*remainder);
+  *remainder -= (f32)whole;
+  return whole;
+}
+
+void HandleWheel(Editor *ed, const MouseEvent &event) {
+  MouseState *mouse = &ed->mouse;
+  MouseHit hit = EditorMouseHitTest(ed, event);
+  mouse->latest_hit = hit;
+
+  if (!WheelScrollable(hit) || !hit.panel || !hit.view || !hit.buffer) {
+    ClearWheelState(mouse);
+    return;
+  }
+
+  if (mouse->wheel_panel != hit.panel) {
+    ClearWheelState(mouse);
+  }
+
+  mouse->wheel_panel = hit.panel;
+  mouse->wheel_view = hit.view;
+  mouse->wheel_buffer = hit.buffer;
+
+  i32 width = EditorPanelTextWidth(ed, hit.panel);
+  i32 height = EditorPanelTextHeight(ed, hit.panel);
+  bool page = HasFlag(event.modifiers, KeyMod::Shift);
+
+  if (event.wheel_x != 0.0f) {
+    MouseWheelUnit unit = page ? MouseWheelUnit::Page : MouseWheelUnit::Line;
+    if (mouse->wheel_x_unit != MouseWheelUnit::None && mouse->wheel_x_unit != unit) {
+      mouse->wheel_x_remainder = 0.0f;
+    }
+    mouse->wheel_x_unit = unit;
+
+    i32 whole = ConsumeWheel(&mouse->wheel_x_remainder, event.wheel_x);
+    if (whole != 0) {
+      i32 columns = (unit == MouseWheelUnit::Page) ? Max(width - 2, 1) : 6;
+      ViewScrollColumns(hit.view, hit.buffer, (i64)whole * (i64)columns, width);
+    }
+  }
+
+  if (event.wheel_y != 0.0f) {
+    MouseWheelUnit unit = page ? MouseWheelUnit::Page : MouseWheelUnit::Line;
+    if (mouse->wheel_y_unit != MouseWheelUnit::None && mouse->wheel_y_unit != unit) {
+      mouse->wheel_y_remainder = 0.0f;
+    }
+    mouse->wheel_y_unit = unit;
+
+    i32 whole = ConsumeWheel(&mouse->wheel_y_remainder, event.wheel_y);
+    if (whole != 0) {
+      i32 lines = (unit == MouseWheelUnit::Page) ? Max(height - 2, 1) : 3;
+      ViewScrollLines(hit.view, hit.buffer, -(i64)whole * (i64)lines, height);
+    }
+  }
+}
+
+[[nodiscard]] bool ResolveBoundaryCapture(Editor *ed, const MouseCapture &capture, Panel **out_panel,
+                                          View **out_view, PanelBoundary *out_boundary) {
+  *out_panel = nullptr;
+  *out_view = nullptr;
+  *out_boundary = InvalidBoundary();
+
+  if (capture.kind != MouseCaptureKind::Boundary || !capture.panel || !capture.view ||
+      !capture.boundary.valid || !capture.boundary.parent || !capture.boundary.before ||
+      !capture.boundary.after || !PanelTreeContains(ed->root_panel, capture.panel) ||
+      !PanelTreeContains(ed->root_panel, capture.boundary.parent) ||
+      capture.panel->view != capture.view) {
+    return false;
+  }
+
+  *out_panel = capture.panel;
+  *out_view = capture.view;
+  *out_boundary = capture.boundary;
+  return true;
+}
+
 }  // namespace
 
 MouseHit EditorMouseHitTest(Editor *ed, const MouseEvent &event) {
@@ -560,7 +665,13 @@ void EditorProcessMouse(Editor *ed, const MouseEvent &event) {
 
   if (event.action == MouseAction::Cancel) {
     ClearCapture(mouse);
+    ClearWheelState(mouse);
     RestoreAllTemporaryVisuals(ed);
+    return;
+  }
+
+  if (event.action == MouseAction::Wheel) {
+    HandleWheel(ed, event);
     return;
   }
 
@@ -573,6 +684,33 @@ void EditorProcessMouse(Editor *ed, const MouseEvent &event) {
 
   if (event.action == MouseAction::Drag) {
     if (mouse->capture.kind == MouseCaptureKind::None || mouse->capture.button != event.button) return;
+
+    if (mouse->capture.kind == MouseCaptureKind::Boundary) {
+      Panel *panel = nullptr;
+      View *view = nullptr;
+      PanelBoundary boundary = {};
+      if (!ResolveBoundaryCapture(ed, mouse->capture, &panel, &view, &boundary)) {
+        ClearCapture(mouse);
+        return;
+      }
+
+      i32 current = (boundary.axis == Axis2::X) ? event.x : event.y;
+      i32 previous = (boundary.axis == Axis2::X) ? mouse->latest_x : mouse->latest_y;
+      mouse->latest_grid_x = event.grid_x;
+      mouse->latest_grid_y = event.grid_y;
+      mouse->latest_x = event.x;
+      mouse->latest_y = event.y;
+
+      if (current == previous) return;
+
+      PanelResizeBoundary(boundary, current - previous);
+      EditorLayout(ed);
+      mouse->latest_hit = MouseHit{};
+      mouse->capture.panel = panel;
+      mouse->capture.view = view;
+      mouse->capture.boundary = boundary;
+      return;
+    }
 
     Panel *panel = nullptr;
     View *view = nullptr;
@@ -608,6 +746,23 @@ void EditorProcessMouse(Editor *ed, const MouseEvent &event) {
     ClearCapture(mouse);
     if (event.button == MouseButton::Left) HandleCommandLinePress(ed, hit);
     else if (event.button == MouseButton::Middle) HandleMiddleCommandLinePress(ed, hit);
+    return;
+  }
+
+  if (event.button == MouseButton::Left && hit.kind == MouseHitKind::VerticalBoundary) {
+    ClearCapture(mouse);
+    EditorFocusPanel(ed, hit.panel);
+    BeginBoundaryCapture(ed, hit, event);
+    return;
+  }
+
+  if (event.button == MouseButton::Left && hit.kind == MouseHitKind::StatusLine) {
+    EditorFocusPanel(ed, hit.panel);
+    if (hit.boundary.valid && hit.boundary.axis == Axis2::Y) {
+      BeginBoundaryCapture(ed, hit, event);
+    } else {
+      ClearCapture(mouse);
+    }
     return;
   }
 

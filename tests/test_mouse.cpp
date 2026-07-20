@@ -66,9 +66,24 @@ MouseEvent MouseEventAt(MouseAction action, MouseButton button, f32 grid_x, f32 
   return event;
 }
 
+MouseEvent MouseWheelAt(f32 grid_x, f32 grid_y, f32 wheel_x, f32 wheel_y,
+                        KeyMod modifiers = KeyMod::None) {
+  MouseEvent event = MouseAt(grid_x, grid_y);
+  event.action = MouseAction::Wheel;
+  event.modifiers = modifiers;
+  event.wheel_x = wheel_x;
+  event.wheel_y = wheel_y;
+  return event;
+}
+
 void SendMouse(Fixture *f, MouseAction action, MouseButton button, f32 grid_x, f32 grid_y,
                u8 click_count = 1) {
   EditorProcessMouse(&f->ed, MouseEventAt(action, button, grid_x, grid_y, click_count));
+}
+
+void SendWheel(Fixture *f, f32 grid_x, f32 grid_y, f32 wheel_x, f32 wheel_y,
+               KeyMod modifiers = KeyMod::None) {
+  EditorProcessMouse(&f->ed, MouseWheelAt(grid_x, grid_y, wheel_x, wheel_y, modifiers));
 }
 
 MouseHit Hit(Fixture *f, f32 grid_x, f32 grid_y) {
@@ -76,6 +91,19 @@ MouseHit Hit(Fixture *f, f32 grid_x, f32 grid_y) {
 }
 
 RangeU64 Selection(View *view, Buffer *buffer) { return ViewSelection(view, buffer); }
+
+void SetScrollableText(Fixture *f, Buffer *buffer, u64 line_count) {
+  String8List lines = {};
+  for (u64 i = 0; i < line_count; i += 1) {
+    Str8ListPush(
+        f->arena, &lines,
+        PushStr8F(f->arena,
+                  "%03llu_012345678901234567890123456789012345678901234567890123456789"
+                  "012345678901234567890123456789012345678901234567890123456789",
+                  (unsigned long long)i));
+  }
+  BufferSetText(&f->ed, buffer, Str8ListJoin(f->arena, &lines, Str8Lit("\n")));
+}
 
 }  // namespace
 
@@ -889,6 +917,334 @@ TEST(mouse_middle_command_line_visual_filtered_empty_clipboard_is_noop) {
   CHECK_EQ(Selection(view, command).max, 4);
   CHECK_EQ(view->vim.pending_register, 0);
   CHECK_EQ(g_fake_clipboard_reads, 1);
+
+  Destroy(&f);
+}
+
+TEST(mouse_wheel_routes_inactive_pane_without_focus_change) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+  Buffer *buffer = EditorFocusedBuffer(&f.ed);
+  SetScrollableText(&f, buffer, 80);
+
+  Panel *right = EditorSplit(&f.ed, Axis2::X);
+  EditorLayout(&f.ed);
+  Panel *left = f.ed.root_panel->first_child;
+  RectS32 right_text = EditorPanelTextRect(&f.ed, right);
+
+  EditorFocusPanel(&f.ed, left);
+  right->view->scroll_line = 10;
+
+  SendWheel(&f, (f32)right_text.x0 + 1.2f, (f32)right_text.y0 + 1.2f, 0.0f, -1.0f);
+
+  CHECK(f.ed.focused_panel == left);
+  CHECK_EQ(right->view->scroll_line, 13);
+  CHECK_EQ((u32)f.ed.mouse.wheel_y_unit, (u32)MouseWheelUnit::Line);
+
+  Destroy(&f);
+}
+
+TEST(mouse_wheel_applies_line_column_and_page_notches_with_expected_signs) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+  Buffer *buffer = EditorFocusedBuffer(&f.ed);
+  SetScrollableText(&f, buffer, 120);
+
+  Panel *panel = f.ed.focused_panel;
+  View *view = EditorFocusedView(&f.ed);
+  RectS32 text = EditorPanelTextRect(&f.ed, panel);
+  i32 page_rows = Max(EditorPanelTextHeight(&f.ed, panel) - 2, 1);
+  i32 page_cols = Max(EditorPanelTextWidth(&f.ed, panel) - 2, 1);
+
+  view->scroll_line = 30;
+  view->scroll_column = 20;
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.0f, 1.0f);
+  CHECK_EQ(view->scroll_line, 27);
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 1.0f, 0.0f);
+  CHECK_EQ(view->scroll_column, 26);
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.0f, 1.0f, KeyMod::Shift);
+  CHECK_EQ(view->scroll_line, 27 - page_rows);
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 1.0f, 0.0f, KeyMod::Shift);
+  CHECK_EQ(view->scroll_column, 26 + (u64)page_cols);
+
+  Destroy(&f);
+}
+
+TEST(mouse_wheel_accumulates_fractional_and_opposite_deltas) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+  Buffer *buffer = EditorFocusedBuffer(&f.ed);
+  SetScrollableText(&f, buffer, 80);
+
+  Panel *panel = f.ed.focused_panel;
+  View *view = EditorFocusedView(&f.ed);
+  RectS32 text = EditorPanelTextRect(&f.ed, panel);
+  view->scroll_line = 20;
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.0f, 0.6f);
+  CHECK_EQ(view->scroll_line, 20);
+  CHECK(fabsf(f.ed.mouse.wheel_y_remainder - 0.6f) < 0.0001f);
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.0f, -0.25f);
+  CHECK_EQ(view->scroll_line, 20);
+  CHECK(fabsf(f.ed.mouse.wheel_y_remainder - 0.35f) < 0.0001f);
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.0f, 0.7f);
+  CHECK_EQ(view->scroll_line, 17);
+  CHECK(fabsf(f.ed.mouse.wheel_y_remainder - 0.05f) < 0.0001f);
+
+  Destroy(&f);
+}
+
+TEST(mouse_wheel_switching_target_clears_remainders) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+  Buffer *buffer = EditorFocusedBuffer(&f.ed);
+  SetScrollableText(&f, buffer, 80);
+
+  Panel *right = EditorSplit(&f.ed, Axis2::X);
+  EditorLayout(&f.ed);
+  Panel *left = f.ed.root_panel->first_child;
+  RectS32 left_text = EditorPanelTextRect(&f.ed, left);
+  RectS32 right_text = EditorPanelTextRect(&f.ed, right);
+
+  SendWheel(&f, (f32)left_text.x0 + 1.2f, (f32)left_text.y0 + 1.2f, 0.6f, 0.6f);
+  CHECK(f.ed.mouse.wheel_panel == left);
+  CHECK(fabsf(f.ed.mouse.wheel_x_remainder - 0.6f) < 0.0001f);
+  CHECK(fabsf(f.ed.mouse.wheel_y_remainder - 0.6f) < 0.0001f);
+
+  SendWheel(&f, (f32)right_text.x0 + 1.2f, (f32)right_text.y0 + 1.2f, 0.0f, 0.6f);
+  CHECK(f.ed.mouse.wheel_panel == right);
+  CHECK_EQ(f.ed.mouse.wheel_x_remainder, 0.0f);
+  CHECK(fabsf(f.ed.mouse.wheel_y_remainder - 0.6f) < 0.0001f);
+
+  SendWheel(&f, (f32)left_text.x0 + 1.2f, (f32)left_text.y0 + 1.2f, 0.0f, 0.5f);
+  CHECK(f.ed.mouse.wheel_panel == left);
+  CHECK_EQ(left->view->scroll_line, 0);
+  CHECK_EQ(right->view->scroll_line, 0);
+  CHECK_EQ(f.ed.mouse.wheel_x_remainder, 0.0f);
+  CHECK(fabsf(f.ed.mouse.wheel_y_remainder - 0.5f) < 0.0001f);
+
+  Destroy(&f);
+}
+
+TEST(mouse_wheel_shift_changes_reset_only_the_affected_axis) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+  Buffer *buffer = EditorFocusedBuffer(&f.ed);
+  SetScrollableText(&f, buffer, 80);
+
+  Panel *panel = f.ed.focused_panel;
+  RectS32 text = EditorPanelTextRect(&f.ed, panel);
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.6f, 0.6f);
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.0f, 0.5f, KeyMod::Shift);
+  CHECK(fabsf(f.ed.mouse.wheel_x_remainder - 0.6f) < 0.0001f);
+  CHECK(fabsf(f.ed.mouse.wheel_y_remainder - 0.5f) < 0.0001f);
+  CHECK_EQ((u32)f.ed.mouse.wheel_x_unit, (u32)MouseWheelUnit::Line);
+  CHECK_EQ((u32)f.ed.mouse.wheel_y_unit, (u32)MouseWheelUnit::Page);
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.5f, 0.0f, KeyMod::Shift);
+  CHECK(fabsf(f.ed.mouse.wheel_x_remainder - 0.5f) < 0.0001f);
+  CHECK(fabsf(f.ed.mouse.wheel_y_remainder - 0.5f) < 0.0001f);
+  CHECK_EQ((u32)f.ed.mouse.wheel_x_unit, (u32)MouseWheelUnit::Page);
+  CHECK_EQ((u32)f.ed.mouse.wheel_y_unit, (u32)MouseWheelUnit::Page);
+
+  Destroy(&f);
+}
+
+TEST(mouse_wheel_noop_regions_clear_state) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+  Buffer *buffer = EditorFocusedBuffer(&f.ed);
+  SetScrollableText(&f, buffer, 80);
+
+  Panel *panel = f.ed.focused_panel;
+  RectS32 text = EditorPanelTextRect(&f.ed, panel);
+  f.ed.command_view->scroll_column = 3;
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.4f, 0.4f);
+  SendWheel(&f, (f32)panel->rect.x0 + 2.0f, (f32)(panel->rect.y1 - 1) + 0.2f, 0.0f, 1.0f);
+  CHECK(f.ed.mouse.wheel_panel == nullptr);
+  CHECK_EQ(f.ed.mouse.wheel_x_remainder, 0.0f);
+  CHECK_EQ(f.ed.mouse.wheel_y_remainder, 0.0f);
+  CHECK_EQ((u32)f.ed.mouse.wheel_x_unit, (u32)MouseWheelUnit::None);
+  CHECK_EQ((u32)f.ed.mouse.wheel_y_unit, (u32)MouseWheelUnit::None);
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.4f, 0.4f);
+  SendWheel(&f, 4.2f, (f32)(f.ed.screen.y1 - 1) + 0.2f, 0.0f, 1.0f);
+  CHECK(f.ed.mouse.wheel_panel == nullptr);
+  CHECK_EQ(f.ed.mouse.wheel_x_remainder, 0.0f);
+  CHECK_EQ(f.ed.mouse.wheel_y_remainder, 0.0f);
+
+  f.ed.command_line_active = true;
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.4f, 0.4f);
+  SendWheel(&f, 4.2f, (f32)(f.ed.screen.y1 - 1) + 0.2f, 0.0f, 1.0f);
+  CHECK(f.ed.mouse.wheel_panel == nullptr);
+  CHECK_EQ(f.ed.mouse.wheel_x_remainder, 0.0f);
+  CHECK_EQ(f.ed.mouse.wheel_y_remainder, 0.0f);
+  CHECK_EQ(f.ed.command_view->scroll_column, 3);
+
+  Destroy(&f);
+}
+
+TEST(mouse_resize_vertical_boundary_arms_drags_and_releases) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+
+  Panel *right = EditorSplit(&f.ed, Axis2::X);
+  EditorLayout(&f.ed);
+  Panel *left = f.ed.root_panel->first_child;
+  i32 boundary_x = left->rect.x1;
+
+  EditorFocusPanel(&f.ed, left);
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)boundary_x + 0.01f, 5.2f);
+  CHECK(f.ed.focused_panel == right);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::Boundary);
+  CHECK(f.ed.mouse.capture.panel == right);
+  CHECK(f.ed.mouse.capture.view == right->view);
+  CHECK(f.ed.mouse.capture.boundary.valid);
+  CHECK_EQ((u32)f.ed.mouse.capture.boundary.axis, (u32)Axis2::X);
+
+  SendMouse(&f, MouseAction::Drag, MouseButton::Left, (f32)boundary_x + 0.01f, 5.2f);
+  CHECK_EQ(left->rect.x1, boundary_x);
+
+  SendMouse(&f, MouseAction::Drag, MouseButton::Left, (f32)boundary_x + 3.4f, 5.2f);
+  CHECK_EQ(left->rect.x1, boundary_x + 3);
+  CHECK_EQ(right->rect.x0, left->rect.x1);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::Boundary);
+
+  SendMouse(&f, MouseAction::Release, MouseButton::Left, (f32)boundary_x + 3.4f, 5.2f);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::None);
+
+  Destroy(&f);
+}
+
+TEST(mouse_resize_status_line_resizes_horizontally_and_focuses) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+
+  Panel *right = EditorSplit(&f.ed, Axis2::X);
+  EditorSplit(&f.ed, Axis2::Y);
+  EditorLayout(&f.ed);
+
+  Panel *left = f.ed.root_panel->first_child;
+  Panel *right_top = right->first_child;
+  Panel *right_bottom = right->last_child;
+  i32 boundary_y = right_top->rect.y1;
+
+  EditorFocusPanel(&f.ed, left);
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)right_top->rect.x0 + 2.2f,
+            (f32)(boundary_y - 1) + 0.2f);
+  CHECK(f.ed.focused_panel == right_top);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::Boundary);
+  CHECK_EQ((u32)f.ed.mouse.capture.boundary.axis, (u32)Axis2::Y);
+
+  SendMouse(&f, MouseAction::Drag, MouseButton::Left, (f32)right_top->rect.x0 + 2.2f,
+            (f32)(boundary_y + 1) + 0.2f);
+  CHECK_EQ(right_top->rect.y1, boundary_y + 2);
+  CHECK_EQ(right_bottom->rect.y0, right_top->rect.y1);
+
+  SendMouse(&f, MouseAction::Release, MouseButton::Left, (f32)right_top->rect.x0 + 2.2f,
+            (f32)(boundary_y + 1) + 0.2f);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::None);
+
+  Destroy(&f);
+}
+
+TEST(mouse_resize_bottom_status_focuses_without_arming_capture) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+
+  Panel *right = EditorSplit(&f.ed, Axis2::X);
+  EditorLayout(&f.ed);
+  Panel *left = f.ed.root_panel->first_child;
+  i32 left_status_y = left->rect.y1 - 1;
+  i32 before_y1 = left->rect.y1;
+
+  EditorFocusPanel(&f.ed, right);
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)left->rect.x0 + 2.2f,
+            (f32)left_status_y + 0.2f);
+  CHECK(f.ed.focused_panel == left);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::None);
+
+  SendMouse(&f, MouseAction::Drag, MouseButton::Left, (f32)left->rect.x0 + 2.2f,
+            (f32)left_status_y - 2.0f);
+  CHECK_EQ(left->rect.y1, before_y1);
+
+  Destroy(&f);
+}
+
+TEST(mouse_resize_nested_boundary_keeps_original_capture_after_crossing) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+
+  Panel *right = EditorSplit(&f.ed, Axis2::X);
+  Panel *far_right = EditorSplit(&f.ed, Axis2::X);
+  EditorLayout(&f.ed);
+
+  Panel *left = f.ed.root_panel->first_child;
+  Panel *middle = right->first_child;
+  i32 outer_boundary_x = left->rect.x1;
+  i32 drag_x = middle->rect.x1 + 2;
+
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)outer_boundary_x + 0.01f, 4.2f);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::Boundary);
+  CHECK(f.ed.mouse.capture.panel == middle);
+
+  SendMouse(&f, MouseAction::Drag, MouseButton::Left, (f32)drag_x + 0.2f, 4.2f);
+  CHECK(f.ed.mouse.capture.panel == middle);
+  CHECK(f.ed.focused_panel == middle);
+  CHECK_EQ(left->rect.x1, drag_x);
+  CHECK(left->rect.x1 < far_right->rect.x0);
+
+  Destroy(&f);
+}
+
+TEST(mouse_resize_extreme_drag_clamps_and_cancel_clears_capture) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+
+  Panel *right = EditorSplit(&f.ed, Axis2::X);
+  EditorLayout(&f.ed);
+  Panel *left = f.ed.root_panel->first_child;
+  i32 boundary_x = left->rect.x1;
+
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)boundary_x + 0.01f, 4.2f);
+  SendMouse(&f, MouseAction::Drag, MouseButton::Left, 200.0f, 4.2f);
+  CHECK_EQ(left->rect.x1, 78);
+  CHECK_EQ(right->rect.x0, left->rect.x1);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::Boundary);
+
+  SendMouse(&f, MouseAction::Drag, MouseButton::Left, -100.0f, 4.2f);
+  CHECK_EQ(left->rect.x1, 2);
+  CHECK_EQ(right->rect.x0, left->rect.x1);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::Boundary);
+
+  SendMouse(&f, MouseAction::Cancel, MouseButton::None, 0.0f, 0.0f);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::None);
+
+  Destroy(&f);
+}
+
+TEST(mouse_resize_corner_prefers_vertical_boundary) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+
+  Panel *right = EditorSplit(&f.ed, Axis2::X);
+  EditorLayout(&f.ed);
+  Panel *left = f.ed.root_panel->first_child;
+  i32 boundary_x = left->rect.x1;
+
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)boundary_x - 0.124f,
+            (f32)(left->rect.y1 - 1) + 0.2f);
+  CHECK(f.ed.focused_panel == right);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::Boundary);
+  CHECK_EQ((u32)f.ed.mouse.capture.boundary.axis, (u32)Axis2::X);
 
   Destroy(&f);
 }
