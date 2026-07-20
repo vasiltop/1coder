@@ -14,6 +14,27 @@ void VimClearPending(VimState *vim) {
   vim->pending_register = 0;
 }
 
+bool VimHasMouseVisualReturnMode(const VimState *vim) {
+  return vim->mouse_visual_return_mode == VimMode::Insert ||
+         vim->mouse_visual_return_mode == VimMode::Replace;
+}
+
+void VimSetMouseVisualReturnMode(VimState *vim, VimMode mode) {
+  if (mode == VimMode::Insert || mode == VimMode::Replace) {
+    vim->mouse_visual_return_mode = mode;
+  }
+}
+
+void VimClearMouseVisualReturnMode(VimState *vim) { vim->mouse_visual_return_mode = VimMode::Normal; }
+
+VimMode VimConsumeVisualExitMode(VimState *vim, VimMode fallback) {
+  if (!VimHasMouseVisualReturnMode(vim)) return fallback;
+
+  VimMode result = (fallback == VimMode::Insert) ? VimMode::Insert : vim->mouse_visual_return_mode;
+  VimClearMouseVisualReturnMode(vim);
+  return result;
+}
+
 String8 VimModeName(VimMode mode) {
   switch (mode) {
     case VimMode::Normal: return Str8Lit("NORMAL");

@@ -1,6 +1,7 @@
 #include "editor/command.h"
 #include "editor/editor.h"
 #include "test.h"
+#include "vim/vim_operators.h"
 
 // These drive the editor the way a keyboard does -- through EditorProcessChord
 // -- so they exercise the keymap, the count parser, the operator machinery and
@@ -427,15 +428,142 @@ TEST(vim_exclusive_motion_stops_at_end_of_line) {
 TEST(vim_change_enters_insert_mode) {
   Fixture f = MakeFixture("foo bar");
 
+  // cw deletes only the word, preserving the trailing space (Neovim cw semantics).
   Type(&f, "cw");
   CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Insert);
-  CHECK_STR(TextOf(&f), Str8Lit("bar"));
+  CHECK_STR(TextOf(&f), Str8Lit(" bar"));
 
-  Type(&f, "new ");
+  Type(&f, "new");
   CHECK_STR(TextOf(&f), Str8Lit("new bar"));
 
   Type(&f, "<Esc>");
   CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Normal);
+
+  Destroy(&f);
+}
+
+TEST(vim_replace_char) {
+  // r replaces the character under cursor with the next keystroke.
+  Fixture f = MakeFixture("hello world");
+
+  Type(&f, "rz");
+  CHECK_STR(TextOf(&f), Str8Lit("zello world"));
+  CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Normal);
+  CHECK_EQ(CursorColumn(&f), 0);
+
+  // r on blank line does nothing.
+  Fixture g = MakeFixture("\nafter");
+  Type(&g, "rz");
+  CHECK_STR(TextOf(&g), Str8Lit("\nafter"));
+  CHECK_EQ(CursorColumn(&g), 0);
+  Destroy(&g);
+
+  Destroy(&f);
+}
+
+TEST(vim_toggle_case) {
+  // ~ toggles ASCII alpha case and advances cursor.
+  Fixture f = MakeFixture("hello");
+
+  Type(&f, "~");
+  CHECK_STR(TextOf(&f), Str8Lit("Hello"));
+  CHECK_EQ(CursorColumn(&f), 1);
+
+  // Non-letter under cursor: unchanged, cursor still advances.
+  Fixture g = MakeFixture("a1b");
+  Type(&g, "l~");  // cursor on '1'
+  CHECK_STR(TextOf(&g), Str8Lit("a1b"));
+
+  // ~ at end of non-empty line: cursor stays on last char.
+  Type(&g, "l~");  // cursor on 'b'
+  CHECK_STR(TextOf(&g), Str8Lit("a1B"));
+  CHECK_EQ(CursorColumn(&g), 2);
+  Destroy(&g);
+
+  // ~ on blank line does nothing.
+  Fixture h = MakeFixture("\nafter");
+  Type(&h, "~");
+  CHECK_STR(TextOf(&h), Str8Lit("\nafter"));
+  Destroy(&h);
+
+  Destroy(&f);
+}
+
+TEST(vim_open_line_below_indent) {
+  // o on an indented line copies the indent to the new line.
+  Fixture f = MakeFixture("    indented\nnext");
+
+  Type(&f, "ohi<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("    indented\n    hi\nnext"));
+
+  // o on an unindented line: no indent added.
+  Fixture g = MakeFixture("plain\nnext");
+  Type(&g, "ohi<Esc>");
+  CHECK_STR(TextOf(&g), Str8Lit("plain\nhi\nnext"));
+  Destroy(&g);
+
+  Destroy(&f);
+}
+
+TEST(vim_open_line_above_indent) {
+  // O on an indented line copies the indent to the new line above.
+  Fixture f = MakeFixture("    indented");
+
+  Type(&f, "Ohi<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("    hi\n    indented"));
+
+  Destroy(&f);
+}
+
+TEST(vim_change_line_preserves_indent) {
+  // cc preserves leading whitespace, cursor lands at first non-blank.
+  Fixture f = MakeFixture("    indented\nnext");
+
+  Type(&f, "ccNEW<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("    NEW\nnext"));
+  CHECK_EQ(CursorColumn(&f), 6);
+
+  // cc on unindented line: works as before.
+  Fixture g = MakeFixture("plain\nnext");
+  Type(&g, "ccNEW<Esc>");
+  CHECK_STR(TextOf(&g), Str8Lit("NEW\nnext"));
+  Destroy(&g);
+
+  Destroy(&f);
+}
+
+TEST(vim_append_clamped_to_line) {
+  // a on a blank line inserts on that line, not the following one.
+  Fixture f = MakeFixture("\nafter");
+
+  Type(&f, "ahi<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("hi\nafter"));
+
+  Destroy(&f);
+}
+
+TEST(vim_change_dollar_blank_line) {
+  // c$ on a blank line enters insert without crossing to the next line.
+  Fixture f = MakeFixture("\nafter");
+
+  Type(&f, "c$Q<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("Q\nafter"));
+
+  Destroy(&f);
+}
+
+TEST(vim_cw_preserves_trailing_space) {
+  // cw changes only the word, not the trailing whitespace.
+  Fixture f = MakeFixture("alpha beta gamma");
+
+  Type(&f, "cwZZ<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("ZZ beta gamma"));
+
+  // cw on a trailing-space line leaves the spaces.
+  Fixture g = MakeFixture("word   \nnext");
+  Type(&g, "cwZZ<Esc>");
+  CHECK_STR(TextOf(&g), Str8Lit("ZZ   \nnext"));
+  Destroy(&g);
 
   Destroy(&f);
 }
@@ -507,15 +635,15 @@ TEST(vim_delete_yanks_into_register) {
 TEST(vim_indent_and_dedent) {
   Fixture f = MakeFixture("one\ntwo");
 
-  // One shift width, which matches 'shiftwidth' from the nvim config.
+  // Clean Neovim defaults: noexpandtab, tabstop=8, shiftwidth=8 → inserts \t.
   Type(&f, ">>");
-  CHECK_STR(TextOf(&f), Str8Lit("  one\ntwo"));
+  CHECK_STR(TextOf(&f), Str8Lit("\tone\ntwo"));
   Type(&f, "<<");
   CHECK_STR(TextOf(&f), Str8Lit("one\ntwo"));
 
   // An operator with a linewise motion indents the whole span.
   Type(&f, ">j");
-  CHECK_STR(TextOf(&f), Str8Lit("  one\n  two"));
+  CHECK_STR(TextOf(&f), Str8Lit("\tone\n\ttwo"));
 
   Destroy(&f);
 }
@@ -771,6 +899,188 @@ TEST(vim_visual_escape_leaves_text_alone) {
   Destroy(&f);
 }
 
+TEST(vim_visual_escape_restores_temporary_mouse_insert_mode) {
+  Fixture insert = MakeFixture("hello");
+  View *view = ViewOf(&insert);
+  Buffer *buffer = BufferOf(&insert);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Insert;
+  ViewSetCursor(view, buffer, 2);
+
+  Type(&insert, "<Esc>");
+  CHECK_EQ((u32)ModeOf(&insert), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&insert), Str8Lit("hello"));
+  Destroy(&insert);
+
+  Fixture replace = MakeFixture("hello");
+  view = ViewOf(&replace);
+  buffer = BufferOf(&replace);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 2);
+
+  Type(&replace, "<Esc>");
+  CHECK_EQ((u32)ModeOf(&replace), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  Destroy(&replace);
+}
+
+TEST(vim_visual_operators_restore_temporary_mouse_modes) {
+  Fixture yank = MakeFixture("alpha beta");
+  View *view = ViewOf(&yank);
+  Buffer *buffer = BufferOf(&yank);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 4);
+
+  Type(&yank, "y");
+  CHECK_EQ((u32)ModeOf(&yank), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&yank), Str8Lit("alpha beta"));
+  Destroy(&yank);
+
+  Fixture del = MakeFixture("alpha beta");
+  view = ViewOf(&del);
+  buffer = BufferOf(&del);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 4);
+
+  Type(&del, "d");
+  CHECK_EQ((u32)ModeOf(&del), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&del), Str8Lit(" beta"));
+  Destroy(&del);
+
+  Fixture indent = MakeFixture("one\ntwo");
+  view = ViewOf(&indent);
+  buffer = BufferOf(&indent);
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Insert;
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+
+  Type(&indent, ">");
+  CHECK_EQ((u32)ModeOf(&indent), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  // Clean Neovim defaults: noexpandtab → indent inserts a tab, not spaces.
+  CHECK_STR(TextOf(&indent), Str8Lit("\tone\n\ttwo"));
+  Destroy(&indent);
+
+  Fixture dedent = MakeFixture("  one\n  two");
+  view = ViewOf(&dedent);
+  buffer = BufferOf(&dedent);
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+
+  Type(&dedent, "<");
+  CHECK_EQ((u32)ModeOf(&dedent), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&dedent), Str8Lit("one\ntwo"));
+  Destroy(&dedent);
+
+  Fixture change = MakeFixture("alpha beta");
+  view = ViewOf(&change);
+  buffer = BufferOf(&change);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 4);
+
+  Type(&change, "c");
+  CHECK_EQ((u32)ModeOf(&change), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&change), Str8Lit(" beta"));
+  Destroy(&change);
+}
+
+TEST(vim_replace_visual_charwise_captures_unnamed_and_returns_normal) {
+  Fixture f = MakeFixture("abcdef");
+  View *view = ViewOf(&f);
+  Buffer *buffer = BufferOf(&f);
+
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 1;
+  ViewSetCursor(view, buffer, 3);
+
+  u64 cursor = VimReplaceVisual(&f.ed, view, buffer, Register{Str8Lit("X"), false});
+
+  CHECK_EQ(cursor, 1);
+  CHECK_STR(TextOf(&f), Str8Lit("aXef"));
+  CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Normal);
+  CHECK_EQ(view->cursor, 1);
+  CHECK_STR(EditorGetRegister(&f.ed, 0).text, Str8Lit("bcd"));
+  CHECK(!EditorGetRegister(&f.ed, 0).linewise);
+
+  Destroy(&f);
+}
+
+TEST(vim_replace_visual_restores_temporary_insert_and_replace_modes) {
+  Fixture insert = MakeFixture("abcdef");
+  View *view = ViewOf(&insert);
+  Buffer *buffer = BufferOf(&insert);
+
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 1;
+  view->vim.mouse_visual_return_mode = VimMode::Insert;
+  ViewSetCursor(view, buffer, 3);
+
+  u64 cursor = VimReplaceVisual(&insert.ed, view, buffer, Register{Str8Lit("XY"), false});
+
+  CHECK_EQ(cursor, 1);
+  CHECK_STR(TextOf(&insert), Str8Lit("aXYef"));
+  CHECK_EQ((u32)ModeOf(&insert), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_EQ(view->cursor, 1);
+  Destroy(&insert);
+
+  Fixture replace = MakeFixture("one\ntwo\nthree\n");
+  view = ViewOf(&replace);
+  buffer = BufferOf(&replace);
+
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = BufferOffsetFromLine(buffer, 1);
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+
+  cursor = VimReplaceVisual(&replace.ed, view, buffer, Register{Str8Lit("alpha\nbeta\n"), true});
+
+  CHECK_EQ(cursor, BufferOffsetFromLine(buffer, 1));
+  CHECK_STR(TextOf(&replace), Str8Lit("one\nalpha\nbeta\nthree\n"));
+  CHECK_EQ((u32)ModeOf(&replace), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(EditorGetRegister(&replace.ed, 0).text, Str8Lit("two\n"));
+  CHECK(EditorGetRegister(&replace.ed, 0).linewise);
+  Destroy(&replace);
+}
+
+TEST(vim_replace_visual_linewise_normalizes_missing_final_newline) {
+  Fixture f = MakeFixture("one\ntwo\nthree");
+  View *view = ViewOf(&f);
+  Buffer *buffer = BufferOf(&f);
+
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = BufferOffsetFromLine(buffer, 1);
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+
+  u64 cursor = VimReplaceVisual(&f.ed, view, buffer, Register{Str8Lit("tail"), true});
+
+  CHECK_EQ(cursor, BufferOffsetFromLine(buffer, 1));
+  CHECK_STR(TextOf(&f), Str8Lit("one\ntail\nthree"));
+  CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Normal);
+  CHECK_STR(EditorGetRegister(&f.ed, 0).text, Str8Lit("two\n"));
+  CHECK(EditorGetRegister(&f.ed, 0).linewise);
+
+  Destroy(&f);
+}
+
 // ---------------------------------------------------------------------------
 // Undo and repeat
 // ---------------------------------------------------------------------------
@@ -874,6 +1184,13 @@ TEST(vim_text_object_word) {
   CHECK_STR(TextOf(&g), Str8Lit("alpha gamma"));
   Destroy(&g);
 
+  Destroy(&f);
+}
+
+TEST(vim_inner_word_on_empty_line_is_noop) {
+  Fixture f = MakeFixture("\nafter blank\n");
+  Type(&f, "diw");
+  CHECK_STR(TextOf(&f), Str8Lit("\nafter blank\n"));
   Destroy(&f);
 }
 
@@ -1183,6 +1500,18 @@ TEST(vim_clipboard_round_trip_keeps_its_kind) {
   CHECK_STR(TextOf(&g), Str8Lit("abc defabc "));
   CHECK_EQ(BufferLineCount(BufferOf(&g)), 1);
   Destroy(&g);
+
+  Destroy(&f);
+}
+
+TEST(vim_clipboard_aliases_share_linewise_metadata) {
+  Fixture f = MakeFixture("one\ntwo");
+  InstallFakeClipboard(&f);
+
+  Type(&f, "\"+yy");
+  Register star = EditorGetRegister(&f.ed, '*');
+  CHECK_STR(star.text, Str8Lit("one\n"));
+  CHECK(star.linewise);
 
   Destroy(&f);
 }
@@ -1759,5 +2088,478 @@ TEST(vim_jump_list_across_buffers) {
   CHECK(BufferHandleEqual(ViewOf(&f)->buffer, first));
   CHECK_EQ(CursorLine(&f), 1);
 
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Paste parity with Neovim
+// ---------------------------------------------------------------------------
+
+TEST(vim_linewise_paste_eof_no_extra_newline) {
+  // yyp on the only line in the buffer should give two identical lines in the
+  // buffer — *without* a trailing '\n' in the buffer text — so that the save
+  // layer adds exactly one final newline.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "yyp");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma\nalpha beta gamma"));
+  Destroy(&f);
+}
+
+TEST(vim_ddp_restores_content_without_extra_newline) {
+  // dd followed by p on a single-line buffer should produce the deleted content
+  // on a new line below the empty line that dd leaves behind — matching Neovim
+  // which always preserves at least one blank line after deleting the last line.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "ddp");
+  // "\n" is the surviving empty line; "alpha beta gamma" is the pasted content.
+  CHECK_STR(TextOf(&f), Str8Lit("\nalpha beta gamma"));
+  Destroy(&f);
+}
+
+TEST(vim_ddP_empty_buffer_trailing_empty_line) {
+  // ddP on a single-line buffer: the content goes before the empty last line,
+  // so the buffer ends with '\n' and the saved file has two trailing newlines.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "ddP");
+  // Content then the preserved empty line (represented as '\n' in the buffer).
+  CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma\n"));
+  Destroy(&f);
+}
+
+TEST(vim_counted_linewise_paste_three_distinct_lines) {
+  // yy2p must produce three separate lines, not two merged into one.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "yy2p");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma\nalpha beta gamma\nalpha beta gamma"));
+  Destroy(&f);
+}
+
+TEST(vim_linewise_paste_cursor_at_first_nonblank) {
+  // After yyp on an indented line the cursor should land on the first
+  // non-blank character of the pasted line, not column 0.
+  Fixture f = MakeFixture("    indented");
+  Type(&f, "yyp");
+  CHECK_STR(TextOf(&f), Str8Lit("    indented\n    indented"));
+  CHECK_EQ(CursorLine(&f), 1);
+  CHECK_EQ(CursorColumn(&f), 4);  // 0-indexed: four spaces, then 'i'
+  Destroy(&f);
+}
+
+TEST(vim_charwise_paste_cursor_embedded_newlines) {
+  // Charwise paste of text that contains newlines should leave the cursor at
+  // the first pasted character (position of insertion), not the last.
+  // blank-runs: "a\n\n\nb" at col 0, `ye` grabs "a\n\n\nb", `p` pastes after.
+  Fixture f = MakeFixture("a\n\n\nb");
+  Type(&f, "yep");
+  // text: original 'a' at 0, then inserted "a\n\n\nb" at 1 → "aa\n\n\nb\n\n\nb"
+  CHECK_STR(TextOf(&f), Str8Lit("aa\n\n\nb\n\n\nb"));
+  CHECK_EQ(CursorLine(&f), 0);
+  CHECK_EQ(CursorColumn(&f), 1);  // at == 1, first pasted char
+  Destroy(&f);
+}
+
+TEST(vim_charwise_paste_cursor_text_ends_with_newline) {
+  // Charwise paste of text that ends with '\n' should leave the cursor one
+  // position past the last inserted byte (on the new empty line).
+  // leading-blank: "\nafter blank", cursor at 0, `yw` grabs "\n", `p` pastes.
+  Fixture f = MakeFixture("\nafter blank");
+  Type(&f, "ywp");
+  CHECK_STR(TextOf(&f), Str8Lit("\n\nafter blank"));
+  CHECK_EQ(CursorLine(&f), 1);   // on the new empty line
+  CHECK_EQ(CursorColumn(&f), 0);
+  Destroy(&f);
+}
+
+TEST(vim_paste_undo_collapses_separator_and_content) {
+  // ddp on a single-line buffer inserts a separator '\n' then the content;
+  // a single undo must revert BOTH inserts and restore the post-dd empty state.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "dd");
+  CHECK_STR(TextOf(&f), Str8Lit(""));  // post-dd: buffer is empty
+
+  Type(&f, "p");
+  CHECK_STR(TextOf(&f), Str8Lit("\nalpha beta gamma"));  // paste inserted two things
+
+  // One `u` must restore the buffer to the empty post-dd state, not leave the
+  // separator '\n' behind (which would need a second undo).
+  Type(&f, "u");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
+
+  Destroy(&f);
+}
+
+TEST(vim_yyp_undo_restores_single_line) {
+  // yyp on the last line inserts a separator '\n' then the yanked content;
+  // one undo must revert both inserts and return to the original single line.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "yyp");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma\nalpha beta gamma"));
+
+  Type(&f, "u");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma"));
+
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Neovim parity: indentation bytes and cursor (clean -u NONE defaults)
+// ---------------------------------------------------------------------------
+
+TEST(vim_indent_tab_bytes) {
+  // >> inserts exactly one tab (0x09); << removes it.
+  Fixture f = MakeFixture("one\ntwo\nthree");
+  Type(&f, ">>");
+  CHECK_STR(TextOf(&f), Str8Lit("\tone\ntwo\nthree"));
+
+  Type(&f, "<<");
+  CHECK_STR(TextOf(&f), Str8Lit("one\ntwo\nthree"));
+
+  // Mixed leading whitespace: tab+spaces dedent by one tabstop (8 vis cols).
+  Fixture g = MakeFixture("\t   mixed");
+  Type(&g, "<<");
+  CHECK_STR(TextOf(&g), Str8Lit("   mixed"));
+
+  Fixture h = MakeFixture("\t\tmixed");
+  Type(&h, "<<");
+  CHECK_STR(TextOf(&h), Str8Lit("\tmixed"));
+
+  Destroy(&f);
+  Destroy(&g);
+  Destroy(&h);
+}
+
+TEST(vim_indent_cursor_placement) {
+  // After >> the cursor sits at min(old_codepoint_col, old_first_nonblank).
+  // Cursor in content area moves to start of new indent.
+  Fixture f = MakeFixture("one\ntwo");
+  Type(&f, "ll");  // cursor at 'e' (col 2)
+  Type(&f, ">>");
+  CHECK_EQ(CursorColumn(&f), 0);  // lands on the tab
+
+  // After << the cursor's virtual column is preserved (Neovim parity).
+  Fixture g = MakeFixture("\tone\ntwo");
+  Type(&g, "<<");
+  CHECK_EQ(CursorColumn(&g), 2);  // virtual col 8 preserved: lands on 'e'
+
+  // Two tabs: first tab fills old virtual column exactly; cursor stays on it.
+  Fixture h = MakeFixture("\t\tone\ntwo");
+  Type(&h, "<<");
+  CHECK_EQ(CursorColumn(&h), 0);  // '\t' end-vcol 8 == old_end_vcol
+
+  Destroy(&f);
+  Destroy(&g);
+  Destroy(&h);
+}
+
+TEST(vim_indent_overcount_noop) {
+  // 2>> on the last line of the buffer is a no-op (Neovim parity).
+  Fixture f = MakeFixture("one");
+  Type(&f, "2>>");
+  CHECK_STR(TextOf(&f), Str8Lit("one"));
+
+  // 2>> on the last line of a multi-line buffer is also a no-op.
+  Fixture g = MakeFixture("one\ntwo");
+  Type(&g, "j2>>");  // move to last line, then 2>>
+  CHECK_STR(TextOf(&g), Str8Lit("one\ntwo"));
+
+  // 2>> NOT on the last line works normally (indents 2 lines).
+  Fixture h = MakeFixture("one\ntwo\nthree");
+  Type(&h, "2>>");
+  CHECK_STR(TextOf(&h), Str8Lit("\tone\n\ttwo\nthree"));
+
+  // 2dd on the last line is also a no-op.
+  Fixture d = MakeFixture("one");
+  Type(&d, "2dd");
+  CHECK_STR(TextOf(&d), Str8Lit("one"));
+
+  Destroy(&f);
+  Destroy(&g);
+  Destroy(&h);
+  Destroy(&d);
+}
+
+// ---------------------------------------------------------------------------
+// Neovim parity: J count and whitespace
+// ---------------------------------------------------------------------------
+
+TEST(vim_join_count) {
+  // Bare J or 1J == 2J: one join (two lines become one).
+  Fixture f = MakeFixture("one\ntwo\nthree");
+  Type(&f, "J");
+  CHECK_STR(TextOf(&f), Str8Lit("one two\nthree"));
+  Destroy(&f);
+
+  Fixture f2 = MakeFixture("one\ntwo\nthree");
+  Type(&f2, "2J");
+  CHECK_STR(TextOf(&f2), Str8Lit("one two\nthree"));
+  Destroy(&f2);
+
+  // 3J joins three lines (two joins).
+  Fixture g = MakeFixture("one\ntwo\nthree");
+  Type(&g, "3J");
+  CHECK_STR(TextOf(&g), Str8Lit("one two three"));
+  Destroy(&g);
+}
+
+TEST(vim_join_trailing_whitespace) {
+  // If the current line ends with whitespace, no separator is added.
+  Fixture f = MakeFixture("one \ntwo\nthree");
+  Type(&f, "J");
+  CHECK_STR(TextOf(&f), Str8Lit("one two\nthree"));
+
+  // Trailing tab: also no separator.
+  Fixture g = MakeFixture("one\t\ntwo\nthree");
+  Type(&g, "J");
+  CHECK_STR(TextOf(&g), Str8Lit("one\ttwo\nthree"));
+
+  // Blank next line: no separator, cursor at end of current.
+  Fixture h = MakeFixture("one\n\nthree");
+  Type(&h, "J");
+  CHECK_STR(TextOf(&h), Str8Lit("one\nthree"));
+  CHECK_EQ(CursorColumn(&h), 2);  // 'e' in "one"
+
+  // J on last line: no-op.
+  Fixture last = MakeFixture("one");
+  Type(&last, "J");
+  CHECK_STR(TextOf(&last), Str8Lit("one"));
+
+  Destroy(&f);
+  Destroy(&g);
+  Destroy(&h);
+  Destroy(&last);
+}
+
+TEST(vim_indent_join_undo) {
+  // >> on two lines is one undo step.
+  Fixture f = MakeFixture("one\ntwo");
+  Type(&f, ">j");
+  CHECK_STR(TextOf(&f), Str8Lit("\tone\n\ttwo"));
+  Type(&f, "u");
+  CHECK_STR(TextOf(&f), Str8Lit("one\ntwo"));
+
+  // 3J (two joins) is one undo step.
+  Fixture g = MakeFixture("one\ntwo\nthree");
+  Type(&g, "3J");
+  CHECK_STR(TextOf(&g), Str8Lit("one two three"));
+  Type(&g, "u");
+  CHECK_STR(TextOf(&g), Str8Lit("one\ntwo\nthree"));
+
+  Destroy(&f);
+  Destroy(&g);
+}
+
+// ---------------------------------------------------------------------------
+// Linewise-empty save semantics
+// ---------------------------------------------------------------------------
+
+TEST(vim_linewise_delete_clears_final_newline_when_empty) {
+  // dd that empties the buffer must clear final_newline so a subsequent :w
+  // writes "" not "\n" (Neovim parity: linewise delete on last line).
+  Fixture f = MakeFixture("hello");
+  BufferOf(&f)->final_newline = true;
+  Type(&f, "dd");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
+  CHECK(!BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_charwise_delete_preserves_final_newline) {
+  // x (charwise, non-emptying) leaves final_newline untouched.
+  Fixture f = MakeFixture("hello");
+  BufferOf(&f)->final_newline = true;
+  Type(&f, "x");
+  CHECK_STR(TextOf(&f), Str8Lit("ello"));
+  CHECK(BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_multiline_charwise_delete_clears_final_newline) {
+  // de crossing multiple lines and emptying the buffer clears final_newline
+  // (Neovim: writes "" not "\n" – same behaviour as linewise dd).
+  Fixture f = MakeFixture("a\n\n\nb");
+  BufferOf(&f)->final_newline = true;
+  Type(&f, "de");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
+  CHECK(!BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_charwise_delete_singleline_empty_keeps_newline) {
+  // d$ on a single-line no-eol buffer empties the line but leaves it in place;
+  // final_newline is forced to true so :w writes "\n" (Neovim fixeol parity).
+  Fixture f = MakeFixture("hello");
+  BufferOf(&f)->final_newline = false;
+  Type(&f, "d$");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
+  CHECK(BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_charwise_delete_empty_buffer_keeps_noeol) {
+  Fixture f = MakeFixture("");
+  BufferOf(&f)->final_newline = false;
+  Type(&f, "d$");
+  CHECK(!BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_D_singleline_noeol_sets_final_newline) {
+  // D on a single-line no-eol buffer: empty line remains → fixeol writes "\n".
+  Fixture f = MakeFixture("hello");
+  BufferOf(&f)->final_newline = false;
+  Type(&f, "D");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
+  CHECK(BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Paragraph-forward EOF cursor
+// ---------------------------------------------------------------------------
+
+TEST(vim_paragraph_forward_single_line_lands_at_last_char) {
+  // } on a single-line buffer with no trailing blank lands on the last char.
+  Fixture f = MakeFixture("hello");
+  Type(&f, "}");
+  CHECK_EQ(CursorColumn(&f), 4);  // 'o'
+  Destroy(&f);
+}
+
+TEST(vim_paragraph_forward_multiline_no_blank_lands_at_last_char) {
+  // } with no following blank paragraph lands on last char of last line.
+  Fixture f = MakeFixture("one\ntwo\nthree");
+  Type(&f, "}");
+  CHECK_EQ(CursorLine(&f), 2);
+  CHECK_EQ(CursorColumn(&f), 4);  // 'e' in "three"
+  Destroy(&f);
+}
+
+TEST(vim_paragraph_forward_trailing_blank_lands_at_blank_start) {
+  // } to a trailing blank line lands at the start of that blank line.
+  Fixture f = MakeFixture("one\ntwo\n\nthree");
+  Type(&f, "}");
+  CHECK_EQ(CursorLine(&f), 2);
+  CHECK_EQ(CursorColumn(&f), 0);
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Exclusive dw clipped to source line
+// ---------------------------------------------------------------------------
+
+TEST(vim_dw_does_not_cross_line) {
+  // dw at the last word of a line must not consume the newline or spill onto
+  // the next line when the w motion lands in the middle of the next line.
+  Fixture f = MakeFixture("    indented\n  less\nnone");
+  // w moves cursor to 'i' of "indented"; dw must delete only "indented".
+  Type(&f, "wdw");
+  CHECK_STR(TextOf(&f), Str8Lit("    \n  less\nnone"));
+  Destroy(&f);
+}
+
+TEST(vim_dw_at_line_end_clips_to_single_char) {
+  // $dw when at the last char of a line deletes only that char.
+  Fixture f = MakeFixture("    indented\n  less\nnone");
+  Type(&f, "$dw");
+  CHECK_STR(TextOf(&f), Str8Lit("    indente\n  less\nnone"));
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Dedent (<< ) cursor at first non-blank
+// ---------------------------------------------------------------------------
+
+TEST(vim_dedent_cursor_at_first_nonblank) {
+  // << always leaves the cursor on the first non-blank character of the line,
+  // regardless of how much leading whitespace was removed.
+  Fixture f = MakeFixture("    indented\n  less\nnone");
+  Type(&f, "<<");
+  CHECK_EQ(CursorLine(&f), 0);
+  CHECK_EQ(CursorColumn(&f), 0);  // first non-blank after dedent
+  Destroy(&f);
+}
+
+TEST(vim_dedent_cursor_unindented_line) {
+  // << on a line with no indent leaves cursor at column 0.
+  Fixture f = MakeFixture("hello\nworld");
+  Type(&f, "<<");
+  CHECK_EQ(CursorLine(&f), 0);
+  CHECK_EQ(CursorColumn(&f), 0);
+  Destroy(&f);
+}
+
+TEST(vim_dd_lone_newline_preserves_final_newline) {
+  Fixture f = MakeFixture("");
+  BufferOf(&f)->final_newline = true;
+  Type(&f, "dd");
+  CHECK(!BufferOf(&f)->final_newline);
+  Type(&f, "u");
+  CHECK(BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_yy_empty_line_register_is_newline) {
+  Fixture f = MakeFixture("");
+  Type(&f, "yy");
+  Register reg = EditorGetRegister(&f.ed, 0);
+  CHECK_STR(reg.text, Str8Lit("\n"));
+  CHECK(reg.linewise);
+  Destroy(&f);
+}
+
+TEST(vim_cw_empty_line_enters_insert_mode) {
+  Fixture f = MakeFixture("");
+  Type(&f, "cw");
+  CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Insert);
+  Destroy(&f);
+}
+
+TEST(vim_charwise_paste_utf8_cursor) {
+  Fixture f = MakeFixture("caf\xc3\xa9\nrest");
+  Type(&f, "ywp");
+  CHECK_EQ(CursorLine(&f), 0);
+  CHECK_EQ(CursorColumn(&f), 4);
+  Destroy(&f);
+}
+
+TEST(vim_charwise_paste_newline_cursor_at_insertion_point) {
+  Fixture f = MakeFixture("a\n\nb");
+  EditorSetRegister(&f.ed, 0, Str8Lit("a\n"), false);
+  Type(&f, "p");
+  CHECK_EQ(CursorLine(&f), 0);
+  CHECK_EQ(CursorColumn(&f), 1);
+  Destroy(&f);
+}
+
+TEST(vim_dw_empty_line_becomes_linewise) {
+  Fixture f = MakeFixture("a\n\n\nb");
+  Type(&f, "jdw");
+  Register reg = EditorGetRegister(&f.ed, 0);
+  CHECK(reg.linewise);
+  CHECK_STR(reg.text, Str8Lit("\n"));
+  Destroy(&f);
+}
+
+TEST(vim_text_object_di_paren_forward_fallback) {
+  Fixture f = MakeFixture("foo(bar).baz");
+  Type(&f, "di(");
+  CHECK_STR(TextOf(&f), Str8Lit("foo().baz"));
+  CHECK_EQ(CursorColumn(&f), 4);
+  Destroy(&f);
+}
+
+TEST(vim_text_object_da_paren_forward_fallback) {
+  Fixture f = MakeFixture("foo(bar).baz");
+  Type(&f, "da(");
+  CHECK_STR(TextOf(&f), Str8Lit("foo.baz"));
+  CHECK_EQ(CursorColumn(&f), 3);
+  Destroy(&f);
+}
+
+TEST(vim_dedent_tab_cursor_virtual_column) {
+  Fixture f = MakeFixture("\tword\nfoo");
+  Type(&f, "<<");
+  CHECK_EQ(CursorLine(&f), 0);
+  CHECK_EQ(CursorColumn(&f), 3);
   Destroy(&f);
 }

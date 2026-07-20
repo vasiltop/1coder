@@ -148,10 +148,44 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # Full history so git-cliff can walk from the previous tag (or the root
+      # for a first release). Submodules are not needed for notes.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+
+      # Pinned binary rather than a third-party action, matching the gh-based
+      # publish path below.
+      - name: Install git-cliff
+        run: |
+          set -euo pipefail
+          version=2.13.1
+          curl -sL \
+            "https://github.com/orhun/git-cliff/releases/download/v${version}/git-cliff-${version}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar xz -C /tmp
+          install -m755 "/tmp/git-cliff-${version}/git-cliff" /usr/local/bin/git-cliff
+
+      - name: Generate release notes
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Commits since the previous tag; for the first tag, everything from
+          # the root commit. cliff.toml maps feat:/fix:/… into sections.
+          prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          if [ -n "$prev" ]; then
+            git cliff "${prev}..${TAG}" -o RELEASE_NOTES.md
+          else
+            root="$(git rev-list --max-parents=0 "$TAG")"
+            git cliff "${root}..${TAG}" --tag "$TAG" -o RELEASE_NOTES.md
+          fi
+          cat RELEASE_NOTES.md
 
       # gh is preinstalled on the runner and uses GITHUB_TOKEN, so there is no
       # third-party action in the path. GitHub's asset upload backend returns
@@ -162,8 +196,8 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          # Nothing is checked out here -- only artifacts are needed -- so gh
-          # has no git remote to infer the repository from and must be told.
+          # Checkout gives a remote, but keep GH_REPO explicit so a shallow or
+          # odd checkout cannot leave gh guessing.
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
@@ -178,7 +212,7 @@ jobs:
           for attempt in 1 2 3 4 5; do
             if gh release create "$TAG" \
                  --title "$TAG" \
-                 --generate-notes \
+                 --notes-file RELEASE_NOTES.md \
                  artifacts/*; then
               exit 0
             fi

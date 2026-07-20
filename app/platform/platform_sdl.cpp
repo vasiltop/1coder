@@ -1,5 +1,68 @@
 #include "platform/platform_sdl.h"
 
+#include <math.h>
+
+namespace {
+
+[[nodiscard]] MouseButton MouseButtonFromSDLButton(Uint8 button) {
+  switch (button) {
+    case SDL_BUTTON_LEFT:   return MouseButton::Left;
+    case SDL_BUTTON_MIDDLE: return MouseButton::Middle;
+    case SDL_BUTTON_RIGHT:  return MouseButton::Right;
+    default:                return MouseButton::None;
+  }
+}
+
+[[nodiscard]] MouseButton MouseButtonFromSDLState(SDL_MouseButtonFlags state,
+                                                  MouseButton captured_button) {
+  if (captured_button != MouseButton::None) return captured_button;
+  if (state & SDL_BUTTON_LMASK) return MouseButton::Left;
+  if (state & SDL_BUTTON_MMASK) return MouseButton::Middle;
+  if (state & SDL_BUTTON_RMASK) return MouseButton::Right;
+  return MouseButton::None;
+}
+
+[[nodiscard]] bool RenderCoordsFromWindowPoint(const SDLMouseTranslateContext &context, float window_x,
+                                               float window_y, float *render_x, float *render_y) {
+  if (context.renderer &&
+      SDL_RenderCoordinatesFromWindow(context.renderer, window_x, window_y, render_x, render_y)) {
+    return true;
+  }
+
+  if (!context.window) return false;
+
+  int window_width = 0, window_height = 0;
+  int pixel_width = 0, pixel_height = 0;
+  if (!SDL_GetWindowSize(context.window, &window_width, &window_height) ||
+      !SDL_GetWindowSizeInPixels(context.window, &pixel_width, &pixel_height)) {
+    return false;
+  }
+  if (window_width <= 0 || window_height <= 0 || pixel_width <= 0 || pixel_height <= 0) {
+    return false;
+  }
+
+  *render_x = window_x * ((float)pixel_width / (float)window_width);
+  *render_y = window_y * ((float)pixel_height / (float)window_height);
+  return true;
+}
+
+[[nodiscard]] bool PopulateMousePosition(MouseEvent *result, float window_x, float window_y,
+                                         const SDLMouseTranslateContext &context) {
+  if (!result || context.cell_width <= 0.0f || context.cell_height <= 0.0f) return false;
+
+  float render_x = 0.0f;
+  float render_y = 0.0f;
+  if (!RenderCoordsFromWindowPoint(context, window_x, window_y, &render_x, &render_y)) return false;
+
+  result->grid_x = render_x / context.cell_width;
+  result->grid_y = render_y / context.cell_height;
+  result->x = (i32)floorf(result->grid_x);
+  result->y = (i32)floorf(result->grid_y);
+  return true;
+}
+
+}  // namespace
+
 Key KeyFromSDLKeycode(SDL_Keycode keycode) {
   if (keycode >= SDLK_A && keycode <= SDLK_Z) {
     return (Key)((u16)Key::A + (keycode - SDLK_A));
@@ -91,4 +154,52 @@ KeyChord KeyChordFromSDLKeyEvent(const SDL_KeyboardEvent *event) {
   if (produces_text && !has_command_modifier) return KeyChord{};
 
   return KeyChordKey(key, mods);
+}
+
+MouseEvent MouseEventFromSDLEvent(const SDL_Event *event, const SDLMouseTranslateContext &context) {
+  MouseEvent result = {};
+  if (!event) return result;
+
+  switch (event->type) {
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+      result.action = MouseAction::Cancel;
+      return result;
+
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+      result.button = MouseButtonFromSDLButton(event->button.button);
+      if (result.button == MouseButton::None) return MouseEvent{};
+      if (!PopulateMousePosition(&result, event->button.x, event->button.y, context)) return MouseEvent{};
+      result.action = event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ? MouseAction::Press
+                                                                 : MouseAction::Release;
+      result.modifiers = context.modifiers;
+      result.click_count = event->button.clicks;
+      return result;
+
+    case SDL_EVENT_MOUSE_MOTION:
+      result.button = MouseButtonFromSDLState(event->motion.state, context.captured_button);
+      if (result.button == MouseButton::None) return MouseEvent{};
+      if (!PopulateMousePosition(&result, event->motion.x, event->motion.y, context)) return MouseEvent{};
+      result.action = MouseAction::Drag;
+      result.modifiers = context.modifiers;
+      return result;
+
+    case SDL_EVENT_MOUSE_WHEEL: {
+      if (!PopulateMousePosition(&result, event->wheel.mouse_x, event->wheel.mouse_y, context)) {
+        return MouseEvent{};
+      }
+      result.action = MouseAction::Wheel;
+      result.modifiers = context.modifiers;
+      result.wheel_x = event->wheel.x;
+      result.wheel_y = event->wheel.y;
+      if (event->wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
+        result.wheel_x = -result.wheel_x;
+        result.wheel_y = -result.wheel_y;
+      }
+      return result;
+    }
+
+    default:
+      return result;
+  }
 }

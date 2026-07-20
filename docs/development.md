@@ -46,8 +46,10 @@ just shot out.bmp file.c --keys '<C-w>v10jVj'
 SDL_VIDEODRIVER=dummy ./build/editor file.c --keys '<C-w>v10jVj' --screenshot out.bmp
 ```
 
-`just vimdiff [filter]` runs the editor and neovim through the same keystrokes
-and compares the result.
+`just vimdiff [filter]` runs the editor and a clean headless Neovim through the
+same non-remapped interactive keystrokes, then compares exact text and cursor
+position. `just vimdiff-quick` runs the smaller smoke corpus; neither command
+skips known differences.
 
 ## CI and releases
 
@@ -59,6 +61,11 @@ tests rather than the editor — that is deliberate, and keeps PRs fast.
 all three platforms, **runs the test suite against the release binary**, packages
 an archive per platform, and publishes them together. If any platform fails, no
 release is published — the tests are a gate, not a formality.
+
+Release bodies are generated from conventional commits (`feat:`, `fix:`, …)
+between the previous tag and the new one via [git-cliff](https://git-cliff.org)
+and [`cliff.toml`](../cliff.toml). Prefer those prefixes so the notes group
+cleanly into Features, Bug Fixes, and the rest.
 
 Tag only commits that CI has already gone green on. A tag that fails to build
 cannot be retried into existence; it has to be moved or bumped.

@@ -43,11 +43,13 @@ void BufferInit(Buffer *buffer, BufferKind kind, String8 name) {
   UndoInit(&buffer->undo, buffer->undo_record_arena, buffer->undo_text_arena);
 
   buffer->tokens = TokenArray{nullptr, 0};
+  buffer->syntax = SyntaxCache{};
   buffer->hooks = BufferHooks{};
   buffer->user_data = nullptr;
 }
 
 void BufferDestroy(Buffer *buffer) {
+  SyntaxDestroy(&buffer->syntax);
   ArenaRelease(buffer->arena);
   ArenaRelease(buffer->text_arena);
   ArenaRelease(buffer->index_arena);
@@ -56,17 +58,30 @@ void BufferDestroy(Buffer *buffer) {
   *buffer = Buffer{};
 }
 
+bool BufferEditBlocked(const Buffer *buffer, RangeU64 range) {
+  if (BufferIsReadOnly(buffer)) return true;
+  if (!BufferIsQueryOnly(buffer)) return false;
+
+  // query_end is the newline after the query when results exist, or the buffer
+  // size when the query is the only line. Edits may touch up to and including
+  // that offset (inserting before the newline) but nothing past it.
+  u64 query_end = BufferLineEnd(buffer, 0);
+  return range.min > query_end || range.max > query_end;
+}
+
 // The single mutation path: every text change in the editor arrives here, which
 // is what keeps the line index, undo stack, dirty flag and hooks in step.
 void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
                    u64 cursor_before, u64 cursor_after) {
   // Enforced here rather than in each command: this is the only way text
   // changes, so one check covers every caller.
-  if (BufferIsReadOnly(buffer)) return;
+  if (BufferEditBlocked(buffer, range)) return;
 
   // A one-line buffer takes the text up to the first newline and drops the
   // rest, so no command -- typing, pasting, joining -- can turn it into two.
-  if (HasFlag(buffer->flags, BufferFlags::SingleLine)) {
+  // Query-only pickers get the same treatment on the query line so paste and
+  // `o` cannot split results off into a second editable line.
+  if (HasFlag(buffer->flags, BufferFlags::SingleLine) || BufferIsQueryOnly(buffer)) {
     u64 newline = Str8FindFirstChar(new_text, '\n');
     if (newline < new_text.size) new_text = Str8Prefix(new_text, newline);
   }
@@ -76,6 +91,8 @@ void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
   if (clamped.max < clamped.min) clamped.max = clamped.min;
 
   if (RangeEmpty(clamped) && new_text.size == 0) return;
+
+  SyntaxEdit syn_edit = SyntaxBeginEdit(buffer, clamped);
 
   // Snapshot the outgoing text for undo before the gap buffer forgets it.
   TempArena scratch = ScratchBegin();
@@ -93,7 +110,10 @@ void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
 
   LineIndexEdit(&buffer->lines, &buffer->text, clamped, insert_text.size);
 
-  UndoPush(&buffer->undo, clamped, old_text, insert_text, cursor_before, cursor_after);
+  SyntaxEndEdit(buffer, syn_edit);
+
+  UndoPush(&buffer->undo, clamped, old_text, insert_text, cursor_before, cursor_after,
+           buffer->final_newline, buffer->final_newline);
 
   buffer->flags |= BufferFlags::Dirty;
   buffer->edit_serial += 1;
@@ -113,6 +133,7 @@ void BufferSetText(Editor *ed, Buffer *buffer, String8 text) {
   if (text.size) GapBufferInsert(&buffer->text, 0, text);
 
   LineIndexRebuild(&buffer->lines, &buffer->text);
+  SyntaxRebuild(buffer);
   UndoClear(&buffer->undo);
   buffer->flags &= ~BufferFlags::Dirty;
   buffer->edit_serial += 1;
@@ -137,6 +158,8 @@ u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
     const UndoRecord *rec = &step.records[i - 1];
     RangeU64 current = RangeU64{rec->range.min, rec->range.min + rec->new_text.size};
 
+    SyntaxEdit syn_edit = SyntaxBeginEdit(buffer, current);
+
     TempArena scratch = ScratchBegin();
     String8 old_text = PushStr8Copy(scratch.arena, rec->old_text);
     EditorLspBeforeBufferEdit(ed, buffer, current, old_text, (i64)buffer->edit_serial + 1);
@@ -144,6 +167,9 @@ u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
     if (!RangeEmpty(current)) GapBufferDelete(&buffer->text, current);
     if (old_text.size) GapBufferInsert(&buffer->text, current.min, old_text);
     LineIndexEdit(&buffer->lines, &buffer->text, current, old_text.size);
+
+    SyntaxEndEdit(buffer, syn_edit);
+
     buffer->edit_serial += 1;
 
     if (buffer->hooks.on_edit) {
@@ -154,6 +180,7 @@ u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
   }
 
   buffer->flags |= BufferFlags::Dirty;
+  buffer->final_newline = step.final_newline;
   if (moved) *moved = true;
   return Min(step.cursor, BufferSize(buffer));
 }
@@ -170,6 +197,8 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved) {
     const UndoRecord *rec = &step.records[i];
     RangeU64 current = RangeU64{rec->range.min, rec->range.min + rec->old_text.size};
 
+    SyntaxEdit syn_edit = SyntaxBeginEdit(buffer, current);
+
     TempArena scratch = ScratchBegin();
     String8 new_text = PushStr8Copy(scratch.arena, rec->new_text);
     EditorLspBeforeBufferEdit(ed, buffer, current, new_text, (i64)buffer->edit_serial + 1);
@@ -177,6 +206,9 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved) {
     if (!RangeEmpty(current)) GapBufferDelete(&buffer->text, current);
     if (new_text.size) GapBufferInsert(&buffer->text, current.min, new_text);
     LineIndexEdit(&buffer->lines, &buffer->text, current, new_text.size);
+
+    SyntaxEndEdit(buffer, syn_edit);
+
     buffer->edit_serial += 1;
 
     if (buffer->hooks.on_edit) {
@@ -187,12 +219,25 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved) {
   }
 
   buffer->flags |= BufferFlags::Dirty;
+  buffer->final_newline = step.final_newline;
   if (moved) *moved = true;
   return Min(step.cursor, BufferSize(buffer));
 }
 
 void BufferBeginEditGroup(Buffer *buffer) { UndoBeginGroup(&buffer->undo); }
 void BufferEndEditGroup(Buffer *buffer) { UndoEndGroup(&buffer->undo); }
+
+void BufferSetFinalNewline(Buffer *buffer, bool fn) {
+  bool old_fn = buffer->final_newline;
+  if (old_fn == fn) return;
+  buffer->final_newline = fn;
+  UndoStack *undo = &buffer->undo;
+  if (undo->count > undo->group_start_count) {
+    undo->records[undo->count - 1].fn_after = fn;
+  } else {
+    UndoPush(undo, RangeU64{0, 0}, String8{nullptr, 0}, String8{nullptr, 0}, 0, 0, old_fn, fn);
+  }
+}
 
 String8 BufferTextRange(Arena *arena, const Buffer *buffer, RangeU64 range) {
   return GapBufferCopyRange(arena, &buffer->text, range);
@@ -299,19 +344,19 @@ bool BufferSaveFile(Buffer *buffer, String8 path) {
 
   TempArena scratch = ScratchBegin1(buffer->arena);
   String8 text = BufferTextAll(scratch.arena, buffer);
-  // Put the terminator back on the way out. An empty buffer stays an empty
-  // file rather than becoming a single blank line.
-  if (buffer->final_newline && text.size > 0) {
+  // fixeol: always append '\n' unless the buffer is empty and started without one.
+  if (text.size > 0 || buffer->final_newline)
     text = PushStr8Cat(scratch.arena, text, Str8Lit("\n"));
-  }
   bool ok = OsFileWrite(target, text);
 
   if (ok) {
     // Adopt the path on a successful save-as, so the next bare write goes to
     // the same place.
-    if (path.size > 0 && !Str8Match(path, buffer->path)) {
+    bool path_changed = (path.size > 0 && !Str8Match(path, buffer->path));
+    if (path_changed) {
       buffer->path = PushStr8Copy(buffer->arena, path);
       buffer->name = PushStr8Copy(buffer->arena, Str8PathBase(path));
+      SyntaxAttach(buffer, path);
     }
     buffer->flags &= ~BufferFlags::Dirty;
   }

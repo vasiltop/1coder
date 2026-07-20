@@ -6,6 +6,7 @@
 #include "editor/lsp.h"
 #include "editor/lsp_ui.h"
 #include "os/os_file.h"
+#include "text/syntax.h"
 
 // Provided by core/buffers/buf_command.cpp.
 BufferHandle CommandLineBufferOpen(Editor *ed);
@@ -248,6 +249,8 @@ BufferHandle EditorOpenFile(Editor *ed, String8 path) {
   }
 
   EditorLspOnFileBufferOpened(ed, buffer);
+  SyntaxAttach(buffer, absolute);
+
   ScratchEnd(scratch);
   return handle;
 }
@@ -398,6 +401,22 @@ void EditorSetStatusF(Editor *ed, const char *fmt, ...) {
   va_end(args);
 }
 
+namespace {
+
+void StoreRegisterCache(Editor *ed, u8 name, String8 text, bool linewise) {
+  if (!ed->register_arenas[name]) ed->register_arenas[name] = ArenaAlloc(MB(64));
+  ArenaClear(ed->register_arenas[name]);
+  ed->registers[name].text = PushStr8Copy(ed->register_arenas[name], text);
+  ed->registers[name].linewise = linewise;
+}
+
+void StoreClipboardCaches(Editor *ed, String8 text, bool linewise) {
+  StoreRegisterCache(ed, '+', text, linewise);
+  StoreRegisterCache(ed, '*', text, linewise);
+}
+
+}  // namespace
+
 void EditorSetRegister(Editor *ed, u8 name, String8 text, bool linewise) {
   if (name >= kRegisterCount) return;
 
@@ -408,20 +427,13 @@ void EditorSetRegister(Editor *ed, u8 name, String8 text, bool linewise) {
     // Keep a copy of exactly what was written, along with its kind. The
     // clipboard itself carries no notion of linewise, so this is the only way a
     // linewise yank can come back linewise rather than being guessed at.
-    if (!ed->register_arenas[name]) ed->register_arenas[name] = ArenaAlloc(MB(64));
-    ArenaClear(ed->register_arenas[name]);
-    ed->registers[name].text = PushStr8Copy(ed->register_arenas[name], text);
-    ed->registers[name].linewise = linewise;
+    StoreClipboardCaches(ed, text, linewise);
     return;
   }
 
   // Clearing first keeps a register's storage to the size of its current
   // contents rather than every value it has ever held.
-  if (!ed->register_arenas[name]) ed->register_arenas[name] = ArenaAlloc(MB(64));
-  ArenaClear(ed->register_arenas[name]);
-
-  ed->registers[name].text = PushStr8Copy(ed->register_arenas[name], text);
-  ed->registers[name].linewise = linewise;
+  StoreRegisterCache(ed, name, text, linewise);
 }
 
 Register EditorGetRegister(Editor *ed, u8 name) {
@@ -458,10 +470,7 @@ Register EditorGetRegister(Editor *ed, u8 name) {
     }
 
     // Copy into the register's own storage, which also refreshes the cache.
-    if (!ed->register_arenas[name]) ed->register_arenas[name] = ArenaAlloc(MB(64));
-    ArenaClear(ed->register_arenas[name]);
-    ed->registers[name].text = PushStr8Copy(ed->register_arenas[name], text);
-    ed->registers[name].linewise = linewise;
+    StoreClipboardCaches(ed, text, linewise);
 
     ScratchEnd(scratch);
     return ed->registers[name];

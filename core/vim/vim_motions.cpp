@@ -280,6 +280,12 @@ MotionResult MotionParagraphForward(const Buffer *b, const View *, u64 pos, u64 
     while (line < last && LineIsBlank(b, line)) line += 1;
     while (line < last && !LineIsBlank(b, line)) line += 1;
   }
+  // } with no following blank: land on the last character of the line.
+  if (line == last && !LineIsBlank(b, line)) {
+    RangeU64 r = BufferLineRange(b, line);
+    u64 at = (r.max > r.min) ? BufferPrevCodepoint(b, r.max) : r.min;
+    return Ok(at, MotionKind::Exclusive);
+  }
   return Ok(BufferOffsetFromLine(b, line), MotionKind::Exclusive);
 }
 
@@ -380,7 +386,9 @@ MotionResult MotionMatchingBracket(const Buffer *b, const View *, u64 pos, u64, 
 
 TextObjectResult TextObjectWord(const Buffer *b, u64 pos, u64 count, bool inner, bool big) {
   u64 size = BufferSize(b);
-  if (size == 0) return TextObjectResult{RangeU64{0, 0}, false, false};
+  if (pos >= size || IsNewline(b, pos)) {
+    return TextObjectResult{RangeU64{pos, pos}, false, false};
+  }
 
   auto classify = big ? ClassOfBig : ClassOf;
   CharClass start_class = classify(BufferByteAt(b, pos));
@@ -459,7 +467,6 @@ TextObjectResult TextObjectDelimited(const Buffer *b, u64 pos, u8 open_ch, u8 cl
                                      bool inner) {
   u64 size = BufferSize(b);
 
-  // Scan outwards for the innermost enclosing pair.
   i64 depth = 0;
   u64 open = size;
   for (u64 p = pos;; ) {
@@ -471,6 +478,11 @@ TextObjectResult TextObjectDelimited(const Buffer *b, u64 pos, u8 open_ch, u8 cl
     }
     if (p == 0) break;
     p = BufferPrevCodepoint(b, p);
+  }
+  if (open == size) {
+    for (u64 p = pos; p < size; p = BufferNextCodepoint(b, p)) {
+      if (BufferByteAt(b, p) == open_ch) { open = p; break; }
+    }
   }
   if (open == size) return TextObjectResult{RangeU64{pos, pos}, false, false};
 

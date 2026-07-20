@@ -109,7 +109,7 @@ if(WIN32)
 endif()
 
 add_executable(editor_tests ${TEST_SOURCES})
-target_include_directories(editor_tests PRIVATE tests)
+target_include_directories(editor_tests PRIVATE tests app)
 target_compile_options(editor_tests PRIVATE ${EDITOR_COMPILE_OPTIONS})
 target_compile_definitions(editor_tests PRIVATE EDITOR_FAKE_LSP_PATH="$<TARGET_FILE:fake_lsp_server>")
 target_link_libraries(editor_tests PRIVATE editor_core)

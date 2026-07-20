@@ -22,10 +22,18 @@ struct Panel {
   Panel *parent;
 
   Axis2 split_axis;  // meaningful on interior nodes
-  f32 size_pct;      // share of the parent's extent, relative to siblings
+  f64 size_pct;      // share of the parent's extent, relative to siblings
 
   View *view;        // leaves only
   RectS32 rect;      // computed by PanelLayout
+};
+
+struct PanelBoundary {
+  Panel *parent;
+  Panel *before;
+  Panel *after;
+  Axis2 axis;
+  bool valid;
 };
 
 [[nodiscard]] inline bool PanelIsLeaf(const Panel *panel) {
@@ -48,8 +56,9 @@ Panel *PanelSplit(Arena *arena, Panel *panel, Axis2 axis, View *new_view);
 Panel *PanelClose(Panel *panel, Panel **root);
 
 // Assigns rects to every panel in the tree. Children divide their parent's
-// extent along its axis in proportion to size_pct, with the last child taking
-// the remainder so rounding never leaves a gap.
+// extent along its axis in proportion to size_pct. Non-last child edges come
+// from cumulative sibling weights; the last child takes the remainder so
+// rounding never leaves a gap.
 void PanelLayout(Panel *root, RectS32 rect);
 
 [[nodiscard]] Panel *PanelFirstLeaf(Panel *root);
@@ -67,8 +76,13 @@ void PanelLayout(Panel *root, RectS32 rect);
 // The leaf containing a cell, for click-to-focus.
 [[nodiscard]] Panel *PanelFromPoint(Panel *root, i32 x, i32 y);
 
+[[nodiscard]] PanelBoundary PanelBoundaryBetween(Panel *root, Panel *before_leaf,
+                                                 Panel *after_leaf, Axis2 axis);
+[[nodiscard]] PanelBoundary PanelBoundaryAt(Panel *root, i32 x, i32 y, Axis2 axis);
+
 // Grows or shrinks a panel along its parent's axis, taking the difference from
 // its sibling.
 void PanelResize(Panel *panel, f32 delta_pct);
+void PanelResizeBoundary(PanelBoundary boundary, i32 delta_cells);
 // Restores every panel under `root` to an even share.
 void PanelEqualize(Panel *root);

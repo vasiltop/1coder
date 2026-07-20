@@ -22,6 +22,18 @@ core (static lib) ──┤
 
 `editor_core` links no graphics library at all, so a stray SDL include in
 `core/` fails the build — `just boundary` checks it, and CI runs that check.
+
+**Syntax highlighting lives entirely in `core/text/`.** Language definitions,
+the lexical scanner, the per-line state cache, and the `TokenKind` enum are
+all in core — none of those files mention SDL or pixels. `core/text/token.h`
+defines `Token` as a byte-offset range plus a `TokenKind`; `syntax.cpp` fills
+a buffer's `TokenArray`; the renderer in `app/render/` does nothing more than
+look each kind up in the compiled theme colour table. Incremental edits
+(`SyntaxBeginEdit` / `SyntaxEndEdit`) re-lex from the first changed line and
+stop as soon as the per-line incoming/outgoing state converges with what was
+previously cached, so a one-line change in a large file rescans only the
+lines whose multiline state was affected.
+
 Everything about editing — motions, operators, undo, panel layout, scrolling,
 command parsing — is testable without opening a window, and the test binary
 needs no display.

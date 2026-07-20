@@ -1,4 +1,5 @@
 #include "render/render_editor.h"
+#include "render/render_metrics.h"
 
 #include "buffers/buf_image.h"
 #include "editor/lsp.h"
@@ -61,6 +62,9 @@ void DrawBufferLine(RenderContext *ctx, const Buffer *buffer, u64 line, RectF32 
                     f32 baseline_y, u64 scroll_column, i32 columns) {
   RangeU64 range = BufferLineRange(buffer, line);
 
+  const TokenArray *tokens = &buffer->tokens;
+  u64 token_index = TokenIndexAtOffset(tokens, range.min);
+
   u64 column = 0;
   for (u64 p = range.min; p < range.max;) {
     DecodedCodepoint decoded = BufferDecodeAt(buffer, p);
@@ -70,7 +74,16 @@ void DrawBufferLine(RenderContext *ctx, const Buffer *buffer, u64 line, RectF32 
 
       // Tabs occupy a cell and draw nothing.
       if (decoded.codepoint != '\t') {
-        TokenKind kind = TokenKindAtOffset(&buffer->tokens, p);
+        while (token_index < tokens->count && tokens->tokens[token_index].end <= p) {
+          token_index += 1;
+        }
+
+        TokenKind kind = TokenKind::Default;
+        if (token_index < tokens->count) {
+          const Token *token = &tokens->tokens[token_index];
+          if (token->start <= p && p < token->end) kind = token->kind;
+        }
+
         f32 x = ColumnX(ctx, text_rect, column, scroll_column);
         DrawGlyph(ctx->draw, decoded.codepoint, x, baseline_y,
                   ThemeColorForToken(&ctx->theme, kind));
@@ -424,15 +437,12 @@ void RenderContextInit(RenderContext *ctx, DrawList *draw, GlyphAtlas *atlas) {
   ctx->draw = draw;
   ctx->atlas = atlas;
   ctx->theme = ThemeDefault();
-  // Cell size comes straight from the font, which is exactly why the core can
-  // lay out in cells and stay free of font metrics.
-  // Rounded to whole pixels. A fractional cell height puts every row on a
-  // different subpixel offset, which softens the text and leaves an awkward
-  // remainder at the bottom of the window.
-  ctx->cell_width = (f32)(i32)(atlas->advance + 0.5f);
-  ctx->cell_height = (f32)(i32)(atlas->line_height + 0.5f);
-  if (ctx->cell_width < 1.0f) ctx->cell_width = 1.0f;
-  if (ctx->cell_height < 1.0f) ctx->cell_height = 1.0f;
+  // advance is already normalised at the atlas boundary; line_height is
+  // fractional and is normalised here.  Using the struct makes the single
+  // normalisation point and verbatim pass-through explicit.
+  RenderCellMetrics metrics = RenderCellMetricsFromAtlas(atlas->advance, atlas->line_height);
+  ctx->cell_width = metrics.cell_width;
+  ctx->cell_height = metrics.cell_height;
 }
 
 RectS32 RenderScreenCells(const RenderContext *ctx, i32 pixel_width, i32 pixel_height) {

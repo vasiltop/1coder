@@ -6,6 +6,7 @@
 #include "editor/panel.h"
 #include "editor/view.h"
 #include "input/keymap.h"
+#include "input/mouse.h"
 #include "vim/vim_state.h"
 
 // Top-level editor state. Holds no window, no renderer and no SDL handles --
@@ -114,6 +115,7 @@ struct Editor {
   Keymap *operator_pending_map;
 
   InputState input;
+  MouseState mouse;
 
   // What <CR> on a path opens. Populated in EditorInit.
   FiletypeRegistry filetypes;
@@ -304,7 +306,10 @@ void EditorSetFontSize(Editor *ed, f32 size);
 
 // The single entry point for key input. The platform layer calls it once per
 // press; tests call it to replay a sequence.
+void EditorCancelPendingInput(Editor *ed);
 void EditorProcessChord(Editor *ed, KeyChord chord);
+[[nodiscard]] MouseHit EditorMouseHitTest(Editor *ed, const MouseEvent &event);
+void EditorProcessMouse(Editor *ed, const MouseEvent &event);
 // Convenience for tests and for `.`: feeds a binding spec chord by chord.
 void EditorProcessSpec(Editor *ed, String8 spec);
 void EditorProcessSpec(Editor *ed, const char *spec);

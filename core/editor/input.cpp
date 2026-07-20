@@ -15,10 +15,11 @@
 namespace {
 
 // Commands that need the *next* keystroke as an argument, rather than as a
-// binding: f, F, t, T.
+// binding: f, F, t, T, r.
 [[nodiscard]] bool CommandWantsCharacter(CommandId id) {
   return id == CommandId::find_char_forward || id == CommandId::find_char_backward ||
-         id == CommandId::till_char_forward || id == CommandId::till_char_backward;
+         id == CommandId::till_char_forward || id == CommandId::till_char_backward ||
+         id == CommandId::replace_char;
 }
 
 [[nodiscard]] bool ChordIsPrintable(KeyChord chord) {
@@ -61,8 +62,6 @@ void RecordChord(InputState *input, KeyChord chord) {
 // Inserts a typed character. Not a command, because there is one of these per
 // printable codepoint and binding them all would be absurd.
 void InsertText(Editor *ed, View *view, Buffer *buffer, u32 codepoint) {
-  if (BufferIsReadOnly(buffer)) return;
-
   u8 encoded[4];
   u32 length = Utf8Encode(encoded, codepoint);
   String8 text = String8{encoded, length};
@@ -73,9 +72,12 @@ void InsertText(Editor *ed, View *view, Buffer *buffer, u32 codepoint) {
     u64 line_end = BufferLineEnd(buffer, BufferLineFromOffset(buffer, view->cursor));
     u64 end = (view->cursor < line_end) ? BufferNextCodepoint(buffer, view->cursor)
                                         : view->cursor;
-    BufferReplace(ed, buffer, RangeU64{view->cursor, end}, text, view->cursor,
-                  view->cursor + length);
+    RangeU64 range = RangeU64{view->cursor, end};
+    if (BufferEditBlocked(buffer, range)) return;
+    BufferReplace(ed, buffer, range, text, view->cursor, view->cursor + length);
   } else {
+    RangeU64 range = RangeU64{view->cursor, view->cursor};
+    if (BufferEditBlocked(buffer, range)) return;
     BufferInsert(ed, buffer, view->cursor, text, view->cursor, view->cursor + length);
   }
 
@@ -103,6 +105,25 @@ namespace {
 }
 
 }  // namespace
+
+void EditorCancelPendingInput(Editor *ed) {
+  if (!ed) return;
+
+  InputState *input = &ed->input;
+  ClearPending(input);
+  input->awaiting_char_command = CommandId::None;
+  input->awaiting_register = false;
+  input->register_follow_up = CommandId::None;
+  input->awaiting_text_object = false;
+  input->text_object_inner = false;
+  input->awaiting_confirm = false;
+  input->confirm_command = CommandId::None;
+  input->confirm_buffer = BufferHandleZero();
+  input->macro_count_pending = 0;
+
+  View *view = EditorInputView(ed);
+  if (view) VimClearPending(&view->vim);
+}
 
 Keymap *EditorActiveKeymap(Editor *ed) {
   View *view = EditorInputView(ed);
