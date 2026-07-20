@@ -1,7 +1,5 @@
 #include "editor/panel.h"
 
-#include <math.h>
-
 namespace {
 
 void PanelPushChild(Panel *parent, Panel *child) {
@@ -97,84 +95,25 @@ void PanelUnlink(Panel *panel) {
          Max(before->rect.x0, after->rect.x0) < Min(before->rect.x1, after->rect.x1);
 }
 
-struct BoundaryResizeSample {
-  i32 before_extent;
-  i32 after_extent;
-};
+[[nodiscard]] f64 PanelChildWeight(const Panel *panel) {
+  return Max(panel->size_pct, 0.0);
+}
 
-[[nodiscard]] f32 PanelSiblingTotalWeight(const Panel *parent) {
-  f32 total = 0.0f;
+[[nodiscard]] f64 PanelTotalWeight(const Panel *parent) {
+  f64 total = 0.0;
   for (const Panel *child = parent->first_child; child; child = child->next) {
-    total += Max(child->size_pct, 0.0f);
+    total += PanelChildWeight(child);
   }
-  return (total > 0.0f) ? total : 1.0f;
+  return (total > 0.0) ? total : 1.0;
 }
 
-[[nodiscard]] BoundaryResizeSample SampleBoundaryResize(PanelBoundary boundary, f32 before_weight,
-                                                        f32 sibling_total, i32 parent_extent) {
-  f32 pair_total = boundary.before->size_pct + boundary.after->size_pct;
-  f32 after_weight = pair_total - before_weight;
-
-  BoundaryResizeSample sample = {};
-  i32 offset = 0;
-  for (Panel *child = boundary.parent->first_child; child; child = child->next) {
-    f32 weight = child->size_pct;
-    if (child == boundary.before) weight = before_weight;
-    if (child == boundary.after) weight = after_weight;
-
-    i32 size = child->next ? (i32)((f32)parent_extent * (Max(weight, 0.0f) / sibling_total))
-                           : (parent_extent - offset);
-    if (child == boundary.before) sample.before_extent = size;
-    if (child == boundary.after) sample.after_extent = size;
-    offset += size;
+[[nodiscard]] f64 PanelWeightBeforeChild(const Panel *child) {
+  f64 total = 0.0;
+  for (const Panel *it = child->parent ? child->parent->first_child : nullptr;
+       it && it != child; it = it->next) {
+    total += PanelChildWeight(it);
   }
-  return sample;
-}
-
-[[nodiscard]] f32 FindBoundaryBeforeWeight(PanelBoundary boundary, f32 sibling_total,
-                                           i32 parent_extent, i32 target_before,
-                                           i32 target_after) {
-  f32 pair_total = boundary.before->size_pct + boundary.after->size_pct;
-  f64 low = ((f64)target_before * (f64)sibling_total) / (f64)parent_extent;
-  f64 high = (((f64)target_before + 1.0) * (f64)sibling_total) / (f64)parent_extent;
-  if (boundary.after->next) {
-    f64 after_low = (f64)pair_total -
-                    (((f64)target_after + 1.0) * (f64)sibling_total) / (f64)parent_extent;
-    f64 after_high =
-        (f64)pair_total - ((f64)target_after * (f64)sibling_total) / (f64)parent_extent;
-    low = Max(low, after_low);
-    high = Min(high, after_high);
-  }
-  low = Max(low, 0.0);
-  high = Min(high, (f64)pair_total);
-
-  f32 candidate = Clamp(0.0f, (f32)((low + high) * 0.5), pair_total);
-
-  BoundaryResizeSample sample =
-      SampleBoundaryResize(boundary, candidate, sibling_total, parent_extent);
-  if (sample.before_extent == target_before && sample.after_extent == target_after) {
-    return candidate;
-  }
-
-  f32 direction = ((sample.before_extent < target_before) || (sample.after_extent > target_after))
-                      ? HUGE_VALF
-                      : -HUGE_VALF;
-  for (u32 step = 0; step < 64; step += 1) {
-    f32 next = nextafterf(candidate, direction);
-    if (next == candidate || next < 0.0f || next > pair_total) break;
-    if ((direction > 0.0f && (f64)next >= high) ||
-        (direction < 0.0f && (f64)next <= low)) {
-      break;
-    }
-
-    candidate = next;
-    sample = SampleBoundaryResize(boundary, candidate, sibling_total, parent_extent);
-    if (sample.before_extent == target_before && sample.after_extent == target_after) {
-      return candidate;
-    }
-  }
-
-  return candidate;
+  return total;
 }
 
 // Centre of an edge, used as the probe point for directional focus.
@@ -262,21 +201,27 @@ void PanelLayout(Panel *root, RectS32 rect) {
   root->rect = rect;
   if (PanelIsLeaf(root)) return;
 
-  f32 total = 0.0f;
-  for (Panel *child = root->first_child; child; child = child->next) {
-    total += Max(child->size_pct, 0.0f);
-  }
-  if (total <= 0.0f) total = 1.0f;
+  f64 total = PanelTotalWeight(root);
 
   bool horizontal = (root->split_axis == Axis2::X);
   i32 extent = RectExtent(rect, root->split_axis);
   i32 offset = horizontal ? rect.x0 : rect.y0;
+  i32 end = horizontal ? rect.x1 : rect.y1;
+  f64 cumulative = 0.0;
+  constexpr f64 kLayoutEdgeBias = 1e-12;
 
   for (Panel *child = root->first_child; child; child = child->next) {
-    // The last child absorbs the rounding remainder, so the children always
-    // exactly tile the parent.
-    i32 size = child->next ? (i32)((f32)extent * (Max(child->size_pct, 0.0f) / total))
-                           : ((horizontal ? rect.x1 : rect.y1) - offset);
+    cumulative += PanelChildWeight(child);
+    // Non-last child edges come from cumulative weights so shared boundaries are
+    // stable when the cumulative share to their right is preserved. The tiny
+    // bias only compensates for floating-point underflow at mathematically exact
+    // cell boundaries; it is far smaller than one cell.
+    i32 next_offset =
+        child->next ? ((horizontal ? rect.x0 : rect.y0) +
+                       (i32)(((f64)extent * Min(cumulative / total, 1.0)) + kLayoutEdgeBias))
+                    : end;
+    next_offset = Clamp(offset, next_offset, end);
+    i32 size = next_offset - offset;
 
     RectS32 child_rect = horizontal ? RectS32{offset, rect.y0, offset + size, rect.y1}
                                     : RectS32{rect.x0, offset, rect.x1, offset + size};
@@ -404,8 +349,8 @@ void PanelResize(Panel *panel, f32 delta_pct) {
 
   // Take from the neighbour so the parent's children still sum to the same
   // total and no space appears or vanishes.
-  f32 available = panel->size_pct + sibling->size_pct;
-  f32 target = Clamp(0.05f, panel->size_pct + delta_pct, available - 0.05f);
+  f64 available = panel->size_pct + sibling->size_pct;
+  f64 target = Clamp(0.05, panel->size_pct + (f64)delta_pct, available - 0.05);
 
   panel->size_pct = target;
   sibling->size_pct = available - target;
@@ -433,14 +378,23 @@ void PanelResizeBoundary(PanelBoundary boundary, i32 delta_cells) {
   i32 clamped_delta = Clamp(-max_shrink, delta_cells, max_grow);
   i32 target_before = before_extent + clamped_delta;
   if (target_before == before_extent) return;
-  i32 target_after = after_extent - clamped_delta;
 
-  f32 pair_total = boundary.before->size_pct + boundary.after->size_pct;
-  if (pair_total <= 0.0f) return;
-  f32 sibling_total = PanelSiblingTotalWeight(boundary.parent);
-  f32 before_weight =
-      FindBoundaryBeforeWeight(boundary, sibling_total, parent_extent, target_before, target_after);
+  i32 parent_start = (boundary.axis == Axis2::X) ? boundary.parent->rect.x0 : boundary.parent->rect.y0;
+  i32 target_edge = ((boundary.axis == Axis2::X) ? boundary.before->rect.x1
+                                                 : boundary.before->rect.y1) -
+                    parent_start + clamped_delta;
 
+  f64 pair_total = boundary.before->size_pct + boundary.after->size_pct;
+  if (pair_total <= 0.0) return;
+
+  f64 sibling_total = PanelTotalWeight(boundary.parent);
+  f64 prefix_weight = PanelWeightBeforeChild(boundary.before);
+  f64 low = ((f64)target_edge * sibling_total) / (f64)parent_extent - prefix_weight;
+  f64 high = (((f64)target_edge + 1.0) * sibling_total) / (f64)parent_extent - prefix_weight;
+  low = Clamp(0.0, low, pair_total);
+  high = Clamp(0.0, high, pair_total);
+
+  f64 before_weight = (high > low) ? (low + (high - low) * 0.5) : low;
   boundary.before->size_pct = before_weight;
   boundary.after->size_pct = pair_total - before_weight;
 }

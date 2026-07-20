@@ -1,6 +1,8 @@
 #include "editor/panel.h"
 #include "test.h"
 
+#include <initializer_list>
+
 namespace {
 
 // Panels only need a distinct View pointer per leaf for these tests; the views
@@ -24,6 +26,37 @@ Fixture MakeFixture() {
 View *NextView(Fixture *f) { return &f->views[f->view_count++]; }
 
 void Destroy(Fixture *f) { ArenaRelease(f->arena); }
+
+Panel *MakeDirectChildren(Fixture *f, Axis2 axis, std::initializer_list<i32> weights) {
+  Panel *root = f->root;
+  root->view = nullptr;
+  root->split_axis = axis;
+  root->first_child = nullptr;
+  root->last_child = nullptr;
+
+  Panel *prev = nullptr;
+  bool first = true;
+  for (i32 weight : weights) {
+    View *view = first ? &f->views[0] : NextView(f);
+    first = false;
+
+    Panel *child = PanelAllocLeaf(f->arena, view);
+    child->parent = root;
+    child->prev = prev;
+    child->next = nullptr;
+    child->size_pct = (f32)weight;
+
+    if (prev) {
+      prev->next = child;
+    } else {
+      root->first_child = child;
+    }
+    root->last_child = child;
+    prev = child;
+  }
+
+  return root->first_child;
+}
 
 constexpr RectS32 kScreen = {0, 0, 80, 24};
 
@@ -504,42 +537,84 @@ TEST(panel_mouse_boundary_resize_preserves_exact_odd_extent_lower_clamp) {
 TEST(panel_mouse_boundary_resize_preserves_other_siblings_in_multi_split_parent) {
   Fixture f = MakeFixture();
 
-  Panel *root = f.root;
-  root->view = nullptr;
-  root->split_axis = Axis2::X;
-
-  Panel *a = PanelAllocLeaf(f.arena, &f.views[0]);
-  Panel *b = PanelAllocLeaf(f.arena, NextView(&f));
-  Panel *c = PanelAllocLeaf(f.arena, NextView(&f));
-
-  a->parent = root;
-  a->next = b;
-  a->size_pct = 1.0f;
-
-  b->parent = root;
-  b->prev = a;
-  b->next = c;
-  b->size_pct = 1.0f;
-
-  c->parent = root;
-  c->prev = b;
-  c->size_pct = 1.0f;
-
-  root->first_child = a;
-  root->last_child = c;
-
+  Panel *a = MakeDirectChildren(&f, Axis2::X, {1, 1, 1});
+  Panel *b = a->next;
+  Panel *c = b->next;
   RectS32 odd = {0, 0, 41, 8};
-  PanelLayout(root, odd);
+  PanelLayout(f.root, odd);
   CHECK_EQ(RectWidth(a->rect), 13);
-  CHECK_EQ(RectWidth(b->rect), 13);
-  CHECK_EQ(RectWidth(c->rect), 15);
+  CHECK_EQ(RectWidth(b->rect), 14);
+  CHECK_EQ(RectWidth(c->rect), 14);
 
-  PanelResizeBoundary(PanelBoundaryBetween(root, a, b, Axis2::X), -1);
-  PanelLayout(root, odd);
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, a, b, Axis2::X), -1);
+  PanelLayout(f.root, odd);
 
   CHECK_EQ(RectWidth(a->rect), 12);
+  CHECK_EQ(RectWidth(b->rect), 15);
+  CHECK_EQ(RectWidth(c->rect), 14);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_positive_delta_keeps_unrelated_sizes_stable) {
+  Fixture f = MakeFixture();
+
+  Panel *a = MakeDirectChildren(&f, Axis2::X, {1, 14, 7});
+  Panel *b = a->next;
+  Panel *c = b->next;
+  RectS32 rect = {0, 0, 22, 8};
+  PanelLayout(f.root, rect);
+  CHECK_EQ(RectWidth(a->rect), 1);
   CHECK_EQ(RectWidth(b->rect), 14);
-  CHECK_EQ(RectWidth(c->rect), 15);
+  CHECK_EQ(RectWidth(c->rect), 7);
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, a, b, Axis2::X), 1);
+  PanelLayout(f.root, rect);
+
+  CHECK_EQ(RectWidth(a->rect), 2);
+  CHECK_EQ(RectWidth(b->rect), 13);
+  CHECK_EQ(RectWidth(c->rect), 7);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_upper_clamp_keeps_unrelated_sizes_stable) {
+  Fixture f = MakeFixture();
+
+  Panel *a = MakeDirectChildren(&f, Axis2::X, {1, 14, 7});
+  Panel *b = a->next;
+  Panel *c = b->next;
+  RectS32 rect = {0, 0, 22, 8};
+  PanelLayout(f.root, rect);
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, a, b, Axis2::X), 100);
+  PanelLayout(f.root, rect);
+
+  CHECK_EQ(RectWidth(a->rect), 13);
+  CHECK_EQ(RectWidth(b->rect), 2);
+  CHECK_EQ(RectWidth(c->rect), 7);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_lower_clamp_keeps_unrelated_sizes_stable) {
+  Fixture f = MakeFixture();
+
+  Panel *a = MakeDirectChildren(&f, Axis2::X, {3, 12, 7});
+  Panel *b = a->next;
+  Panel *c = b->next;
+  RectS32 rect = {0, 0, 22, 8};
+  PanelLayout(f.root, rect);
+  CHECK_EQ(RectWidth(a->rect), 3);
+  CHECK_EQ(RectWidth(b->rect), 12);
+  CHECK_EQ(RectWidth(c->rect), 7);
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, a, b, Axis2::X), -1);
+  PanelLayout(f.root, rect);
+
+  CHECK_EQ(RectWidth(a->rect), 2);
+  CHECK_EQ(RectWidth(b->rect), 13);
+  CHECK_EQ(RectWidth(c->rect), 7);
 
   Destroy(&f);
 }

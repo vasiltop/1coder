@@ -22,7 +22,7 @@ struct Panel {
   Panel *parent;
 
   Axis2 split_axis;  // meaningful on interior nodes
-  f32 size_pct;      // share of the parent's extent, relative to siblings
+  f64 size_pct;      // share of the parent's extent, relative to siblings
 
   View *view;        // leaves only
   RectS32 rect;      // computed by PanelLayout
@@ -56,8 +56,9 @@ Panel *PanelSplit(Arena *arena, Panel *panel, Axis2 axis, View *new_view);
 Panel *PanelClose(Panel *panel, Panel **root);
 
 // Assigns rects to every panel in the tree. Children divide their parent's
-// extent along its axis in proportion to size_pct, with the last child taking
-// the remainder so rounding never leaves a gap.
+// extent along its axis in proportion to size_pct. Non-last child edges come
+// from cumulative sibling weights; the last child takes the remainder so
+// rounding never leaves a gap.
 void PanelLayout(Panel *root, RectS32 rect);
 
 [[nodiscard]] Panel *PanelFirstLeaf(Panel *root);
