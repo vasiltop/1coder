@@ -30,6 +30,15 @@ struct Theme {
   Vec4F32 split_border;
   Vec4F32 message;
   Vec4F32 error;
+  Vec4F32 diagnostic_error;
+  Vec4F32 diagnostic_warning;
+  Vec4F32 diagnostic_information;
+  Vec4F32 diagnostic_hint;
+  Vec4F32 popup_background;
+  Vec4F32 popup_border;
+  Vec4F32 popup_selected;
+  Vec4F32 popup_text;
+  Vec4F32 popup_detail;
 
   Vec4F32 syntax[(u64)TokenKind::COUNT];
 };
