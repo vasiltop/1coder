@@ -304,7 +304,7 @@ ExplorerApplyResult ExplorerApply(Arena *arena, ExplorerPlan *plan) {
     ExplorerOp *op = &plan->ops[i];
     if (op->kind != ExplorerOpKind::Move) continue;
 
-    String8 temp = PushStr8F(scratch.arena, "%.*s.1code-move-%llu", (int)op->to.size,
+    String8 temp = PushStr8F(scratch.arena, "%.*s.1coder-move-%llu", (int)op->to.size,
                              (char *)op->to.str, (unsigned long long)staged_count);
     if (!OsRename(op->from, temp)) {
       RecordFailure(&result, arena, "move", op->from);

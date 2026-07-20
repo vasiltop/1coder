@@ -190,7 +190,7 @@ int main(int argc, char **argv) {
   app->font_path = PushStr8Copy(arena, font_path);
   app->font_face = PushStr8Copy(arena, font_face);
 
-  app->window = SDL_CreateWindow("1code", kInitialWidth, kInitialHeight,
+  app->window = SDL_CreateWindow("1coder", kInitialWidth, kInitialHeight,
                                  SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   if (!app->window) {
     fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());

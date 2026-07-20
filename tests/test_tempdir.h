@@ -52,7 +52,7 @@ inline TempDir MakeTempDir(const char *tag) {
 
   String8 base = TempBaseDir(dir.arena);
   dir.path =
-      PushStr8F(dir.arena, "%.*s/1code_test_%s_%d", (int)base.size, (char *)base.str, tag, serial);
+      PushStr8F(dir.arena, "%.*s/1coder_test_%s_%d", (int)base.size, (char *)base.str, tag, serial);
 
   // A run that died before its teardown would otherwise leave entries behind
   // for this one to trip over.

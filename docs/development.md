@@ -3,11 +3,11 @@
 Needs CMake, a C++23 compiler, and SDL3. Builds on Linux, macOS and Windows.
 
 ```sh
-git clone --recurse-submodules https://github.com/vasiltop/1code
+git clone --recurse-submodules https://github.com/vasiltop/1coder
 cmake -B build -S . && cmake --build build -j
 
 ./build/editor path/to/file      # run
-./build/editor_tests             # 342 tests, needs no display
+./build/editor_tests             # 343 tests, needs no display
 ```
 
 SDL3 comes from the `third_party/SDL` submodule; without it CMake falls back to

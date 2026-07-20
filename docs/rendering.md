@@ -15,7 +15,7 @@ Linux. Override with environment variables:
 | `EDITOR_FONT_SIZE` | starting size in points |
 
 ```sh
-EDITOR_FONT_SIZE=16 1code file.c
+EDITOR_FONT_SIZE=16 1coder file.c
 ```
 
 Font files are memory-mapped rather than read, which matters more than it

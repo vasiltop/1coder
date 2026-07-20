@@ -103,14 +103,14 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ github.event.inputs.tag || github.ref_name }}"
-          name="1code-${tag}-${{ matrix.platform }}"
+          name="1coder-${tag}-${{ matrix.platform }}"
           mkdir -p "$name"
           cp README.md "$name/"
 
           case "${{ runner.os }}" in
             Linux)
               strip -s build-release/editor
-              install -Dm755 build-release/editor "${name}/1code"
+              install -Dm755 build-release/editor "${name}/1coder"
               tar -czf "${name}.tar.gz" "$name"
               asset="${name}.tar.gz"
               sum="sha256sum"
@@ -119,14 +119,14 @@ jobs:
               # Apple's strip has no -s; the default already drops the symbol
               # table from an executable.
               strip build-release/editor
-              install -m755 build-release/editor "${name}/1code"
+              install -m755 build-release/editor "${name}/1coder"
               tar -czf "${name}.tar.gz" "$name"
               asset="${name}.tar.gz"
               # macOS ships shasum but no sha256sum; git-bash is the reverse.
               sum="shasum -a 256"
               ;;
             Windows)
-              cp build-release/editor.exe "${name}/1code.exe"
+              cp build-release/editor.exe "${name}/1coder.exe"
               7z a -tzip "${name}.zip" "$name" >/dev/null
               asset="${name}.zip"
               sum="sha256sum"

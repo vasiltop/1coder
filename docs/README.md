@@ -1,4 +1,4 @@
-# 1code docs
+# 1coder docs
 
 How the editor works, and why it is built the way it is.
 

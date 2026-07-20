@@ -17,7 +17,7 @@ confirm.
 
 `<leader>e` opens the explorer for the current file's directory, `-` goes up a
 level, and `<CR>` opens whatever is under the cursor — a file in a buffer, a
-directory in its own explorer. `:e <dir>` and `1code <dir>` land there too.
+directory in its own explorer. `:e <dir>` and `1coder <dir>` land there too.
 
 `-` at the filesystem root does nothing rather than inventing a level above it.
 

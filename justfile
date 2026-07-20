@@ -1,4 +1,4 @@
-# 1code
+# 1coder
 
 # Recipe arguments reach the shell as "$@" rather than being interpolated, so
 # things like --keys '<leader>v' survive instead of being read as redirections.
