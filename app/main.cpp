@@ -117,6 +117,38 @@ bool RebuildFont(App *app) {
   return true;
 }
 
+[[nodiscard]] bool HasMouseCapture(const Editor *ed) {
+  return ed && ed->mouse.capture.kind != MouseCaptureKind::None;
+}
+
+[[nodiscard]] SDLMouseTranslateContext MouseTranslateContextFromApp(const App *app) {
+  SDLMouseTranslateContext context = {};
+  if (!app) return context;
+  context.window = app->window;
+  context.renderer = app->renderer;
+  context.cell_width = app->render.cell_width;
+  context.cell_height = app->render.cell_height;
+  context.captured_button =
+      HasMouseCapture(&app->editor) ? app->editor.mouse.capture.button : MouseButton::None;
+  return context;
+}
+
+void SyncMouseCapture(bool enabled) {
+  if (SDL_CaptureMouse(enabled)) return;
+  fprintf(stderr, "SDL_CaptureMouse(%s) failed: %s\n", enabled ? "true" : "false", SDL_GetError());
+}
+
+void ProcessMouseEvent(App *app, const MouseEvent &event) {
+  if (!app || event.action == MouseAction::None) return;
+
+  bool had_capture = HasMouseCapture(&app->editor);
+  EditorProcessMouse(&app->editor, event);
+  bool has_capture = HasMouseCapture(&app->editor);
+
+  if (!had_capture && has_capture) SyncMouseCapture(true);
+  else if (had_capture && !has_capture) SyncMouseCapture(false);
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -303,6 +335,14 @@ int main(int argc, char **argv) {
           SyncScreenSize(app);
           break;
 
+        case SDL_EVENT_WINDOW_MOUSE_ENTER:
+        case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+          break;
+
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+          ProcessMouseEvent(app, MouseEventFromSDLEvent(&event, MouseTranslateContextFromApp(app)));
+          break;
+
         case SDL_EVENT_KEY_DOWN: {
           KeyChord chord = KeyChordFromSDLKeyEvent(&event.key);
           if (KeyChordValid(chord)) EditorProcessChord(&app->editor, chord);
@@ -313,24 +353,12 @@ int main(int argc, char **argv) {
           HandleTextInput(&app->editor, event.text.text);
           break;
 
-        case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-          // Click to focus a window.
-          i32 cell_x = (i32)(event.button.x / app->render.cell_width);
-          i32 cell_y = (i32)(event.button.y / app->render.cell_height);
-          Panel *panel = PanelFromPoint(app->editor.root_panel, cell_x, cell_y);
-          if (panel) EditorFocusPanel(&app->editor, panel);
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+        case SDL_EVENT_MOUSE_MOTION:
+        case SDL_EVENT_MOUSE_WHEEL:
+          ProcessMouseEvent(app, MouseEventFromSDLEvent(&event, MouseTranslateContextFromApp(app)));
           break;
-        }
-
-        case SDL_EVENT_MOUSE_WHEEL: {
-          View *view = EditorFocusedView(&app->editor);
-          Buffer *buffer = EditorFocusedBuffer(&app->editor);
-          if (view && buffer && app->editor.focused_panel) {
-            i32 rows = EditorPanelTextHeight(&app->editor, app->editor.focused_panel);
-            ViewScrollLines(view, buffer, -(i64)(event.wheel.y * 3.0f), rows);
-          }
-          break;
-        }
 
         default:
           break;
@@ -361,6 +389,7 @@ int main(int argc, char **argv) {
   }
 
   SDL_StopTextInput(app->window);
+  if (HasMouseCapture(&app->editor)) SyncMouseCapture(false);
   EditorDestroy(&app->editor);
   GlyphAtlasDestroy(&app->atlas);
   SDL_DestroyRenderer(app->renderer);
