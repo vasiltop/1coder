@@ -11,6 +11,13 @@ defaults:
     # git-bash on the Windows runner, so one set of scripting covers all three.
     shell: bash
 
+env:
+  # MSBuild's node-reuse pool (used by the Visual Studio generator under -j)
+  # leaves worker processes alive past the build, which has raced the
+  # freshly-linked test binary's first run on the Windows runner. No-op on
+  # Linux/macOS, which build with make instead of MSBuild.
+  MSBUILDDISABLENODEREUSE: "1"
+
 jobs:
   ci:
     strategy:
