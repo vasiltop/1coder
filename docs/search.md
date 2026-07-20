@@ -1,8 +1,8 @@
 # Search
 
 `<leader>pg` searches the project as you type, `<leader>pf` fuzzy-finds a file,
-and `<leader>pb` lists buffers — where the neovim config puts them. By name:
-`:live-grep`, `:find`, `:buffers`, plus `:grep <pattern>` for a fixed list.
+and `<leader>pb` fuzzy-picks an open buffer — where the neovim config puts them.
+By name: `:live-grep`, `:find`, `:buffers`, plus `:grep <pattern>` for a fixed list.
 
 None of them adds a UI concept, which was the point of the buffer system:
 

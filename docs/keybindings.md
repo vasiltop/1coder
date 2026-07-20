@@ -80,8 +80,8 @@ grid resizes through the same path a window resize takes.
 ## Search and files
 
 `<leader>pg` searches the project as you type, `<leader>pf` fuzzy-finds a file,
-`<leader>pb` lists buffers, and `<leader>e` opens the file explorer for the
-current file's directory. See [search](search.md) and [explorer](explorer.md).
+`<leader>pb` fuzzy-picks an open buffer, and `<leader>e` opens the file explorer
+for the current file's directory. See [search](search.md) and [explorer](explorer.md).
 
 ## Compile
 
