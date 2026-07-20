@@ -100,6 +100,26 @@ one (`:vsplit` / `<leader>v`). With no argument it opens the command window
 prefilled with the last command, or `make -k` if none has been run yet.
 `:recompile` and `<leader>rc` rerun the last command.
 
+## Multiple cursors
+
+`<leader>mc` starts placing cursors and marks the position you are on. Every
+motion still works while placing, so you aim with `j`, `w`, `/foo` or anything
+else; `c` marks the position you land on, and marking one twice takes it back.
+`A` marks the end of the current line — normal mode cannot rest past the last
+character, so this is the only way to put a cursor there. `<CR>` makes the marks
+live, `<Esc>` abandons them.
+
+Placement is staged rather than instant so that the whole motion vocabulary is
+available for choosing positions, instead of a handful of add-a-cursor keys.
+
+Once cursors are live, everything fans out: `x`, `dw`, `ciwfoo<Esc>` and plain
+typing all happen at every cursor, and the whole pass is one undo step. Cursors
+that meet merge into one. `<Esc>` in normal mode drops back to a single cursor —
+so from insert mode it takes two, one to leave insert and one to collapse.
+
+Commands that are properties of the window rather than of a cursor — `u`, `.`,
+macros, `/`, splits, scrolling — run once however many cursors are live.
+
 ## The command window
 
 Opens in insert mode, as `q:i` does in vim. `<Esc>` drops to normal mode where

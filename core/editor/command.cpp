@@ -5,6 +5,7 @@
 #include "editor/lsp.h"
 #include "editor/lsp_actions.h"
 #include "editor/lsp_ui.h"
+#include "editor/multicursor.h"
 #include "os/os_file.h"
 #include "vim/vim_motions.h"
 #include "vim/vim_operators.h"
@@ -353,7 +354,10 @@ static void Cmd_till_char_backward(CommandArgs *a) {
 // Modes
 // ---------------------------------------------------------------------------
 
-static void Cmd_normal_mode(CommandArgs *a) {
+// The mode half of Esc, which is what has to happen at every cursor: each one
+// closes its own insert session and steps back off the character it was sitting
+// past.
+static void LeaveModeAtCursor(CommandArgs *a) {
   View *view = a->view;
   Buffer *buffer = a->buffer;
 
@@ -366,6 +370,33 @@ static void Cmd_normal_mode(CommandArgs *a) {
     ViewSetCursor(view, buffer, view->cursor);
   }
   VimClearPending(&view->vim);
+}
+
+static void Cmd_normal_mode(CommandArgs *a) {
+  View *view = a->view;
+
+  // Esc backs out one layer at a time. Placement and the cursor set are
+  // properties of the whole view rather than of any one cursor, so they are
+  // decided here, before anything is fanned out -- which is also why this
+  // command is Single and reaches MultiCursorRun itself for the rest.
+  if (view->placing) {
+    ViewPlacementCancel(view);
+    EditorSetStatus(a->ed, String8{nullptr, 0});
+    return;
+  }
+
+  if (view->vim.mode == VimMode::Normal && view->extra_count > 0) {
+    ViewClearExtraCursors(view);
+    VimClearPending(&view->vim);
+    return;
+  }
+
+  if (view->extra_count > 0) {
+    MultiCursorRun(view, a->buffer, LeaveModeAtCursor, a);
+    return;
+  }
+
+  LeaveModeAtCursor(a);
 }
 
 static void Cmd_insert_mode(CommandArgs *a) {
@@ -844,6 +875,35 @@ static void Cmd_repeat(CommandArgs *a) {
 // ---------------------------------------------------------------------------
 // Insert-mode input
 // ---------------------------------------------------------------------------
+
+// Inserts the typed character. Bound to no key -- the input layer reaches it
+// directly for any printable chord that no binding claimed, because binding one
+// command per printable codepoint would be absurd. It is a command all the same
+// so that typed text takes the same path as every other edit.
+static void Cmd_insert_char(CommandArgs *a) {
+  View *view = a->view;
+  Buffer *buffer = a->buffer;
+
+  u8 encoded[4];
+  u32 length = Utf8Encode(encoded, a->chord.codepoint);
+  String8 text = String8{encoded, length};
+
+  if (view->vim.mode == VimMode::Replace) {
+    // Replace mode overwrites the character under the cursor instead of
+    // pushing it along, but still stops at the end of the line.
+    u64 line_end = BufferLineEnd(buffer, BufferLineFromOffset(buffer, view->cursor));
+    u64 end = (view->cursor < line_end) ? BufferNextCodepoint(buffer, view->cursor) : view->cursor;
+    RangeU64 range = RangeU64{view->cursor, end};
+    if (BufferEditBlocked(buffer, range)) return;
+    BufferReplace(a->ed, buffer, range, text, view->cursor, view->cursor + length);
+  } else {
+    RangeU64 range = RangeU64{view->cursor, view->cursor};
+    if (BufferEditBlocked(buffer, range)) return;
+    BufferInsert(a->ed, buffer, view->cursor, text, view->cursor, view->cursor + length);
+  }
+
+  ViewSetCursor(view, buffer, view->cursor + length);
+}
 
 static void Cmd_insert_newline(CommandArgs *a) {
   Buffer *buffer = a->buffer;
@@ -1380,6 +1440,49 @@ static void Cmd_lsp_diagnostic_float(CommandArgs *a) {
       status.size > 0) {
     EditorSetStatusF(a->ed, "LSP: %.*s", (int)status.size, (char *)status.str);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cursors
+// ---------------------------------------------------------------------------
+//
+// Placing cursors is staged: mark positions with ordinary motions between
+// marks, then confirm. Aiming is therefore done with the whole motion
+// vocabulary rather than with a handful of add-a-cursor keys.
+
+static void Cmd_cursor_place(CommandArgs *a) {
+  View *view = a->view;
+
+  // Starting a placement leaves any live cursors alone, so a set can be
+  // extended without being rebuilt from scratch.
+  if (!view->placing) ViewPlacementBegin(view);
+  ViewPlacementToggleMark(view);
+
+  EditorSetStatus(a->ed, Str8Lit("placing cursors: c mark, A line end, Enter confirm, Esc cancel"));
+}
+
+static void Cmd_cursor_place_mark(CommandArgs *a) { ViewPlacementToggleMark(a->view); }
+
+static void Cmd_cursor_place_mark_line_end(CommandArgs *a) {
+  ViewPlacementToggleMarkLineEnd(a->view, a->buffer);
+}
+
+static void Cmd_cursor_place_confirm(CommandArgs *a) {
+  ViewPlacementConfirm(a->view, a->buffer);
+
+  u64 count = ViewCursorCount(a->view);
+  if (count > 1) {
+    EditorSetStatusF(a->ed, "%llu cursors", (unsigned long long)count);
+  } else {
+    // Confirming nothing still has to take the prompt down.
+    EditorSetStatus(a->ed, String8{nullptr, 0});
+  }
+}
+
+static void Cmd_cursor_place_cancel(CommandArgs *a) {
+  ViewPlacementCancel(a->view);
+  // The prompt described keys that no longer do anything, so it goes with them.
+  EditorSetStatus(a->ed, String8{nullptr, 0});
 }
 
 // ---------------------------------------------------------------------------
@@ -1955,7 +2058,18 @@ void CommandExecArgs(Editor *ed, CommandId id, CommandArgs *supplied) {
     args.has_count = true;
   }
 
-  command->proc(&args);
+  // With several cursors, the command runs once at each of them. Fanning out
+  // here rather than inside any command body is what lets every motion, every
+  // operator and every future command work with multi-cursor without knowing it
+  // exists. A command line range names lines outright, so ":1,5d" is one edit
+  // however many cursors happen to be live.
+  const CommandSpec *spec = CommandSpecFromId(id);
+  bool single = spec && HasFlag(spec->flags, CommandFlags::Single);
+  if (view->extra_count > 0 && !single && !args.has_range) {
+    MultiCursorRun(view, buffer, command->proc, &args);
+  } else {
+    command->proc(&args);
+  }
 
   // The operator count and the selected register survive only until the motion
   // that consumes them, so `"+d2w` carries both through to the end.

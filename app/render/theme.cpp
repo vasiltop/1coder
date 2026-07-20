@@ -28,6 +28,8 @@ Theme ThemeDefault() {
 
   theme.cursor = Rgb(kText);
   theme.cursor_text = Rgb(kBg);
+  theme.cursor_secondary = Rgb(kText, 0.55f);
+  theme.cursor_pending = Rgb(kFocused);
   // The unfocused window colour doubles as the selection: it reads clearly
   // against the background without being as loud as the focused blue.
   theme.selection = Rgb(kUnfocused);

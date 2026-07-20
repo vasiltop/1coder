@@ -41,26 +41,32 @@ void UndoInit(UndoStack *undo, Arena *record_arena, Arena *text_arena, u64 initi
   undo->pos = 0;
   undo->next_group = 1;
   undo->open_group = 0;
-  undo->group_open = false;
+  undo->group_depth = 0;
 }
 
 void UndoClear(UndoStack *undo) {
   undo->pos = 0;
   TruncateToPos(undo);
-  undo->group_open = false;
+  undo->group_depth = 0;
   undo->next_group = 1;
   undo->group_start_count = 0;
 }
 
 void UndoBeginGroup(UndoStack *undo) {
-  if (undo->group_open) return;
-  undo->group_open = true;
-  undo->open_group = undo->next_group;
-  undo->next_group += 1;
-  undo->group_start_count = undo->count;
+  // Only the outermost Begin starts a group; inner ones just deepen it, so the
+  // records they push keep joining the group already under way.
+  if (undo->group_depth == 0) {
+    undo->open_group = undo->next_group;
+    undo->next_group += 1;
+    undo->group_start_count = undo->count;
+  }
+  undo->group_depth += 1;
 }
 
-void UndoEndGroup(UndoStack *undo) { undo->group_open = false; }
+void UndoEndGroup(UndoStack *undo) {
+  if (undo->group_depth == 0) return;
+  undo->group_depth -= 1;
+}
 
 void UndoPush(UndoStack *undo, RangeU64 range, String8 old_text, String8 new_text,
               u64 cursor_before, u64 cursor_after, bool fn_before, bool fn_after) {
@@ -81,7 +87,7 @@ void UndoPush(UndoStack *undo, RangeU64 range, String8 old_text, String8 new_tex
   rec->fn_after = fn_after;
   rec->text_arena_pos = text_pos;
 
-  if (undo->group_open) {
+  if (undo->group_depth > 0) {
     rec->group = undo->open_group;
   } else {
     rec->group = undo->next_group;
@@ -108,7 +114,8 @@ UndoStep UndoStepUndo(UndoStack *undo) {
 
   undo->pos = first;
   // A group cannot stay open across an undo, or the next edit would join it.
-  undo->group_open = false;
+  // Any depth is abandoned wholesale: the action that opened it is gone.
+  undo->group_depth = 0;
   return step;
 }
 
@@ -126,6 +133,6 @@ UndoStep UndoStepRedo(UndoStack *undo) {
   step.final_newline = undo->records[last - 1].fn_after;
 
   undo->pos = last;
-  undo->group_open = false;
+  undo->group_depth = 0;
   return step;
 }

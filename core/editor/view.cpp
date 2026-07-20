@@ -38,6 +38,11 @@ u64 ViewClampCursorToMode(const View *view, const Buffer *buffer, u64 offset) {
   return Min(clamped, line_end);
 }
 
+u64 ViewClampCursorAllowLineEnd(const Buffer *buffer, u64 offset) {
+  u64 clamped = Min(offset, BufferSize(buffer));
+  return Min(clamped, BufferLineEnd(buffer, BufferLineFromOffset(buffer, clamped)));
+}
+
 void ViewSetCursor(View *view, const Buffer *buffer, u64 offset) {
   view->cursor = ViewClampCursorToMode(view, buffer, offset);
   view->preferred_column = BufferColumnFromOffset(buffer, view->cursor);

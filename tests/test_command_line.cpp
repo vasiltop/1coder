@@ -308,9 +308,15 @@ TEST(command_line_completes_command_names) {
   CHECK_EQ(exact.count, 1);
   CHECK_STR(exact.items[0], Str8Lit("split-vertical"));
 
-  // Hidden keybinding-only actions stay out of the suggestions.
-  CommandCompletion hidden = CommandCompletionsFor(f.arena, &f.ed, Str8Lit("cursor-"));
+  // Hidden keybinding-only actions stay out of the suggestions: cursor-left,
+  // cursor-place-mark and cursor-place-confirm all exist, but only the one
+  // command meant to be typed is offered.
+  CommandCompletion hidden = CommandCompletionsFor(f.arena, &f.ed, Str8Lit("cursor-l"));
   CHECK_EQ(hidden.count, 0);
+
+  CommandCompletion shown = CommandCompletionsFor(f.arena, &f.ed, Str8Lit("cursor-p"));
+  CHECK_EQ(shown.count, 1);
+  CHECK_STR(shown.items[0], Str8Lit("cursor-place"));
 
   Destroy(&f);
 }
