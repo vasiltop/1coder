@@ -40,7 +40,7 @@ void LeaveInsertMode(Editor *ed, View *view, Buffer *buffer) {
 // the per-view jump list before the cursor moves, but only for navigation --
 // an operator consuming the motion does not record a jump.
 void RunMotion(CommandArgs *a, MotionProc proc, bool keep_column = false, u32 argument = 0,
-               bool is_jump = false) {
+               bool is_jump = false, bool cw_trim = false) {
   Editor *ed = a->ed;
   View *view = a->view;
   Buffer *buffer = a->buffer;
@@ -65,6 +65,23 @@ void RunMotion(CommandArgs *a, MotionProc proc, bool keep_column = false, u32 ar
     OperatorKind op = vim->pending_operator;
     RangeU64 range = VimRangeFromMotion(buffer, view->cursor, motion);
     bool linewise = VimMotionIsLinewise(motion);
+
+    if (cw_trim && !linewise && range.max > range.min) {
+      u8 start_char = BufferByteAt(buffer, range.min);
+      if (start_char == '\n') {
+        range.max = range.min;
+      } else if (!CharIsSpace(start_char)) {
+        u64 new_max = range.max;
+        while (new_max > range.min && CharIsSpace(BufferByteAt(buffer, new_max - 1))) {
+          new_max--;
+        }
+        range.max = new_max;
+      } else {
+        while (range.max > range.min && BufferByteAt(buffer, range.max - 1) == '\n') {
+          range.max--;
+        }
+      }
+    }
 
     vim->pending_operator = OperatorKind::None;
     vim->mode = VimMode::Normal;
@@ -171,10 +188,16 @@ static void Cmd_cursor_right(CommandArgs *a) { RunMotion(a, MotionCharRight); }
 static void Cmd_cursor_up(CommandArgs *a) { RunMotion(a, MotionLineUp, true); }
 static void Cmd_cursor_down(CommandArgs *a) { RunMotion(a, MotionLineDown, true); }
 
-static void Cmd_word_forward(CommandArgs *a) { RunMotion(a, MotionWordForward); }
+static void Cmd_word_forward(CommandArgs *a) {
+  RunMotion(a, MotionWordForward, false, 0, false,
+            a->view->vim.pending_operator == OperatorKind::Change);
+}
 static void Cmd_word_backward(CommandArgs *a) { RunMotion(a, MotionWordBackward); }
 static void Cmd_word_end(CommandArgs *a) { RunMotion(a, MotionWordEnd); }
-static void Cmd_word_forward_big(CommandArgs *a) { RunMotion(a, MotionWordForwardBig); }
+static void Cmd_word_forward_big(CommandArgs *a) {
+  RunMotion(a, MotionWordForwardBig, false, 0, false,
+            a->view->vim.pending_operator == OperatorKind::Change);
+}
 static void Cmd_word_backward_big(CommandArgs *a) { RunMotion(a, MotionWordBackwardBig); }
 static void Cmd_word_end_big(CommandArgs *a) { RunMotion(a, MotionWordEndBig); }
 
@@ -255,8 +278,11 @@ static void Cmd_insert_mode(CommandArgs *a) {
 }
 
 static void Cmd_append(CommandArgs *a) {
-  u64 at = Min(BufferNextCodepoint(a->buffer, a->view->cursor), BufferSize(a->buffer));
-  EnterInsertMode(a->ed, a->view, a->buffer, at);
+  Buffer *buffer = a->buffer;
+  u64 line = ViewCursorLine(a->view, buffer);
+  u64 at = Min(BufferNextCodepoint(buffer, a->view->cursor),
+               Min(BufferLineEnd(buffer, line), BufferSize(buffer)));
+  EnterInsertMode(a->ed, a->view, buffer, at);
 }
 
 static void Cmd_insert_line_start(CommandArgs *a) {
@@ -273,20 +299,48 @@ static void Cmd_open_line_below(CommandArgs *a) {
   Buffer *buffer = a->buffer;
   u64 line = ViewCursorLine(a->view, buffer);
   u64 at = BufferLineEnd(buffer, line);
+  u64 line_start = BufferOffsetFromLine(buffer, line);
+
+  u64 indent_end = line_start;
+  while (indent_end < at) {
+    u8 c = BufferByteAt(buffer, indent_end);
+    if (c != ' ' && c != '\t') break;
+    indent_end++;
+  }
+
+  TempArena scratch = ScratchBegin();
+  String8 indent = BufferTextRange(scratch.arena, buffer, {line_start, indent_end});
+  String8 insert_str = PushStr8Cat(scratch.arena, Str8Lit("\n"), indent);
 
   EnterInsertMode(a->ed, a->view, buffer, at);
-  BufferInsert(a->ed, buffer, at, Str8Lit("\n"), a->view->cursor, at + 1);
-  ViewSetCursor(a->view, buffer, at + 1);
+  BufferInsert(a->ed, buffer, at, insert_str, a->view->cursor, at + 1 + indent.size);
+  ViewSetCursor(a->view, buffer, at + 1 + indent.size);
+
+  ScratchEnd(scratch);
 }
 
 static void Cmd_open_line_above(CommandArgs *a) {
   Buffer *buffer = a->buffer;
   u64 line = ViewCursorLine(a->view, buffer);
   u64 at = BufferOffsetFromLine(buffer, line);
+  u64 line_end = BufferLineEnd(buffer, line);
+
+  u64 indent_end = at;
+  while (indent_end < line_end) {
+    u8 c = BufferByteAt(buffer, indent_end);
+    if (c != ' ' && c != '\t') break;
+    indent_end++;
+  }
+
+  TempArena scratch = ScratchBegin();
+  String8 indent = BufferTextRange(scratch.arena, buffer, {at, indent_end});
+  String8 insert_str = PushStr8Cat(scratch.arena, indent, Str8Lit("\n"));
 
   EnterInsertMode(a->ed, a->view, buffer, at);
-  BufferInsert(a->ed, buffer, at, Str8Lit("\n"), a->view->cursor, at);
-  ViewSetCursor(a->view, buffer, at);
+  BufferInsert(a->ed, buffer, at, insert_str, a->view->cursor, at + indent.size);
+  ViewSetCursor(a->view, buffer, at + indent.size);
+
+  ScratchEnd(scratch);
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +602,55 @@ static void Cmd_delete_char_before(CommandArgs *a) {
 }
 
 static void Cmd_delete_line(CommandArgs *a) { OperatorOnLines(a, OperatorKind::Delete); }
+
+static void Cmd_replace_char(CommandArgs *a) {
+  Buffer *buffer = a->buffer;
+  View *view = a->view;
+  u32 cp = a->chord.codepoint;
+  if (cp == 0) return;
+
+  u64 line_end = BufferLineEnd(buffer, ViewCursorLine(view, buffer));
+  if (view->cursor >= line_end) return;
+
+  u8 encoded[4];
+  u32 len = Utf8Encode(encoded, cp);
+  String8 replacement = {encoded, len};
+
+  BufferBeginEditGroup(buffer);
+  u64 pos = view->cursor;
+  for (u64 i = 0; i < a->count && pos < line_end; i++) {
+    u64 next = BufferNextCodepoint(buffer, pos);
+    BufferReplace(a->ed, buffer, RangeU64{pos, next}, replacement, pos, pos + len);
+    pos += len;
+  }
+  BufferEndEditGroup(buffer);
+
+  ViewSetCursor(view, buffer, BufferPrevCodepoint(buffer, pos));
+}
+
+static void Cmd_toggle_case(CommandArgs *a) {
+  Buffer *buffer = a->buffer;
+  View *view = a->view;
+
+  u64 line_end = BufferLineEnd(buffer, ViewCursorLine(view, buffer));
+  if (view->cursor >= line_end) return;
+
+  BufferBeginEditGroup(buffer);
+  u64 pos = view->cursor;
+  for (u64 i = 0; i < a->count && pos < line_end; i++) {
+    u8 c = BufferByteAt(buffer, pos);
+    u64 next = BufferNextCodepoint(buffer, pos);
+    if (CharIsAlpha(c)) {
+      u8 toggled = CharIsUpper(c) ? CharToLower(c) : CharToUpper(c);
+      String8 replacement = {&toggled, 1};
+      BufferReplace(a->ed, buffer, RangeU64{pos, next}, replacement, pos, next);
+    }
+    pos = next;
+  }
+  BufferEndEditGroup(buffer);
+
+  ViewSetCursor(view, buffer, pos);
+}
 static void Cmd_change_line(CommandArgs *a) { OperatorOnLines(a, OperatorKind::Change); }
 static void Cmd_yank_line(CommandArgs *a) { OperatorOnLines(a, OperatorKind::Yank); }
 

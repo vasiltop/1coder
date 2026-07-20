@@ -92,6 +92,8 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, "o", CommandId::open_line_below);
   KeymapBind(normal, "O", CommandId::open_line_above);
   KeymapBind(normal, "R", CommandId::replace_mode);
+  KeymapBind(normal, "r", CommandId::replace_char);
+  KeymapBind(normal, "~", CommandId::toggle_case);
 
   KeymapBind(normal, "v", CommandId::visual_mode);
   KeymapBind(normal, "V", CommandId::visual_line_mode);

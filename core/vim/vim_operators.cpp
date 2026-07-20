@@ -35,10 +35,14 @@ RangeU64 VimRangeFromMotion(const Buffer *buffer, u64 from, MotionResult motion)
       }
       break;
     }
-    case MotionKind::Inclusive:
-      // The character at the far end is part of the span, so step past it.
-      range.max = Min(BufferNextCodepoint(buffer, range.max), BufferSize(buffer));
+    case MotionKind::Inclusive: {
+      // The character at the far end is part of the span, so step past it,
+      // clamped to the line boundary so inclusive motions cannot cross newlines.
+      u64 next = BufferNextCodepoint(buffer, range.max);
+      u64 line_nl = BufferLineEnd(buffer, BufferLineFromOffset(buffer, range.max));
+      range.max = (next <= line_nl) ? next : line_nl;
       break;
+    }
     case MotionKind::Linewise: {
       // Take the lines the two *endpoints* sit on, rather than expanding the
       // byte range. When the target lands exactly on a line start, the byte
@@ -106,14 +110,23 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
       VimYankRange(ed, view, buffer, range, linewise);
 
       if (linewise) {
-        // `cc` empties the lines but keeps one to type on, rather than
-        // removing them outright as `dd` would.
+        // `cc` empties the lines but keeps one to type on; leading whitespace
+        // is preserved so the cursor enters insert at the current indent level.
         RangeU64 without_newline = range;
         u64 last_line = BufferLineFromOffset(buffer, (range.max > range.min) ? range.max - 1
                                                                             : range.min);
         without_newline.max = BufferLineEnd(buffer, last_line);
-        BufferDelete(ed, buffer, without_newline, view->cursor, without_newline.min);
-        return without_newline.min;
+
+        u64 first_non_blank = without_newline.min;
+        while (first_non_blank < without_newline.max) {
+          u8 c = BufferByteAt(buffer, first_non_blank);
+          if (c != ' ' && c != '\t') break;
+          first_non_blank++;
+        }
+
+        RangeU64 to_delete = {first_non_blank, without_newline.max};
+        BufferDelete(ed, buffer, to_delete, view->cursor, first_non_blank);
+        return first_non_blank;
       }
 
       BufferDelete(ed, buffer, range, view->cursor, range.min);

@@ -427,15 +427,142 @@ TEST(vim_exclusive_motion_stops_at_end_of_line) {
 TEST(vim_change_enters_insert_mode) {
   Fixture f = MakeFixture("foo bar");
 
+  // cw deletes only the word, preserving the trailing space (Neovim cw semantics).
   Type(&f, "cw");
   CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Insert);
-  CHECK_STR(TextOf(&f), Str8Lit("bar"));
+  CHECK_STR(TextOf(&f), Str8Lit(" bar"));
 
-  Type(&f, "new ");
+  Type(&f, "new");
   CHECK_STR(TextOf(&f), Str8Lit("new bar"));
 
   Type(&f, "<Esc>");
   CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Normal);
+
+  Destroy(&f);
+}
+
+TEST(vim_replace_char) {
+  // r replaces the character under cursor with the next keystroke.
+  Fixture f = MakeFixture("hello world");
+
+  Type(&f, "rz");
+  CHECK_STR(TextOf(&f), Str8Lit("zello world"));
+  CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Normal);
+  CHECK_EQ(CursorColumn(&f), 0);
+
+  // r on blank line does nothing.
+  Fixture g = MakeFixture("\nafter");
+  Type(&g, "rz");
+  CHECK_STR(TextOf(&g), Str8Lit("\nafter"));
+  CHECK_EQ(CursorColumn(&g), 0);
+  Destroy(&g);
+
+  Destroy(&f);
+}
+
+TEST(vim_toggle_case) {
+  // ~ toggles ASCII alpha case and advances cursor.
+  Fixture f = MakeFixture("hello");
+
+  Type(&f, "~");
+  CHECK_STR(TextOf(&f), Str8Lit("Hello"));
+  CHECK_EQ(CursorColumn(&f), 1);
+
+  // Non-letter under cursor: unchanged, cursor still advances.
+  Fixture g = MakeFixture("a1b");
+  Type(&g, "l~");  // cursor on '1'
+  CHECK_STR(TextOf(&g), Str8Lit("a1b"));
+
+  // ~ at end of non-empty line: cursor stays on last char.
+  Type(&g, "l~");  // cursor on 'b'
+  CHECK_STR(TextOf(&g), Str8Lit("a1B"));
+  CHECK_EQ(CursorColumn(&g), 2);
+  Destroy(&g);
+
+  // ~ on blank line does nothing.
+  Fixture h = MakeFixture("\nafter");
+  Type(&h, "~");
+  CHECK_STR(TextOf(&h), Str8Lit("\nafter"));
+  Destroy(&h);
+
+  Destroy(&f);
+}
+
+TEST(vim_open_line_below_indent) {
+  // o on an indented line copies the indent to the new line.
+  Fixture f = MakeFixture("    indented\nnext");
+
+  Type(&f, "ohi<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("    indented\n    hi\nnext"));
+
+  // o on an unindented line: no indent added.
+  Fixture g = MakeFixture("plain\nnext");
+  Type(&g, "ohi<Esc>");
+  CHECK_STR(TextOf(&g), Str8Lit("plain\nhi\nnext"));
+  Destroy(&g);
+
+  Destroy(&f);
+}
+
+TEST(vim_open_line_above_indent) {
+  // O on an indented line copies the indent to the new line above.
+  Fixture f = MakeFixture("    indented");
+
+  Type(&f, "Ohi<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("    hi\n    indented"));
+
+  Destroy(&f);
+}
+
+TEST(vim_change_line_preserves_indent) {
+  // cc preserves leading whitespace, cursor lands at first non-blank.
+  Fixture f = MakeFixture("    indented\nnext");
+
+  Type(&f, "ccNEW<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("    NEW\nnext"));
+  CHECK_EQ(CursorColumn(&f), 6);
+
+  // cc on unindented line: works as before.
+  Fixture g = MakeFixture("plain\nnext");
+  Type(&g, "ccNEW<Esc>");
+  CHECK_STR(TextOf(&g), Str8Lit("NEW\nnext"));
+  Destroy(&g);
+
+  Destroy(&f);
+}
+
+TEST(vim_append_clamped_to_line) {
+  // a on a blank line inserts on that line, not the following one.
+  Fixture f = MakeFixture("\nafter");
+
+  Type(&f, "ahi<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("hi\nafter"));
+
+  Destroy(&f);
+}
+
+TEST(vim_change_dollar_blank_line) {
+  // c$ on a blank line enters insert without crossing to the next line.
+  Fixture f = MakeFixture("\nafter");
+
+  Type(&f, "c$Q<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("Q\nafter"));
+
+  Destroy(&f);
+}
+
+TEST(vim_cw_preserves_trailing_space) {
+  // cw changes only the word, not the trailing whitespace.
+  Fixture f = MakeFixture("alpha beta gamma");
+
+  Type(&f, "cwZZ<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("ZZ beta gamma"));
+
+  // cw on a trailing-space line leaves the spaces.
+  Fixture g = MakeFixture("word   \nnext");
+  Type(&g, "cwZZ<Esc>");
+  CHECK_STR(TextOf(&g), Str8Lit("ZZ   \nnext"));
+  Destroy(&g);
 
   Destroy(&f);
 }

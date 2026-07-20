@@ -14,10 +14,11 @@
 namespace {
 
 // Commands that need the *next* keystroke as an argument, rather than as a
-// binding: f, F, t, T.
+// binding: f, F, t, T, r.
 [[nodiscard]] bool CommandWantsCharacter(CommandId id) {
   return id == CommandId::find_char_forward || id == CommandId::find_char_backward ||
-         id == CommandId::till_char_forward || id == CommandId::till_char_backward;
+         id == CommandId::till_char_forward || id == CommandId::till_char_backward ||
+         id == CommandId::replace_char;
 }
 
 [[nodiscard]] bool ChordIsPrintable(KeyChord chord) {
