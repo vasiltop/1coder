@@ -1,6 +1,8 @@
 #include "render/render_editor.h"
 
 #include "buffers/buf_image.h"
+#include "editor/lsp.h"
+#include "render/render_lsp.h"
 #include "vim/vim_search.h"
 
 namespace {
@@ -233,6 +235,16 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
   Buffer *buffer = EditorBufferForView(ed, view);
   if (!view || !buffer) return;
 
+  EditorLspUi *lsp_ui = nullptr;
+  LspPositionEncoding lsp_position_encoding = LspPositionEncoding::Utf16;
+  if (buffer->kind == BufferKind::File) {
+    lsp_ui = ed->lsp_ui;
+    EditorLspBufferInfo lsp_info = {};
+    if (EditorLspGetBufferInfo(ed, buffer, &lsp_info)) {
+      lsp_position_encoding = lsp_info.position_encoding;
+    }
+  }
+
   RectS32 text_cells = EditorPanelTextRect(ed, panel);
   RectF32 panel_rect = CellsToPixels(ctx, panel->rect);
 
@@ -319,10 +331,20 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
                    columns);
   }
 
+  if (lsp_ui != nullptr) {
+    RenderLspDiagnostics(ctx, lsp_ui, buffer, view, lsp_position_encoding, content_rect,
+                        text_cells, visible, gutter);
+  }
+
   // While the command window is open it holds the cursor, so the panel's own
   // is drawn as an outline rather than competing with a second block.
-  DrawCursor(ctx, buffer, view, text_rect, visible, columns,
-             focused && !ed->command_line_active);
+  DrawCursor(ctx, buffer, view, text_rect, visible, columns, focused && !ed->command_line_active);
+
+  if (focused && lsp_ui != nullptr) {
+    if (const EditorLspUiPopupView *popup = EditorLspUiPopup(lsp_ui)) {
+      RenderLspPopup(ctx, popup, buffer, view, content_rect, text_cells, visible);
+    }
+  }
   DrawPopClip(ctx->draw);
 
   DrawStatusLine(ctx, ed, buffer, view, panel_rect, focused);
@@ -363,20 +385,21 @@ void RenderCommandLine(RenderContext *ctx, Editor *ed, f32 pixel_width, f32 pixe
     View *view = ed->command_view;
 
     if (command && view) {
-      // The prompt occupies the first cell, so the text -- and the cursor with
-      // it -- is shifted one column right. Which character it is says what the
-      // window is for: ':' a command, '/' or '?' a search.
-      constexpr u64 kPromptColumns = 1;
-      f32 text_x = ctx->cell_width * (f32)kPromptColumns;
-
       u8 prompt = ed->command_line_prompt ? ed->command_line_prompt : (u8)':';
-      DrawText(ctx->draw, String8{&prompt, 1}, 0.0f, baseline, ctx->theme.text);
+      String8 prompt_text = String8{&prompt, 1};
+      if (Str8Match(ed->command_line_purpose, Str8Lit("rename"))) {
+        prompt_text = Str8Lit("Rename: ");
+      }
+      u64 prompt_columns = Utf8Length(prompt_text);
+      f32 text_x = ctx->cell_width * (f32)prompt_columns;
+
+      DrawText(ctx->draw, prompt_text, 0.0f, baseline, ctx->theme.text);
       DrawText(ctx->draw, BufferTextAll(scratch.arena, command), text_x, baseline,
                ctx->theme.text);
 
       // Same cursor as a panel: a block in normal mode, a bar in insert, with
       // the covered character redrawn through it.
-      u64 column = BufferColumnFromOffset(command, view->cursor) + kPromptColumns;
+      u64 column = BufferColumnFromOffset(command, view->cursor) + prompt_columns;
       DrawCursorCell(ctx, command, view, (f32)column * ctx->cell_width, rect.y0, true);
     }
   } else if (ed->status_message.size > 0) {
