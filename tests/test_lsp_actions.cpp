@@ -303,7 +303,8 @@ TEST(lsp_actions_formatting_response_applies_edits_in_reverse_order) {
   EditorLspOnFormattingResponse(&context, &response);
   ScratchEnd(scratch);
 
-  CHECK_STR(BufferTextAllOrFail(scope.arena, buffer), Str8Lit("hi earth\n"));
+  CHECK_STR(BufferTextAllOrFail(scope.arena, buffer), Str8Lit("hi earth"));
+  CHECK(buffer->final_newline);
   CHECK(BufferIsDirty(buffer));
 }
 
@@ -332,7 +333,8 @@ TEST(lsp_actions_formatting_response_rejects_overlapping_edits) {
   EditorLspOnFormattingResponse(&context, &response);
   ScratchEnd(scratch);
 
-  CHECK_STR(BufferTextAllOrFail(scope.arena, buffer), Str8Lit("abcdef\n"));
+  CHECK_STR(BufferTextAllOrFail(scope.arena, buffer), Str8Lit("abcdef"));
+  CHECK(buffer->final_newline);
   CHECK(StatusContains(&editor.ed, "overlap"));
 }
 
@@ -343,7 +345,7 @@ TEST(lsp_actions_formatting_response_ignores_stale_results) {
 
   String8 path = WriteTextFile(scope.arena, fixture.path, Str8Lit("main.cpp"), Str8Lit("int x = 1;\n"));
   Buffer *buffer = OpenFileBuffer(&editor.ed, path);
-  BufferInsert(&editor.ed, buffer, BufferSize(buffer), Str8Lit("// local\n"), BufferSize(buffer),
+  BufferInsert(&editor.ed, buffer, BufferSize(buffer), Str8Lit("\n// local"), BufferSize(buffer),
                BufferSize(buffer));
 
   TempArena scratch = ScratchBegin();
@@ -362,7 +364,8 @@ TEST(lsp_actions_formatting_response_ignores_stale_results) {
   ScratchEnd(scratch);
 
   CHECK(StatusContains(&editor.ed, "stale"));
-  CHECK_STR(BufferTextAllOrFail(scope.arena, buffer), Str8Lit("int x = 1;\n// local\n"));
+  CHECK_STR(BufferTextAllOrFail(scope.arena, buffer), Str8Lit("int x = 1;\n// local"));
+  CHECK(buffer->final_newline);
 }
 
 TEST(lsp_actions_navigation_requests_map_each_kind_to_its_method) {
@@ -602,8 +605,10 @@ TEST(lsp_actions_workspace_edit_applies_changes_to_open_and_new_buffers) {
 
   Buffer *closed_buffer = BufferFromHandle(&editor.ed.buffers, BufferFromPath(&editor.ed.buffers, closed_path));
   CHECK(closed_buffer != nullptr);
-  CHECK_STR(BufferTextAllOrFail(scope.arena, open_buffer), Str8Lit("ALPHA\n"));
-  CHECK_STR(BufferTextAllOrFail(scope.arena, closed_buffer), Str8Lit("beta\nGAMMA\n"));
+  CHECK_STR(BufferTextAllOrFail(scope.arena, open_buffer), Str8Lit("ALPHA"));
+  CHECK_STR(BufferTextAllOrFail(scope.arena, closed_buffer), Str8Lit("beta\nGAMMA"));
+  CHECK(open_buffer->final_newline);
+  CHECK(closed_buffer->final_newline);
   CHECK(BufferIsDirty(open_buffer));
   CHECK(BufferIsDirty(closed_buffer));
 }
@@ -642,8 +647,10 @@ TEST(lsp_actions_workspace_edit_enforces_versions_atomically) {
   ScratchEnd(scratch);
 
   CHECK(StatusContains(&editor.ed, "version"));
-  CHECK_STR(BufferTextAllOrFail(scope.arena, a_buffer), Str8Lit("one\n"));
-  CHECK_STR(BufferTextAllOrFail(scope.arena, b_buffer), Str8Lit("two\n"));
+  CHECK_STR(BufferTextAllOrFail(scope.arena, a_buffer), Str8Lit("one"));
+  CHECK_STR(BufferTextAllOrFail(scope.arena, b_buffer), Str8Lit("two"));
+  CHECK(a_buffer->final_newline);
+  CHECK(b_buffer->final_newline);
 }
 
 TEST(lsp_actions_workspace_edit_rejects_resource_operations) {

@@ -381,6 +381,9 @@ TEST(lsp_editor_reuses_session_per_root_and_separates_roots) {
   CHECK(alpha_info.session != gamma_info.session);
   CHECK(alpha_info.client != gamma_info.client);
 
+  CHECK(WaitUntil([&]() {
+    return RecordedMessageCount(record_one) == 4 && RecordedMessageCount(record_two) == 3;
+  }));
   CHECK_EQ(FindRecordedMethod(scope.arena, record_one, Str8Lit("initialize")), (u64)0);
   CHECK_EQ(FindRecordedMethod(scope.arena, record_two, Str8Lit("initialize")), (u64)0);
   CHECK_EQ(RecordedMessageCount(record_one), (u64)4);

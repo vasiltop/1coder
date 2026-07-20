@@ -694,6 +694,7 @@ TEST(lsp_wiring_popup_input_has_priority_and_other_chords_continue) {
   Buffer *buffer = OpenDetachedFileBuffer(&editor.ed, "popup.cpp", "/tmp/popup.cpp", "abc");
   View *view = FocusBuffer(&editor.ed, buffer, BufferSize(buffer));
   view->vim.mode = VimMode::Insert;
+  ViewSetCursor(view, buffer, BufferSize(buffer));
 
   String8 error = {};
   CHECK(EditorLspUiShowCompletionResult(
