@@ -3,6 +3,9 @@
 A modal text editor with vim keybindings. One binary, no config files, no plugin
 manager, no scripting language.
 
+![1coder editing its own source, with a live grep for "ViewScroll" narrowing in a
+vertical split alongside](docs/screenshot.png)
+
 ## Install
 
 Download from the [latest release](https://github.com/vasiltop/1coder/releases/latest):
