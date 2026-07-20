@@ -64,9 +64,7 @@ jobs:
       - name: Diagnose Windows launch failure
         if: failure() && runner.os == 'Windows'
         run: |
-          echo "--- build dir ---"
-          ls -la build/ || true
-          echo "--- direct invocation ---"
-          ./build/editor_tests.exe || echo "exit=$?"
-          echo "--- loader dependencies ---"
-          ldd build/editor_tests.exe || true
+          echo "--- true Windows exit code (bypasses the msys shell) ---"
+          cmd.exe /c 'build\editor_tests.exe & echo EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
+          echo "--- zero-match filter: separates a load failure from a crashing test ---"
+          cmd.exe /c 'build\editor_tests.exe zzz_matches_nothing & echo EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
