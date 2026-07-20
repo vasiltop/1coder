@@ -17,13 +17,13 @@
 // as several edits.
 
 struct UndoRecord {
-  RangeU64 range;
-  String8 old_text;
-  String8 new_text;
+  RangeU64 range;      // pre-edit coordinates of the replaced span
+  String8 old_text;    // contents before the edit
+  String8 new_text;    // contents after the edit
   u64 cursor_before;
   u64 cursor_after;
   u32 group;
-  u64 text_arena_pos;
+  u64 text_arena_pos;  // arena position before this record's text was stored
 };
 
 // A contiguous run of records forming one undoable action. Records are in the
@@ -31,19 +31,19 @@ struct UndoRecord {
 struct UndoStep {
   UndoRecord *records;
   u64 count;
-  u64 cursor;
+  u64 cursor;  // where the cursor belongs after this step
 };
 
 struct UndoStack {
   UndoRecord *records;
-  u64 count;
+  u64 count;     // total live records
   u64 capacity;
-  u64 pos;
+  u64 pos;       // records [0, pos) are applied; [pos, count) are undone-and-redoable
   u32 next_group;
   u32 open_group;
   b32 group_open;
-  Arena *record_arena;
-  Arena *text_arena;
+  Arena *record_arena;  // exclusive to the record array, so it grows in place
+  Arena *text_arena;    // holds record text; popped when redo history is discarded
   u64 base_pos;
 };
 

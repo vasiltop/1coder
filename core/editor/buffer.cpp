@@ -279,10 +279,7 @@ bool BufferSaveFile(Buffer *buffer, String8 path) {
 
   TempArena scratch = ScratchBegin1(buffer->arena);
   String8 text = BufferTextAll(scratch.arena, buffer);
-  // Append the final newline when the buffer has content (Neovim's fixeol
-  // always adds one) or when the original file had one.  An empty buffer that
-  // came from an empty file (final_newline=false) stays empty on save; a
-  // single-newline file or a scratch buffer (final_newline=true) saves as "\n".
+  // fixeol: always append '\n' unless the buffer is empty and started without one.
   if (text.size > 0 || buffer->final_newline)
     text = PushStr8Cat(scratch.arena, text, Str8Lit("\n"));
   bool ok = OsFileWrite(target, text);

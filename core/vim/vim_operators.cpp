@@ -99,7 +99,6 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
   switch (op) {
     case OperatorKind::Yank: {
       VimYankRange(ed, view, buffer, range, linewise, true);
-      // Yank leaves the cursor at the start of the yanked span.
       return range.min;
     }
 
@@ -167,16 +166,13 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
   Register reg = EditorGetRegister(ed, RegisterNormalise(view->vim.pending_register));
   if (reg.text.size == 0 || BufferIsReadOnly(buffer)) return pos;
 
-  // One undo step for the whole paste command, even when two BufferInsert
-  // calls are needed (separator + content).
+  // One undo step for the whole paste, even when a separator needs inserting.
   BufferBeginEditGroup(buffer);
 
   TempArena scratch = ScratchBegin();
 
-  // Repeat the register's contents `count` times before inserting, so 3p is a
-  // single undoable edit rather than three. For linewise registers each copy
-  // must carry its own trailing newline so that repeated copies remain on
-  // distinct lines when concatenated.
+  // Expand `count` copies now so the whole paste is one undoable edit.
+  // Linewise pieces each need a trailing newline to stay on separate lines.
   String8 piece = reg.text;
   if (reg.linewise && piece.size > 0 && piece.str[piece.size - 1] != '\n') {
     piece = PushStr8Cat(scratch.arena, piece, Str8Lit("\n"));
@@ -193,10 +189,8 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
     u64 at = after ? LineRangeWithNewline(&buffer->lines, &buffer->text, line).max
                    : BufferOffsetFromLine(buffer, line);
 
-    // A final line with no newline of its own needs one adding first, or the
-    // pasted text would join onto it. For paste-after into a completely empty
-    // buffer the separator represents the "surviving empty line" Neovim keeps
-    // after `dd` on the last content line.
+    // A final line with no trailing newline needs a separator, or the pasted
+    // text would join onto it.
     if (after) {
       bool needs_sep = (at > 0 && BufferByteAt(buffer, at - 1) != '\n')
                     || (at == 0 && BufferSize(buffer) == 0);
@@ -206,13 +200,8 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
       }
     }
 
-    // When paste-after reaches the very end of the buffer the trailing '\n' in
-    // the linewise text must not be stored — the buffer invariant keeps content
-    // without a trailing newline and the save layer always appends one. Strip
-    // it here so we do not accumulate double newlines on each :w. Paste-before
-    // (after == false) does not strip: its trailing '\n' represents the blank
-    // line that follows the pasted content (e.g. ddP leaves content then the
-    // empty last line).
+    // Strip trailing '\n' when appending at end of buffer; the save layer adds
+    // one and paste-before keeps its own to represent the following blank line.
     if (after && at == BufferSize(buffer) && text.size > 0 && text.str[text.size - 1] == '\n') {
       text = Str8Chop(text, 1);
     }
@@ -236,12 +225,8 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
     u64 at = after ? Min(BufferNextCodepoint(buffer, pos), line_end) : pos;
     BufferInsert(ed, buffer, at, text, pos, at + text.size);
 
-    // Determine where the cursor lands after a charwise paste. Neovim's rule:
-    //   - Text with no newlines: last inserted character (at + size - 1).
-    //   - Text ending with '\n' and pasting after (p): one past the last
-    //     inserted byte, on the new line that '\n' created.
-    //   - Otherwise (contains '\n' but ends on a non-newline, or paste-before
-    //     P with a newline-ending text): first inserted character (at).
+    // Cursor lands on the last codepoint for plain text; at the insertion
+    // point when the text contains a newline.
     if (text.size == 0) {
       cursor = at;
     } else {
@@ -273,8 +258,7 @@ u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool 
   // Capture cursor codepoint-column before any edits.
   u64 old_col = BufferColumnFromOffset(buffer, view->cursor);
 
-  // For <<: capture the end virtual-column of the cursor character so we can
-  // land on the last codepoint whose end-vcol does not exceed it after dedent.
+  // <<: record cursor's end virtual-column before any edits to restore position after dedent.
   u64 old_end_vcol = 0;
   if (!indent) {
     u64 cur_line = BufferLineFromOffset(buffer, view->cursor);
@@ -339,8 +323,7 @@ u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool 
     return BufferOffsetFromColumn(buffer, first, Min(old_col, old_first_nonblank));
   }
 
-  // After <<: land on the last codepoint whose end virtual-column does not
-  // exceed the cursor's pre-dedent end virtual-column.
+  // Land on the last codepoint whose end virtual-column fits within old_end_vcol.
   {
     RangeU64 fr = BufferLineRange(buffer, first);
     u64 best = fr.min;

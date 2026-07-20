@@ -280,8 +280,7 @@ MotionResult MotionParagraphForward(const Buffer *b, const View *, u64 pos, u64 
     while (line < last && LineIsBlank(b, line)) line += 1;
     while (line < last && !LineIsBlank(b, line)) line += 1;
   }
-  // When the loop exhausts all remaining lines on a non-blank line, land on the
-  // last character of that line (Neovim: } with no following blank paragraph).
+  // } with no following blank: land on the last character of the line.
   if (line == last && !LineIsBlank(b, line)) {
     RangeU64 r = BufferLineRange(b, line);
     u64 at = (r.max > r.min) ? BufferPrevCodepoint(b, r.max) : r.min;
@@ -466,7 +465,6 @@ TextObjectResult TextObjectDelimited(const Buffer *b, u64 pos, u8 open_ch, u8 cl
                                      bool inner) {
   u64 size = BufferSize(b);
 
-  // Scan outwards for the innermost enclosing pair.
   i64 depth = 0;
   u64 open = size;
   for (u64 p = pos;; ) {

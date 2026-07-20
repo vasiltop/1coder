@@ -61,6 +61,7 @@ void UndoEndGroup(UndoStack *undo) { undo->group_open = false; }
 
 void UndoPush(UndoStack *undo, RangeU64 range, String8 old_text, String8 new_text,
               u64 cursor_before, u64 cursor_after) {
+  // Editing after an undo abandons the redo branch.
   TruncateToPos(undo);
 
   EnsureCapacity(undo, undo->count + 1);
@@ -100,6 +101,7 @@ UndoStep UndoStepUndo(UndoStack *undo) {
   step.cursor = undo->records[first].cursor_before;
 
   undo->pos = first;
+  // A group cannot stay open across an undo, or the next edit would join it.
   undo->group_open = false;
   return step;
 }

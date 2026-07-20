@@ -46,8 +46,10 @@ just shot out.bmp file.c --keys '<C-w>v10jVj'
 SDL_VIDEODRIVER=dummy ./build/editor file.c --keys '<C-w>v10jVj' --screenshot out.bmp
 ```
 
-`just vimdiff [filter]` runs the editor and neovim through the same keystrokes
-and compares the result.
+`just vimdiff [filter]` runs the editor and a clean headless Neovim through the
+same non-remapped interactive keystrokes, then compares exact text and cursor
+position. `just vimdiff-quick` runs the smaller smoke corpus; neither command
+skips known differences.
 
 ## CI and releases
 

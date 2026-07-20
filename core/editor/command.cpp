@@ -68,8 +68,7 @@ void RunMotion(CommandArgs *a, MotionProc proc, bool keep_column = false, u32 ar
     RangeU64 range = VimRangeFromMotion(buffer, view->cursor, motion);
     bool linewise = VimMotionIsLinewise(motion);
 
-    // Vim's exclusive-to-linewise promotion: an exclusive motion spanning
-    // exactly one byte on an empty source line becomes linewise.
+    // Exclusive motion over an empty source line promotes to linewise.
     if (!linewise && motion.kind == MotionKind::Exclusive
         && range.max == range.min + 1
         && BufferLineEnd(buffer, BufferLineFromOffset(buffer, range.min)) == range.min) {
