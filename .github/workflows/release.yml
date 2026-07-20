@@ -16,16 +16,35 @@ concurrency:
   group: release-${{ github.event.inputs.tag || github.ref }}
   cancel-in-progress: false
 
+defaults:
+  run:
+    # git-bash on the Windows runner, so one set of scripting covers all three.
+    shell: bash
+
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      # One platform failing to build should not cost the artifacts of the
+      # others; publish is what decides whether the release goes out.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: macos-14
+            platform: macos-arm64
+          - os: windows-latest
+            platform: windows-x86_64
+    runs-on: ${{ matrix.os }}
     steps:
+      # Submodules, unlike CI: this job ships the editor binary, which needs SDL.
       - uses: actions/checkout@v4
         with:
           submodules: true
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Install build dependencies
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           # SDL Linux build deps:
           # https://wiki.libsdl.org/SDL3/README-linux#build-dependencies
@@ -57,11 +76,19 @@ jobs:
             libwayland-dev \
             libdecor-0-dev
 
+      # macOS and Windows need nothing extra: SDL builds against the platform
+      # SDKs already on the runner.
       - name: Install just
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
-            | bash -s -- --to "$HOME/.local/bin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          case "${{ runner.os }}" in
+            Linux)
+              curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+                | bash -s -- --to "$HOME/.local/bin"
+              echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+              ;;
+            macOS)   brew install just ;;
+            Windows) choco install just --no-progress -y ;;
+          esac
 
       - name: Build release
         run: just release
@@ -70,17 +97,59 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ github.event.inputs.tag || github.ref_name }}"
-          name="1code-${tag}-linux-x86_64"
-          strip -s build-release/editor
-          install -Dm755 build-release/editor "${name}/1code"
-          cp README.md "${name}/"
-          tar -czf "${name}.tar.gz" "${name}"
-          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
-          echo "asset=${name}.tar.gz" >> "$GITHUB_ENV"
+          name="1code-${tag}-${{ matrix.platform }}"
+          mkdir -p "$name"
+          cp README.md "$name/"
+
+          case "${{ runner.os }}" in
+            Linux)
+              strip -s build-release/editor
+              install -Dm755 build-release/editor "${name}/1code"
+              tar -czf "${name}.tar.gz" "$name"
+              asset="${name}.tar.gz"
+              ;;
+            macOS)
+              # Apple's strip has no -s; the default already drops the symbol
+              # table from an executable.
+              strip build-release/editor
+              install -m755 build-release/editor "${name}/1code"
+              tar -czf "${name}.tar.gz" "$name"
+              asset="${name}.tar.gz"
+              ;;
+            Windows)
+              cp build-release/editor.exe "${name}/1code.exe"
+              7z a -tzip "${name}.zip" "$name" >/dev/null
+              asset="${name}.zip"
+              ;;
+          esac
+
+          # shasum is the one spelling present on all three runners.
+          shasum -a 256 "$asset" > "${asset}.sha256"
+          echo "asset=${asset}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            ${{ env.asset }}
+            ${{ env.asset }}.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
 
       # gh is preinstalled on the runner and uses GITHUB_TOKEN, so there is no
       # third-party action in the path. GitHub's asset upload backend returns
       # sporadic 5xx ("Error creating policy"), hence the retries.
+      #
+      # One job rather than one per platform: the recreate step below would
+      # otherwise have three runners deleting each other's release.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,11 +163,17 @@ jobs:
             gh release delete "$TAG" --yes --cleanup-tag=false
           fi
 
+          # gh appends the generated notes after these.
+          notes='The macOS and Windows binaries are unsigned. macOS refuses the
+          first launch: right-click the binary and choose Open, or run
+          `xattr -d com.apple.quarantine 1code`.'
+
           for attempt in 1 2 3 4 5; do
             if gh release create "$TAG" \
                  --title "$TAG" \
+                 --notes "$notes" \
                  --generate-notes \
-                 "$asset" "$asset.sha256"; then
+                 artifacts/*; then
               exit 0
             fi
             echo "release attempt $attempt failed, retrying in $((attempt * 15))s" >&2

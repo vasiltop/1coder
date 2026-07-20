@@ -1,4 +1,11 @@
+// A plain main() rather than SDL's entry-point shim, so the editor stays a
+// console program that takes file arguments on every platform. SDL then has to
+// be told the process is already up, which is what SDL_SetMainReady does below.
+// With SDL_MAIN_HANDLED set, SDL_main.h leaves main() alone and only declares
+// SDL_SetMainReady.
+#define SDL_MAIN_HANDLED
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
 
 #include "base/base_arena.h"
 #include "base/base_string.h"
@@ -113,6 +120,8 @@ bool RebuildFont(App *app) {
 }  // namespace
 
 int main(int argc, char **argv) {
+  SDL_SetMainReady();
+
   Arena *arena = ArenaAlloc(GB(1));
 
   // --screenshot <path>: draw one frame, save it, exit. Everything else on the

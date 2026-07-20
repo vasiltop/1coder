@@ -6,13 +6,16 @@ scripting language. All configuration is source code.
 
 ## Build
 
-Needs CMake, a C++23 compiler, and SDL3.
+Needs CMake, a C++23 compiler, and SDL3. Builds on Linux, macOS and Windows;
+each tagged release ships a binary for all three. The macOS and Windows binaries
+are unsigned, so the first launch needs
+`xattr -d com.apple.quarantine 1code` or a right-click → Open on macOS.
 
 ```sh
 cmake -B build -S . && cmake --build build -j
 
 ./build/editor path/to/file      # run
-./build/editor_tests             # 276 tests, needs no display
+./build/editor_tests             # 342 tests, needs no display
 ```
 
 With [just](https://github.com/casey/just), `just` on its own lists everything:

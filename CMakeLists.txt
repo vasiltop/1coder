@@ -10,13 +10,38 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
 endif()
 
+# Binaries land in the build directory itself under every generator. Visual
+# Studio is multi-config and would otherwise bury them in build/Debug/, which
+# breaks every ./build/editor_tests path in the justfile and the workflows.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+foreach(config ${CMAKE_CONFIGURATION_TYPES})
+  string(TOUPPER ${config} config_upper)
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper} ${CMAKE_BINARY_DIR})
+endforeach()
+
+# Static CRT, so the shipped .exe needs no redistributable -- the same reasoning
+# that pins SDL to a static build below.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 # Applied only to our targets so a vendored SDL build is not forced onto our
 # warning set (and so SDL's own flags stay under its control).
-set(EDITOR_COMPILE_OPTIONS
-  -Wall -Wextra
-  -Wno-unused-parameter
-  -Wno-missing-field-initializers
-)
+if(MSVC)
+  set(EDITOR_COMPILE_OPTIONS
+    /W4
+    /permissive-
+    # Source is UTF-8 and so are the string literals in it. Without this MSVC
+    # reads them in the active code page.
+    /utf-8
+    /wd4100  # unreferenced formal parameter
+    /wd4996  # 'fopen': consider fopen_s
+  )
+else()
+  set(EDITOR_COMPILE_OPTIONS
+    -Wall -Wextra
+    -Wno-unused-parameter
+    -Wno-missing-field-initializers
+  )
+endif()
 
 # ---------------------------------------------------------------------------
 # editor_core -- all editing logic. Deliberately links nothing: no SDL, no

@@ -14,12 +14,14 @@ default:
 # Configure and build (debug).
 build:
     cmake -B {{build_dir}} -S . -DCMAKE_BUILD_TYPE=Debug
-    cmake --build {{build_dir}} -j
+    cmake --build {{build_dir}} --config Debug -j
 
 # Configure and build with optimisations.
+# --config is what multi-config generators (Visual Studio) read; CMAKE_BUILD_TYPE
+# is what single-config ones read. Passing both keeps every platform on Release.
 release:
     cmake -B {{release_dir}} -S . -DCMAKE_BUILD_TYPE=Release
-    cmake --build {{release_dir}} -j
+    cmake --build {{release_dir}} --config Release -j
 
 # Run the headless test suite. Takes an optional name filter.
 test filter="": build
@@ -58,7 +60,7 @@ ci:
     # Release compiles out the arena assertions and NDEBUG has broken the build
     # before, so it is worth building both.
     cmake -B {{release_dir}} -S . -DCMAKE_BUILD_TYPE=Release
-    cmake --build {{release_dir}} -j
+    cmake --build {{release_dir}} --config Release -j
     ./{{release_dir}}/editor_tests
 
 # Fail if anything under core/ has picked up a dependency on SDL.
