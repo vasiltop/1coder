@@ -338,17 +338,21 @@ TEST(lsp_registry_returns_false_and_zeros_command_when_server_is_missing) {
   String8 empty_path = OsPathJoin(scope.arena, fixture.path, Str8Lit("empty-bin"));
   String8 cwd_dir = OsPathJoin(scope.arena, fixture.path, Str8Lit("cwd"));
   String8 root = OsPathJoin(scope.arena, fixture.path, Str8Lit("root"));
+  String8 fake_home = OsPathJoin(scope.arena, fixture.path, Str8Lit("home"));
   CHECK(OsMakeDirs(empty_path));
   CHECK(OsMakeDirs(cwd_dir));
   CHECK(OsMakeDirs(root));
+  CHECK(OsMakeDirs(fake_home));
   WriteExecutableFixture(scope.arena, cwd_dir, Str8Lit("clangd"));
 
   ScopedEnvVar path(scope.arena, "PATH", empty_path);
-  ScopedWorkingDirectory cwd(scope.arena);
-  CHECK(cwd.Set(cwd_dir));
+  ScopedEnvVar home(scope.arena, "HOME", fake_home);
 #if defined(_WIN32)
+  ScopedEnvVar userprofile(scope.arena, "USERPROFILE", fake_home);
   ScopedEnvVar pathext(scope.arena, "PATHEXT", Str8Lit(".EXE"));
 #endif
+  ScopedWorkingDirectory cwd(scope.arena);
+  CHECK(cwd.Set(cwd_dir));
 
   LspServerCommand command = {};
   command.language = LspLanguage::COUNT;
@@ -365,4 +369,31 @@ TEST(lsp_registry_returns_false_and_zeros_command_when_server_is_missing) {
   CHECK(command.arguments == nullptr);
   CHECK_EQ(command.argument_count, (u64)0);
   CHECK_EQ(command.root.size, (u64)0);
+}
+
+TEST(lsp_registry_falls_back_to_mason_bin_when_path_lacks_server) {
+  ArenaScope scope;
+  ScopedFixtureDir fixture(scope.arena, "mason_fallback");
+
+  String8 empty_path = OsPathJoin(scope.arena, fixture.path, Str8Lit("empty-bin"));
+  String8 fake_home = OsPathJoin(scope.arena, fixture.path, Str8Lit("home"));
+  String8 mason_bin =
+      OsPathJoin(scope.arena, fake_home, Str8Lit(".local/share/nvim/mason/bin"));
+  String8 root = OsPathJoin(scope.arena, fixture.path, Str8Lit("root"));
+  CHECK(OsMakeDirs(empty_path));
+  CHECK(OsMakeDirs(mason_bin));
+  CHECK(OsMakeDirs(root));
+
+  String8 clangd_path = WriteExecutableFixture(scope.arena, mason_bin, Str8Lit("clangd"));
+
+  ScopedEnvVar path(scope.arena, "PATH", empty_path);
+  ScopedEnvVar home(scope.arena, "HOME", fake_home);
+#if defined(_WIN32)
+  ScopedEnvVar userprofile(scope.arena, "USERPROFILE", fake_home);
+  ScopedEnvVar pathext(scope.arena, "PATHEXT", Str8Lit(".EXE"));
+#endif
+
+  LspServerCommand command = {};
+  CHECK(LspResolveServerCommand(scope.arena, LspLanguage::Cpp, root, &command));
+  CheckCommand(command, LspLanguage::Cpp, Str8Lit("cpp"), clangd_path, root, nullptr, 0);
 }

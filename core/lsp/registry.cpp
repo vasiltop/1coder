@@ -3,6 +3,8 @@
 #include "os/os_file.h"
 #include "os/os_process.h"
 
+#include <stdlib.h>
+
 namespace {
 
 struct LspExtensionMapping {
@@ -292,6 +294,49 @@ String8 LspFindProjectRoot(Arena *arena, LspLanguage language, String8 file_path
   return result;
 }
 
+// GUI launches (dmenu, .desktop, etc.) often inherit a session PATH that omits
+// user-local tool dirs. Interactive shells add those via rc files, so the same
+// machine can resolve clangd in a terminal but not when 1coder is started from
+// a launcher. After PATH, check a few well-known install locations.
+String8 HomeDirectory(Arena *arena) {
+  if (!arena) return String8{};
+#if defined(_WIN32)
+  const char *home = getenv("USERPROFILE");
+  if (home == nullptr || home[0] == 0) home = getenv("HOME");
+#else
+  const char *home = getenv("HOME");
+#endif
+  if (home == nullptr || home[0] == 0) return String8{};
+  return PushStr8Copy(arena, Str8C(home));
+}
+
+String8 FindServerExecutable(Arena *arena, String8 name) {
+  String8 on_path = OsFindExecutable(arena, name);
+  if (on_path.size > 0) return on_path;
+
+  String8 home = HomeDirectory(arena);
+  if (home.size == 0) return String8{};
+
+  // Prefer PATH above; these are fallbacks for common user installs.
+  static const String8 kExtraDirs[] = {
+      Str8LitComp(".local/share/nvim/mason/bin"),
+      Str8LitComp(".local/bin"),
+      Str8LitComp(".cargo/bin"),
+  };
+  TempArena scratch = ScratchBegin1(arena);
+  for (u64 i = 0; i < ArrayCount(kExtraDirs); i += 1) {
+    String8 dir = OsPathJoin(scratch.arena, home, kExtraDirs[i]);
+    String8 candidate = OsPathJoin(scratch.arena, dir, name);
+    String8 found = OsFindExecutable(arena, candidate);
+    if (found.size > 0) {
+      ScratchEnd(scratch);
+      return found;
+    }
+  }
+  ScratchEnd(scratch);
+  return String8{};
+}
+
 bool LspResolveServerCommand(Arena *arena, LspLanguage language, String8 root, LspServerCommand *command) {
   return LspResolveServerCommand(arena, language, DefaultLanguageId(language), root, command);
 }
@@ -307,7 +352,7 @@ bool LspResolveServerCommand(Arena *arena, LspLanguage language, String8 languag
 
   for (u64 i = 0; i < config->server_candidate_count; i += 1) {
     const LspServerCandidate *candidate = &config->server_candidates[i];
-    String8 executable = OsFindExecutable(arena, candidate->executable);
+    String8 executable = FindServerExecutable(arena, candidate->executable);
     if (executable.size == 0) continue;
 
     command->language = language;
