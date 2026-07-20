@@ -349,7 +349,8 @@ TEST(lsp_protocol_decodes_publish_diagnostics_and_rejects_malformed_entries) {
               "\"end\":{\"line\":3,\"character\":9}}},\"message\":\"related\"}],"
               "\"tags\":[1,2]},"
               "{\"range\":{\"start\":{\"line\":9,\"character\":1},"
-              "\"end\":{\"line\":9,\"character\":2}},\"message\":\"default severity\"}]}"));
+              "\"end\":{\"line\":9,\"character\":2}},\"code\":\"E0001\","
+              "\"message\":\"default severity\"}]}"));
   LspPublishDiagnostics payload = {};
   CHECK(LspDecodePublishDiagnostics(scope.arena, root, &payload, &error));
   CHECK_STR(payload.uri, Str8Lit("file:///tmp/a.cpp"));
@@ -361,6 +362,7 @@ TEST(lsp_protocol_decodes_publish_diagnostics_and_rejects_malformed_entries) {
   CHECK_EQ(payload.diagnostics[0].related_information_count, (u64)1);
   CHECK_EQ(payload.diagnostics[0].tag_count, (u64)2);
   CHECK_EQ((u64)payload.diagnostics[1].severity, (u64)LspDiagnosticSeverity::Error);
+  CHECK_STR(payload.diagnostics[1].code, Str8Lit("E0001"));
 
   bool ok = LspDecodePublishDiagnostics(
       scope.arena,

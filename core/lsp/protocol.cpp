@@ -196,7 +196,10 @@ void AppendEncoded(u8 *dst, u64 *size, u8 value) {
 }
 
 [[nodiscard]] String8 CopyCodeValue(Arena *arena, const JsonValue *value, bool *ok, String8 *error) {
-  if (value->kind == JsonKind::String) return PushStr8Copy(arena, value->string);
+  if (value->kind == JsonKind::String) {
+    *ok = true;
+    return PushStr8Copy(arena, value->string);
+  }
   i64 signed_value = 0;
   if (JsonGetI64(value, &signed_value)) {
     *ok = true;
