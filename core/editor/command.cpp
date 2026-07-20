@@ -1616,6 +1616,7 @@ void ShowListing(Editor *ed, String8 name, String8 text) {
 BufferHandle GrepBufferOpen(Editor *ed, String8 pattern);
 BufferHandle FinderBufferOpen(Editor *ed);
 BufferHandle LiveGrepBufferOpen(Editor *ed);
+BufferHandle BuffersBufferOpen(Editor *ed);
 
 // Opens a picker whose first line is the query, ready to type into. Shared by
 // the file finder and the live search, which differ only in what they do with
@@ -1792,23 +1793,7 @@ static void Cmd_list_commands(CommandArgs *a) {
   ScratchEnd(scratch);
 }
 
-static void Cmd_list_buffers(CommandArgs *a) {
-  TempArena scratch = ScratchBegin();
-  String8List lines = {};
-
-  for (BufferHandle h = BufferFirst(&a->ed->buffers); h.index != 0;
-       h = BufferNext(&a->ed->buffers, h)) {
-    Buffer *b = BufferFromHandle(&a->ed->buffers, h);
-    if (!b) continue;
-    Str8ListPush(scratch.arena, &lines,
-                 PushStr8F(scratch.arena, "%3llu %s %-24.*s %.*s", (unsigned long long)h.index,
-                           BufferIsDirty(b) ? "+" : " ", (int)b->name.size, (char *)b->name.str,
-                           (int)b->path.size, (char *)b->path.str));
-  }
-
-  ShowListing(a->ed, Str8Lit("[buffers]"), Str8ListJoin(scratch.arena, &lines, Str8Lit("\n")));
-  ScratchEnd(scratch);
-}
+static void Cmd_list_buffers(CommandArgs *a) { OpenQueryPicker(a, BuffersBufferOpen(a->ed)); }
 
 static void Cmd_list_bindings(CommandArgs *a) {
   TempArena scratch = ScratchBegin();

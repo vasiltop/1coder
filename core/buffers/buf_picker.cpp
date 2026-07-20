@@ -207,6 +207,102 @@ void FinderSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
   ScratchEnd(scratch);
 }
 
+// ---------------------------------------------------------------------------
+// Buffer picker
+// ---------------------------------------------------------------------------
+
+// Fuzzy-picks among open buffers. Filtered handles sit parallel to the result
+// lines so <CR> can switch without reopening a file by path.
+struct BuffersPayload {
+  BufferHandle handles[200];
+  u64 count;
+  bool updating;
+};
+
+String8 BufferPickerDisplay(Arena *arena, Buffer *b) {
+  if (b->path.size == 0) return PushStr8Copy(arena, b->name);
+  return PushStr8F(arena, "%.*s  %.*s", (int)b->name.size, (char *)b->name.str, (int)b->path.size,
+                   (char *)b->path.str);
+}
+
+void BuffersRefilter(Editor *ed, Buffer *buffer) {
+  BuffersPayload *payload = (BuffersPayload *)buffer->user_data;
+  if (!payload || payload->updating) return;
+
+  payload->updating = true;
+
+  TempArena scratch = ScratchBegin();
+  String8 query = Str8SkipChopWhitespace(BufferLineText(scratch.arena, buffer, 0));
+
+  u64 cand_count = 0;
+  for (BufferHandle h = BufferFirst(&ed->buffers); h.index != 0; h = BufferNext(&ed->buffers, h)) {
+    Buffer *b = BufferFromHandle(&ed->buffers, h);
+    if (!b || Str8Match(b->name, Str8Lit("[buffers]"))) continue;
+    cand_count += 1;
+  }
+
+  String8 *candidates = PushArray(scratch.arena, String8, Max(cand_count, (u64)1));
+  BufferHandle *cand_handles = PushArray(scratch.arena, BufferHandle, Max(cand_count, (u64)1));
+  u64 n = 0;
+  for (BufferHandle h = BufferFirst(&ed->buffers); h.index != 0; h = BufferNext(&ed->buffers, h)) {
+    Buffer *b = BufferFromHandle(&ed->buffers, h);
+    if (!b || Str8Match(b->name, Str8Lit("[buffers]"))) continue;
+    candidates[n] = BufferPickerDisplay(scratch.arena, b);
+    cand_handles[n] = h;
+    n += 1;
+  }
+
+  FuzzyResults matches = FuzzyFilter(scratch.arena, candidates, n, query, ArrayCount(payload->handles));
+
+  payload->count = 0;
+  String8List lines = {};
+  Str8ListPush(scratch.arena, &lines, String8{nullptr, 0});  // keeps the query line
+  for (u64 i = 0; i < matches.count; i += 1) {
+    // FuzzyFilter keeps the candidate String8 pointer, so identity finds the handle.
+    BufferHandle handle = {};
+    for (u64 j = 0; j < n; j += 1) {
+      if (matches.items[i].text.str == candidates[j].str) {
+        handle = cand_handles[j];
+        break;
+      }
+    }
+    payload->handles[payload->count++] = handle;
+    Str8ListPush(scratch.arena, &lines, matches.items[i].text);
+  }
+
+  String8 body = Str8ListJoin(scratch.arena, &lines, Str8Lit("\n"));
+  u64 query_end = BufferLineEnd(buffer, 0);
+  bool read_only = BufferIsReadOnly(buffer);
+  bool query_only = BufferIsQueryOnly(buffer);
+  buffer->flags &= ~(BufferFlags::ReadOnly | BufferFlags::QueryOnly);
+  BufferReplace(ed, buffer, RangeU64{query_end, BufferSize(buffer)}, body, query_end, query_end);
+  if (read_only) buffer->flags |= BufferFlags::ReadOnly;
+  if (query_only) buffer->flags |= BufferFlags::QueryOnly;
+
+  ScratchEnd(scratch);
+  payload->updating = false;
+}
+
+void BuffersOnEdit(Editor *ed, Buffer *buffer, RangeU64 range, u64 new_len) {
+  BuffersRefilter(ed, buffer);
+}
+
+// <CR> switches to the buffer under the cursor, or the top match when typing.
+void BuffersSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
+  BuffersPayload *payload = (BuffersPayload *)buffer->user_data;
+  if (!payload) return;
+
+  u64 cursor_line = ViewCursorLine(view, buffer);
+  u64 index = (cursor_line == 0) ? 0 : cursor_line - 1;
+  if (index >= payload->count) return;
+
+  BufferHandle handle = payload->handles[index];
+  if (handle.index == 0 || !BufferFromHandle(&ed->buffers, handle)) return;
+
+  EditorPushJump(ed, view);
+  EditorShowBuffer(ed, handle);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -324,6 +420,36 @@ BufferHandle FinderBufferOpen(Editor *ed) {
   // Start empty, which lists everything, then let the hook do the rest.
   BufferSetText(ed, buffer, String8{nullptr, 0});
   FinderRefilter(ed, buffer);
+
+  return handle;
+}
+
+BufferHandle BuffersBufferOpen(Editor *ed) {
+  BufferHandle handle = BufferFromName(&ed->buffers, Str8Lit("[buffers]"));
+  if (handle.index == 0) {
+    handle = BufferOpen(&ed->buffers, BufferKind::FileList, Str8Lit("[buffers]"));
+  }
+
+  Buffer *buffer = BufferFromHandle(&ed->buffers, handle);
+  if (!buffer) return BufferHandleZero();
+
+  BuffersPayload *payload = PushStruct(buffer->arena, BuffersPayload);
+  payload->count = 0;
+  payload->updating = false;
+
+  buffer->user_data = payload;
+  buffer->hooks.on_edit = BuffersOnEdit;
+  buffer->hooks.on_submit = BuffersSubmit;
+  buffer->flags |= BufferFlags::QueryOnly;
+
+  if (!buffer->hooks.keymap) {
+    Keymap *keymap = KeymapAlloc(ed->arena, ed->normal_map);
+    KeymapBind(keymap, "<CR>", CommandId::result_open);
+    buffer->hooks.keymap = keymap;
+  }
+
+  BufferSetText(ed, buffer, String8{nullptr, 0});
+  BuffersRefilter(ed, buffer);
 
   return handle;
 }
