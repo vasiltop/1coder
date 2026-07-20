@@ -88,7 +88,7 @@ TEST(compile_runs_shell_command_into_buffer) {
   CommandExecLine(&f.ed, PushStr8F(f.arena, "compile %s", kEchoCommand));
   CHECK(WaitForCompileIdle(&f));
 
-  // First open splits vertically so the source stays visible beside it.
+  // First open splits horizontally so the source stays visible above it.
   CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
   Buffer *buffer = CompileBuffer(&f);
   CHECK(buffer != nullptr);
@@ -164,7 +164,7 @@ TEST(compile_reuses_visible_window_from_other_pane) {
   CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
 
   // Move focus to the other pane (the original scratch), then recompile.
-  EditorFocusDir(&f.ed, Dir2::Left);
+  EditorFocusDir(&f.ed, Dir2::Up);
   CHECK(EditorFocusedBuffer(&f.ed) != CompileBuffer(&f));
 
   CommandExecLine(&f.ed, Str8Lit("recompile"));
