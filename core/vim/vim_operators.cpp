@@ -115,12 +115,8 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
 
       BufferDelete(ed, buffer, range, view->cursor, range.min);
 
-      if (BufferSize(buffer) == 0) {
-        if (cross_line)
-          BufferSetFinalNewline(buffer, false);
-        else if (size_before > 0)
-          BufferSetFinalNewline(buffer, true);
-      }
+      if (BufferSize(buffer) == 0 && size_before > 0)
+        buffer->final_newline = !cross_line;
 
       if (linewise) {
         u64 line = Min(BufferLineFromOffset(buffer, range.min), BufferLineCount(buffer) - 1);

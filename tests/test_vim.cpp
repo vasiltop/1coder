@@ -2278,22 +2278,14 @@ TEST(vim_dedent_cursor_unindented_line) {
   Destroy(&f);
 }
 
-// ---------------------------------------------------------------------------
-// A1: dd on lone-newline buffer preserves final_newline
-// ---------------------------------------------------------------------------
-
 TEST(vim_dd_lone_newline_preserves_final_newline) {
   Fixture f = MakeFixture("");
   BufferOf(&f)->final_newline = true;
-  Type(&f, "ddu");
+  Type(&f, "dd");
   CHECK_STR(TextOf(&f), Str8Lit(""));
   CHECK(BufferOf(&f)->final_newline);
   Destroy(&f);
 }
-
-// ---------------------------------------------------------------------------
-// A2: yy on empty buffer stores "\n" linewise
-// ---------------------------------------------------------------------------
 
 TEST(vim_yy_empty_line_register_is_newline) {
   Fixture f = MakeFixture("");
@@ -2304,20 +2296,12 @@ TEST(vim_yy_empty_line_register_is_newline) {
   Destroy(&f);
 }
 
-// ---------------------------------------------------------------------------
-// A3: cw on empty line enters insert mode
-// ---------------------------------------------------------------------------
-
 TEST(vim_cw_empty_line_enters_insert_mode) {
   Fixture f = MakeFixture("");
   Type(&f, "cw");
   CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Insert);
   Destroy(&f);
 }
-
-// ---------------------------------------------------------------------------
-// B1: charwise paste cursor lands on last codepoint start (UTF-8)
-// ---------------------------------------------------------------------------
 
 TEST(vim_charwise_paste_utf8_cursor) {
   Fixture f = MakeFixture("caf\xc3\xa9\nrest");
@@ -2326,10 +2310,6 @@ TEST(vim_charwise_paste_utf8_cursor) {
   CHECK_EQ(CursorColumn(&f), 4);
   Destroy(&f);
 }
-
-// ---------------------------------------------------------------------------
-// B2: charwise paste of newline-ending text: cursor at insertion point
-// ---------------------------------------------------------------------------
 
 TEST(vim_charwise_paste_newline_cursor_at_insertion_point) {
   Fixture f = MakeFixture("a\n\nb");
@@ -2340,10 +2320,6 @@ TEST(vim_charwise_paste_newline_cursor_at_insertion_point) {
   Destroy(&f);
 }
 
-// ---------------------------------------------------------------------------
-// B3: dw on empty source line promotes to linewise
-// ---------------------------------------------------------------------------
-
 TEST(vim_dw_empty_line_becomes_linewise) {
   Fixture f = MakeFixture("a\n\n\nb");
   Type(&f, "jdw");
@@ -2352,10 +2328,6 @@ TEST(vim_dw_empty_line_becomes_linewise) {
   CHECK_STR(reg.text, Str8Lit("\n"));
   Destroy(&f);
 }
-
-// ---------------------------------------------------------------------------
-// C: di(/da( forward fallback when cursor precedes the opening delimiter
-// ---------------------------------------------------------------------------
 
 TEST(vim_text_object_di_paren_forward_fallback) {
   Fixture f = MakeFixture("foo(bar).baz");
@@ -2372,10 +2344,6 @@ TEST(vim_text_object_da_paren_forward_fallback) {
   CHECK_EQ(CursorColumn(&f), 3);
   Destroy(&f);
 }
-
-// ---------------------------------------------------------------------------
-// D: << with tab indent preserves virtual-column position
-// ---------------------------------------------------------------------------
 
 TEST(vim_dedent_tab_cursor_virtual_column) {
   Fixture f = MakeFixture("\tword\nfoo");

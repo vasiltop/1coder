@@ -80,8 +80,7 @@ void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
 
   LineIndexEdit(&buffer->lines, &buffer->text, clamped, insert_text.size);
 
-  UndoPush(&buffer->undo, clamped, old_text, insert_text, cursor_before, cursor_after,
-           buffer->final_newline, buffer->final_newline);
+  UndoPush(&buffer->undo, clamped, old_text, insert_text, cursor_before, cursor_after);
 
   buffer->flags |= BufferFlags::Dirty;
   buffer->edit_serial += 1;
@@ -137,7 +136,6 @@ u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
   }
 
   buffer->flags |= BufferFlags::Dirty;
-  buffer->final_newline = step.final_newline;
   if (moved) *moved = true;
   return Min(step.cursor, BufferSize(buffer));
 }
@@ -169,26 +167,12 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved) {
   }
 
   buffer->flags |= BufferFlags::Dirty;
-  buffer->final_newline = step.final_newline;
   if (moved) *moved = true;
   return Min(step.cursor, BufferSize(buffer));
 }
 
 void BufferBeginEditGroup(Buffer *buffer) { UndoBeginGroup(&buffer->undo); }
 void BufferEndEditGroup(Buffer *buffer) { UndoEndGroup(&buffer->undo); }
-
-void BufferSetFinalNewline(Buffer *buffer, bool fn) {
-  bool old_fn = buffer->final_newline;
-  if (old_fn == fn) return;
-  buffer->final_newline = fn;
-  UndoStack *undo = &buffer->undo;
-  if (undo->count > undo->group_start_count) {
-    undo->records[undo->count - 1].fn_after = fn;
-  } else {
-    UndoPush(undo, RangeU64{0, 0}, String8{nullptr, 0}, String8{nullptr, 0},
-             0, 0, old_fn, fn);
-  }
-}
 
 String8 BufferTextRange(Arena *arena, const Buffer *buffer, RangeU64 range) {
   return GapBufferCopyRange(arena, &buffer->text, range);
