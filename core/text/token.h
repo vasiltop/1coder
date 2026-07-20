@@ -38,6 +38,10 @@ struct Token {
   TokenKind kind;
 };
 
+// Deliberately capacity-less: this is the renderer-facing view only. When a
+// producer like syntax.cpp fills it, `tokens` points into that producer's own
+// arena (SyntaxCache::arena, sized by SyntaxCache::token_capacity) -- this
+// struct just borrows the pointer and the live count.
 struct TokenArray {
   Token *tokens;
   u64 count;

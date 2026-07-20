@@ -37,6 +37,7 @@ void BufferInit(Buffer *buffer, BufferKind kind, String8 name) {
 }
 
 void BufferDestroy(Buffer *buffer) {
+  SyntaxDestroy(&buffer->syntax);
   ArenaRelease(buffer->arena);
   ArenaRelease(buffer->text_arena);
   ArenaRelease(buffer->index_arena);
@@ -99,6 +100,10 @@ void BufferSetText(Editor *ed, Buffer *buffer, String8 text) {
   if (text.size) GapBufferInsert(&buffer->text, 0, text);
 
   LineIndexRebuild(&buffer->lines, &buffer->text);
+  // A whole-buffer replacement invalidates every token by construction, so a
+  // highlighted buffer must re-lex rather than keep showing stale ranges.
+  // SyntaxRebuild no-ops when nothing is attached.
+  SyntaxRebuild(buffer);
   UndoClear(&buffer->undo);
   buffer->flags &= ~BufferFlags::Dirty;
   buffer->edit_serial += 1;
