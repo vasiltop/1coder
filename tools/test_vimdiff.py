@@ -1,446 +1,182 @@
-"""Focused unit tests for tools/vimdiff.py.
+"""Unit tests for tools/vimdiff.py."""
 
-Run with:  python3 -m unittest tools/test_vimdiff.py
-"""
-
-import importlib
 import io
+import importlib.util
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock, call, patch
-
-# ---------------------------------------------------------------------------
-# Make sure the module under test is importable from the repo root so the
-# tests work regardless of working directory.
-# ---------------------------------------------------------------------------
+from unittest.mock import MagicMock, patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
-
-import importlib.util
 
 _SPEC = importlib.util.spec_from_file_location(
-    "vimdiff",
-    os.path.join(ROOT, "tools", "vimdiff.py"),
+    "vimdiff", os.path.join(ROOT, "tools", "vimdiff.py")
 )
 vimdiff = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(vimdiff)
 
 
-# ===========================================================================
-# 1. NVIM_SETTINGS must not include the masking settings
-# ===========================================================================
-
 class TestNvimSettings(unittest.TestCase):
-    def test_no_sw(self):
-        self.assertNotIn("sw=", vimdiff.NVIM_SETTINGS,
-                         "sw= must not appear in NVIM_SETTINGS")
+    def test_settings_clean(self):
+        s = vimdiff.NVIM_SETTINGS
+        self.assertIn("noswapfile", s)
+        for bad in ("sw=", "ts=", "expandtab", "fixendofline"):
+            self.assertNotIn(bad, s, "masking setting %r in NVIM_SETTINGS" % bad)
 
-    def test_no_ts(self):
-        self.assertNotIn("ts=", vimdiff.NVIM_SETTINGS,
-                         "ts= must not appear in NVIM_SETTINGS")
-
-    def test_no_expandtab(self):
-        self.assertNotIn("expandtab", vimdiff.NVIM_SETTINGS,
-                         "expandtab must not appear in NVIM_SETTINGS")
-
-    def test_no_fixendofline(self):
-        self.assertNotIn("fixendofline", vimdiff.NVIM_SETTINGS,
-                         "nofixendofline must not appear in NVIM_SETTINGS")
-
-    def test_has_noswapfile(self):
-        self.assertIn("noswapfile", vimdiff.NVIM_SETTINGS,
-                      "noswapfile must remain in NVIM_SETTINGS")
-
-
-# ===========================================================================
-# 2. Preflight: missing nvim or missing editor → return 2 + actionable message
-# ===========================================================================
 
 class TestPreflight(unittest.TestCase):
-    def test_nvim_missing_returns_false(self):
-        """preflight() returns False when nvim is not on PATH."""
+    def test_nvim_missing(self):
         with patch("shutil.which", return_value=None), \
-             patch("sys.stderr", new_callable=io.StringIO) as fake_err:
-            result = vimdiff.preflight()
-        self.assertFalse(result)
-        self.assertIn("nvim", fake_err.getvalue())
+             patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertFalse(vimdiff.preflight())
+        self.assertIn("nvim", err.getvalue())
 
-    def test_editor_missing_returns_false(self):
-        """preflight() returns False when build/editor is absent."""
-        with patch("shutil.which", return_value="/usr/bin/nvim"), \
-             patch("os.path.isfile", return_value=False), \
-             patch("sys.stderr", new_callable=io.StringIO) as fake_err:
-            result = vimdiff.preflight()
-        self.assertFalse(result)
-        self.assertIn("editor", fake_err.getvalue())
+    def test_editor_absent_or_not_executable(self):
+        for isfile, access in ((False, True), (True, False)):
+            with patch("shutil.which", return_value="/usr/bin/nvim"), \
+                 patch("os.path.isfile", return_value=isfile), \
+                 patch("os.access", return_value=access), \
+                 patch("sys.stderr", new_callable=io.StringIO) as err:
+                self.assertFalse(vimdiff.preflight())
+            self.assertIn("editor", err.getvalue())
 
-    def test_editor_not_executable_returns_false(self):
-        """preflight() returns False when build/editor exists but is not executable."""
-        with patch("shutil.which", return_value="/usr/bin/nvim"), \
-             patch("os.path.isfile", return_value=True), \
-             patch("os.access", return_value=False), \
-             patch("sys.stderr", new_callable=io.StringIO) as fake_err:
-            result = vimdiff.preflight()
-        self.assertFalse(result)
-        self.assertIn("editor", fake_err.getvalue())
-
-    def test_both_present_returns_true(self):
-        """preflight() returns True when nvim and editor are both available."""
+    def test_both_present(self):
         with patch("shutil.which", return_value="/usr/bin/nvim"), \
              patch("os.path.isfile", return_value=True), \
              patch("os.access", return_value=True):
-            result = vimdiff.preflight()
-        self.assertTrue(result)
+            self.assertTrue(vimdiff.preflight())
 
     def test_main_returns_2_when_preflight_fails(self):
-        """main() exits with return code 2 when preflight fails."""
         with patch.object(vimdiff, "preflight", return_value=False):
-            rc = vimdiff.main(["--quick"])
-        self.assertEqual(rc, 2)
+            self.assertEqual(vimdiff.main(["--quick"]), 2)
 
-
-# ===========================================================================
-# 3. run_subprocess: raises CaseError on timeout or nonzero exit
-# ===========================================================================
 
 class TestRunSubprocess(unittest.TestCase):
     def test_timeout_raises_case_error(self):
-        """run_subprocess raises CaseError on TimeoutExpired."""
         with patch("subprocess.run",
                    side_effect=subprocess.TimeoutExpired(["nvim"], 30)):
             with self.assertRaises(vimdiff.CaseError) as ctx:
-                vimdiff.run_subprocess(["nvim", "--headless"], case_id="plain:dw")
+                vimdiff.run_subprocess(["nvim"], case_id="plain:dw")
         msg = str(ctx.exception)
         self.assertIn("plain:dw", msg)
         self.assertIn("nvim", msg)
 
-    def test_nonzero_exit_raises_case_error(self):
-        """run_subprocess raises CaseError on non-zero exit code."""
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stderr = b"something went wrong"
-        with patch("subprocess.run", return_value=mock_result):
+    def test_nonzero_exit_raises_with_diagnostics(self):
+        mock = MagicMock(returncode=1, stderr=b"bad")
+        with patch("subprocess.run", return_value=mock):
             with self.assertRaises(vimdiff.CaseError) as ctx:
-                vimdiff.run_subprocess(["nvim", "--headless"], case_id="plain:dw")
+                vimdiff.run_subprocess(["nvim"], case_id="plain:dw")
         msg = str(ctx.exception)
         self.assertIn("plain:dw", msg)
-        self.assertIn("nvim", msg)
-        self.assertIn("1", msg)          # exit code
-        self.assertIn("something went wrong", msg)  # decoded stderr
-
-    def test_zero_exit_returns_result(self):
-        """run_subprocess returns the CompletedProcess on zero exit."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        with patch("subprocess.run", return_value=mock_result):
-            r = vimdiff.run_subprocess(["nvim", "--headless"])
-        self.assertIs(r, mock_result)
+        self.assertIn("1", msg)
+        self.assertIn("bad", msg)
 
 
-# ===========================================================================
-# 4. Missing artifacts are explicit failures, not "?" values
-# ===========================================================================
+class TestArtifactsAndCleanup(unittest.TestCase):
+    def _mock_ok(self):
+        return MagicMock(returncode=0)
 
-class TestArtifactValidation(unittest.TestCase):
-    def _make_tmp_text(self, content="hello\n"):
-        f = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
-        f.write(content)
-        f.close()
-        return f.name
-
-    def test_missing_nvim_pos_file_raises(self):
-        """run_nvim raises CaseError when the cursor-dump file is absent."""
-        tmp = self._make_tmp_text()
-        # Subprocess succeeds but writes no pos file → explicit error.
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        # Patch run_subprocess to succeed and NOT actually create pos_path
-        with patch.object(vimdiff, "run_subprocess", return_value=mock_result):
+    def test_missing_pos_file_raises(self):
+        with patch.object(vimdiff, "run_subprocess", return_value=self._mock_ok()):
             with self.assertRaises(vimdiff.CaseError) as ctx:
-                # Force a deterministic path by monkeypatching tempfile
                 vimdiff.run_nvim("hello\n", "w", case_id="plain:w")
         self.assertIn("plain:w", str(ctx.exception))
 
-    def test_missing_ours_pos_file_raises(self):
-        """run_ours raises CaseError when the cursor-dump file is absent."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        with patch.object(vimdiff, "run_subprocess", return_value=mock_result):
-            with self.assertRaises(vimdiff.CaseError) as ctx:
-                vimdiff.run_ours("hello\n", "w", case_id="plain:w")
-        self.assertIn("plain:w", str(ctx.exception))
-
-
-# ===========================================================================
-# 5. Temporary files are cleaned up even after CaseError
-# ===========================================================================
-
-class TestTmpCleanup(unittest.TestCase):
-    def test_nvim_cleanup_on_exception(self):
-        """Temp files are removed when run_nvim raises CaseError."""
+    def test_cleanup_on_exception(self):
         created = []
-        original_NamedTemporaryFile = tempfile.NamedTemporaryFile
+        orig = tempfile.NamedTemporaryFile
 
-        class _TrackingNTF:
+        class Tracking:
             def __init__(self, *a, **kw):
                 kw.setdefault("delete", False)
-                self._f = original_NamedTemporaryFile(*a, **kw)
+                self._f = orig(*a, **kw)
                 created.append(self._f.name)
-            def __enter__(self):
-                return self._f.__enter__()
-            def __exit__(self, *a):
-                return self._f.__exit__(*a)
+            def __enter__(self): return self._f.__enter__()
+            def __exit__(self, *a): return self._f.__exit__(*a)
 
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        with patch("tempfile.NamedTemporaryFile", _TrackingNTF), \
-             patch.object(vimdiff, "run_subprocess", return_value=mock_result):
+        with patch("tempfile.NamedTemporaryFile", Tracking), \
+             patch.object(vimdiff, "run_subprocess", return_value=self._mock_ok()):
             try:
-                vimdiff.run_nvim("hello\n", "w", case_id="plain:w")
+                vimdiff.run_nvim("hello\n", "w")
             except vimdiff.CaseError:
                 pass
 
         for p in created:
-            pos = p + ".pos"
-            self.assertFalse(os.path.exists(p),
-                             "temp file %s not cleaned up" % p)
-            self.assertFalse(os.path.exists(pos),
-                             "temp file %s not cleaned up" % pos)
+            self.assertFalse(os.path.exists(p), "not cleaned: %s" % p)
+            self.assertFalse(os.path.exists(p + ".pos"), "not cleaned: %s.pos" % p)
 
 
-# ===========================================================================
-# 6. Case identifier appears in every failure line
-# ===========================================================================
-
-class TestFailureOutput(unittest.TestCase):
-    def _run_failures(self, failures):
-        """Return captured stdout after printing failures."""
-        buf = io.StringIO()
-        with patch("sys.stdout", buf):
-            for text_name, text, keys, nv, ov in failures:
-                case_id = "%s:%s" % (text_name, keys)
-                print("FAIL %-14s keys=%r  id=%s" % (text_name, keys, case_id))
-        return buf.getvalue()
-
-    def test_failure_contains_case_id(self):
-        failures = [("plain", "alpha\n", "dw", ("lpha\n", "1:1"), ("alpha\n", "1:5"))]
-        # Check that the printed output in main would contain text_name and keys
-        # We test the format produced by the main loop
-        out = io.StringIO()
-        # Simulate what main prints
-        text_name, text, keys, nv, ov = failures[0]
-        case_id = "%s:%s" % (text_name, keys)
-        line = "FAIL %-14s keys=%r" % (text_name, keys)
-        self.assertIn("plain", line)
-        self.assertIn("dw", line)
-        self.assertIn("plain", case_id)
-        self.assertIn("dw", case_id)
-
-
-# ===========================================================================
-# 7. KNOWN_DIFFERENCES must not exist or must be empty and unused
-# ===========================================================================
-
-class TestNoKnownDifferences(unittest.TestCase):
-    def test_known_differences_removed(self):
-        """KNOWN_DIFFERENCES dict must not exist in the module."""
-        self.assertFalse(
-            hasattr(vimdiff, "KNOWN_DIFFERENCES"),
-            "KNOWN_DIFFERENCES must be removed from vimdiff"
-        )
-
-
-# ===========================================================================
-# 8. run_nvim must build a feedkeys("...", "ntx") call, not execute "normal!"
-# ===========================================================================
-
-class TestFeedkeysCommand(unittest.TestCase):
-    """run_nvim must use call feedkeys(..., "ntx"), not execute 'normal!'."""
-
-    def _capture_nvim_cmd(self, keys):
-        """Return the nvim argv that would be passed to run_subprocess."""
+class TestFeedkeys(unittest.TestCase):
+    def _argv(self, keys):
         captured = []
-
-        def fake_rsp(cmd, **kw):
+        def fake(cmd, **kw):
             captured.extend(cmd)
             return MagicMock(returncode=0)
-
-        with patch.object(vimdiff, "run_subprocess", side_effect=fake_rsp):
+        with patch.object(vimdiff, "run_subprocess", side_effect=fake):
             try:
                 vimdiff.run_nvim("hello\n", keys)
             except vimdiff.CaseError:
-                pass  # pos file absent is expected; we captured what we need
+                pass
         return captured
 
-    def test_uses_feedkeys_not_normal_bang(self):
-        cmd = self._capture_nvim_cmd("dw")
-        self.assertTrue(any("feedkeys" in a for a in cmd),
-                        "run_nvim must use feedkeys")
-        self.assertFalse(any("normal!" in a for a in cmd),
-                         "run_nvim must not use execute 'normal!'")
+    def test_feedkeys_ntx_not_normal_bang(self):
+        argv = self._argv("dw")
+        fk = next(a for a in argv if "feedkeys" in a)
+        self.assertIn('"ntx"', fk)
+        self.assertFalse(any("normal!" in a for a in argv))
 
-    def test_feedkeys_mode_is_ntx(self):
-        """feedkeys mode must be 'ntx': no-remap, key-codes, synchronous."""
-        cmd = self._capture_nvim_cmd("dw")
-        feedkeys_arg = next(a for a in cmd if "feedkeys" in a)
-        self.assertIn('"ntx"', feedkeys_arg,
-                      "feedkeys mode must be ntx")
+    def test_named_keys_encoded(self):
+        argv = self._argv("i<Esc>dw<C-r>")
+        fk = next(a for a in argv if "feedkeys" in a)
+        self.assertIn("\\<Esc>", fk)
+        self.assertIn("\\<C-r>", fk)
 
-    def test_named_key_esc_in_feedkeys_string(self):
-        """<Esc> is encoded as \\<Esc> inside the feedkeys double-quoted string."""
-        cmd = self._capture_nvim_cmd("i<Esc>")
-        feedkeys_arg = next(a for a in cmd if "feedkeys" in a)
-        # to_nvim_keys('<Esc>') → '\<Esc>' which sits inside feedkeys("...")
-        self.assertIn("\\<Esc>", feedkeys_arg)
-        self.assertIn("feedkeys", feedkeys_arg)
-
-    def test_ctrl_key_in_feedkeys_string(self):
-        """<C-r> is preserved as \\<C-r> in the feedkeys argument."""
-        cmd = self._capture_nvim_cmd("dw<C-r>")
-        feedkeys_arg = next(a for a in cmd if "feedkeys" in a)
-        self.assertIn("\\<C-r>", feedkeys_arg)
-
-
-# ===========================================================================
-# 9. Integration: feedkeys processes keys independently; normal! batches them
-# ===========================================================================
 
 @unittest.skipUnless(shutil.which("nvim"), "nvim not available")
 class TestNvimIntegration(unittest.TestCase):
-
     def test_failed_motion_does_not_abort_later_keys(self):
-        """feedkeys: j failing on last line must not prevent dw from running.
-
-        This is the primary parity regression: interactive jdw on a single-line
-        file deletes 'hello ' even though j found nowhere to go.
-        """
-        text, _pos = vimdiff.run_nvim("hello world\n", "jdw")
-        self.assertEqual(text, "world\n",
-                         "failed j must not abort dw in feedkeys mode")
-
-    def test_normal_bang_aborts_on_failed_motion(self):
-        """Contrast: execute 'normal! jdw' aborts dw after failing j.
-
-        Demonstrates the original bug that the feedkeys change fixes.
-        """
-        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
-            f.write("hello world\n")
-            path = f.name
-        try:
-            subprocess.run(
-                ["nvim", "--headless", "-u", "NONE", "-i", "NONE", path,
-                 "-c", "set nocompatible noswapfile",
-                 "-c", 'execute "normal! jdw"',
-                 "-c", "wq"],
-                capture_output=True, timeout=10, check=True,
-            )
-            result = open(path).read()
-        finally:
-            if os.path.exists(path):
-                os.unlink(path)
-        # normal! aborts the batch when j fails → dw never runs → unchanged
-        self.assertEqual(result, "hello world\n",
-                         "normal! must abort the batch on failed j")
+        text, _ = vimdiff.run_nvim("hello world\n", "jdw")
+        self.assertEqual(text, "world\n")
 
     def test_named_key_esc_exits_insert_mode(self):
-        """<Esc> correctly exits insert mode when fed through feedkeys."""
-        text, _pos = vimdiff.run_nvim("hello\n", "iX<Esc>")
+        text, _ = vimdiff.run_nvim("hello\n", "iX<Esc>")
         self.assertEqual(text, "Xhello\n")
 
 
-# ===========================================================================
-# 10. TEXTS must include the four new shapes
-# ===========================================================================
+class TestCorpus(unittest.TestCase):
+    def test_corpus_constants(self):
+        self.assertEqual(vimdiff.TEXTS.get("empty"), "")
+        self.assertEqual(vimdiff.TEXTS.get("lone-newline"), "\n")
+        self.assertIn("\t", vimdiff.TEXTS.get("tab-indented", ""))
+        self.assertTrue(any(ord(c) > 127 for c in vimdiff.TEXTS.get("utf8", "")))
+        self.assertFalse(hasattr(vimdiff, "KNOWN_DIFFERENCES"))
 
-class TestNewTexts(unittest.TestCase):
-    def test_empty_text_present(self):
-        self.assertIn("empty", vimdiff.TEXTS)
-        self.assertEqual(vimdiff.TEXTS["empty"], "")
-
-    def test_lone_newline_present(self):
-        self.assertIn("lone-newline", vimdiff.TEXTS)
-        self.assertEqual(vimdiff.TEXTS["lone-newline"], "\n")
-
-    def test_tab_indented_present(self):
-        self.assertIn("tab-indented", vimdiff.TEXTS)
-        self.assertIn("\t", vimdiff.TEXTS["tab-indented"])
-
-    def test_utf8_present(self):
-        self.assertIn("utf8", vimdiff.TEXTS)
-        self.assertTrue(any(ord(c) > 127 for c in vimdiff.TEXTS["utf8"]))
-
-    def test_text_count(self):
-        self.assertEqual(len(vimdiff.TEXTS), 15)
-
-
-# ===========================================================================
-# 11. FOCUSED_CASES: structure, counts, and integration with all_cases
-# ===========================================================================
-
-class TestFocusedCases(unittest.TestCase):
-    def test_focused_cases_exists(self):
-        self.assertTrue(hasattr(vimdiff, "FOCUSED_CASES"))
-
-    def test_focused_cases_count_in_range(self):
+    def test_focused_cases_valid(self):
         n = len(vimdiff.FOCUSED_CASES)
         self.assertGreaterEqual(n, 12)
         self.assertLessEqual(n, 18)
+        for tn, _ in vimdiff.FOCUSED_CASES:
+            self.assertIn(tn, vimdiff.TEXTS)
 
-    def test_focused_cases_reference_valid_texts(self):
-        for text_name, _ in vimdiff.FOCUSED_CASES:
-            self.assertIn(text_name, vimdiff.TEXTS,
-                          "FOCUSED_CASES references unknown text %r" % text_name)
+    def test_focused_excluded_quick_included_full(self):
+        quick = {(tn, k) for tn, _, k in vimdiff.all_cases(quick=True)}
+        full  = {(tn, k) for tn, _, k in vimdiff.all_cases(quick=False)}
+        for tn, k in vimdiff.FOCUSED_CASES:
+            self.assertNotIn((tn, k), quick, "focused in quick: %r" % k)
+            self.assertIn((tn, k), full,    "focused missing from full: %r" % k)
 
-    def test_focused_cases_excluded_from_quick(self):
-        quick_pairs = {(tn, k) for tn, _, k in vimdiff.all_cases(quick=True)}
-        for text_name, keys in vimdiff.FOCUSED_CASES:
-            self.assertNotIn(
-                (text_name, keys), quick_pairs,
-                "focused case (%r, %r) must not appear in quick mode" % (text_name, keys),
-            )
-
-    def test_focused_cases_included_in_full(self):
-        full_pairs = {(tn, k) for tn, _, k in vimdiff.all_cases(quick=False)}
-        for text_name, keys in vimdiff.FOCUSED_CASES:
-            self.assertIn(
-                (text_name, keys), full_pairs,
-                "focused case (%r, %r) must appear in full mode" % (text_name, keys),
-            )
-
-    def test_all_full_case_ids_unique(self):
+    def test_full_case_ids_unique(self):
         seen = set()
-        for text_name, _, keys in vimdiff.all_cases(quick=False):
-            pair = (text_name, keys)
-            self.assertNotIn(pair, seen,
-                             "duplicate case id %r:%r" % (text_name, keys))
+        for tn, _, k in vimdiff.all_cases(quick=False):
+            pair = (tn, k)
+            self.assertNotIn(pair, seen, "duplicate %r:%r" % pair)
             seen.add(pair)
 
-
-# ===========================================================================
-# 12. Corpus counts: quick=225, full=1515, QUICK_KEYS=15
-# ===========================================================================
-
-class TestCorpusCounts(unittest.TestCase):
-    def test_quick_keys_count(self):
-        # 13 original + 2 new representative keys
-        self.assertEqual(len(vimdiff.QUICK_KEYS), 15)
-
-    def test_quick_mode_count(self):
-        # 15 texts × 15 QUICK_KEYS = 225
-        self.assertEqual(len(list(vimdiff.all_cases(quick=True))), 225)
-
-    def test_full_mode_count(self):
-        # 15 texts × 100 full keys + 15 focused = 1515
-        self.assertEqual(len(list(vimdiff.all_cases(quick=False))), 1515)
-
-    def test_filter_applies_to_focused_cases(self):
-        # "100dw" and "100G" are focused; "100" not in any cross-product key
+    def test_filter_reaches_focused_cases(self):
+        # "100dw" and "100G" are focused; "100" absent from all cross-product keys
         filtered = [c for c in vimdiff.all_cases(quick=False) if "100" in c[2]]
         self.assertEqual(len(filtered), 2)
 

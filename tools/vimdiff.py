@@ -140,8 +140,10 @@ def run_nvim(text, keys, case_id=""):
             raise CaseError("missing edited file for case %r" % case_id)
         if not os.path.exists(pos_path):
             raise CaseError("missing cursor dump for case %r" % case_id)
-        out = open(path).read()
-        pos = open(pos_path).read().strip()
+        with open(path) as fh:
+            out = fh.read()
+        with open(pos_path) as fh:
+            pos = fh.read().strip()
     finally:
         for p in (path, pos_path):
             if os.path.exists(p):
@@ -166,9 +168,11 @@ def run_ours(text, keys, case_id=""):
             raise CaseError("missing edited file for case %r" % case_id)
         if not os.path.exists(pos_path):
             raise CaseError("missing cursor dump for case %r" % case_id)
-        out = open(path).read()
-        # "line:col MODE" -- only the position is compared.
-        pos = open(pos_path).read().strip().split(" ")[0]
+        with open(path) as fh:
+            out = fh.read()
+        with open(pos_path) as fh:
+            # "line:col MODE" -- only the position is compared.
+            pos = fh.read().strip().split(" ")[0]
     finally:
         for p in (path, pos_path):
             if os.path.exists(p):
