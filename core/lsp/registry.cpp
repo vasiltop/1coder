@@ -3,8 +3,6 @@
 #include "os/os_file.h"
 #include "os/os_process.h"
 
-#include <stdlib.h>
-
 namespace {
 
 struct LspExtensionMapping {
@@ -301,13 +299,12 @@ String8 LspFindProjectRoot(Arena *arena, LspLanguage language, String8 file_path
 String8 HomeDirectory(Arena *arena) {
   if (!arena) return String8{};
 #if defined(_WIN32)
-  const char *home = getenv("USERPROFILE");
-  if (home == nullptr || home[0] == 0) home = getenv("HOME");
+  String8 home = OsGetEnv(arena, Str8Lit("USERPROFILE"));
+  if (home.size == 0) home = OsGetEnv(arena, Str8Lit("HOME"));
+  return home;
 #else
-  const char *home = getenv("HOME");
+  return OsGetEnv(arena, Str8Lit("HOME"));
 #endif
-  if (home == nullptr || home[0] == 0) return String8{};
-  return PushStr8Copy(arena, Str8C(home));
 }
 
 String8 FindServerExecutable(Arena *arena, String8 name) {

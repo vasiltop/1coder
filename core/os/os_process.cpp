@@ -575,6 +575,23 @@ String8 OsFindExecutable(Arena *arena, String8 name) {
   return FindOnPath(arena, name);
 }
 
+String8 OsGetEnv(Arena *arena, String8 name) {
+  if (!arena || name.size == 0) return String8{};
+#if defined(_WIN32)
+  TempArena scratch = ScratchBegin1(arena);
+  String8 value = GetEnvVar(arena, PushWide(scratch.arena, name));
+  ScratchEnd(scratch);
+  return value;
+#else
+  TempArena scratch = ScratchBegin1(arena);
+  const char *c_name = PushCStr(scratch.arena, name);
+  const char *raw = getenv(c_name);
+  ScratchEnd(scratch);
+  if (raw == nullptr || raw[0] == 0) return String8{};
+  return PushStr8Copy(arena, Str8C(raw));
+#endif
+}
+
 String8 OsShellExecutable(Arena *arena) {
   if (!arena) return String8{};
 #if defined(_WIN32)
