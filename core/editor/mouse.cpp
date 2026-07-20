@@ -125,6 +125,7 @@ void ClearWheelState(MouseState *mouse) {
   mouse->wheel_panel = nullptr;
   mouse->wheel_view = nullptr;
   mouse->wheel_buffer = nullptr;
+  mouse->wheel_buffer_handle = BufferHandleZero();
   mouse->wheel_x_remainder = 0.0f;
   mouse->wheel_y_remainder = 0.0f;
   mouse->wheel_x_unit = MouseWheelUnit::None;
@@ -561,13 +562,15 @@ void HandleWheel(Editor *ed, const MouseEvent &event) {
     return;
   }
 
-  if (mouse->wheel_panel != hit.panel) {
+  if (mouse->wheel_panel != hit.panel || mouse->wheel_view != hit.view ||
+      !BufferHandleEqual(mouse->wheel_buffer_handle, hit.buffer_handle)) {
     ClearWheelState(mouse);
   }
 
   mouse->wheel_panel = hit.panel;
   mouse->wheel_view = hit.view;
   mouse->wheel_buffer = hit.buffer;
+  mouse->wheel_buffer_handle = hit.buffer_handle;
 
   i32 width = EditorPanelTextWidth(ed, hit.panel);
   i32 height = EditorPanelTextHeight(ed, hit.panel);

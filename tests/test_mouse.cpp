@@ -1032,6 +1032,32 @@ TEST(mouse_wheel_switching_target_clears_remainders) {
   Destroy(&f);
 }
 
+TEST(mouse_wheel_switching_buffer_in_same_pane_clears_remainders) {
+  Fixture f = MakeFixture("seed");
+  f.ed.line_number_mode = LineNumberMode::Off;
+
+  View *view = EditorFocusedView(&f.ed);
+  Buffer *buffer_a = EditorFocusedBuffer(&f.ed);
+  SetScrollableText(&f, buffer_a, 80);
+  RectS32 text = EditorPanelTextRect(&f.ed, f.ed.focused_panel);
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.0f, 0.6f);
+  CHECK(fabsf(f.ed.mouse.wheel_y_remainder - 0.6f) < 0.0001f);
+
+  BufferHandle buffer_b_handle = BufferOpen(&f.ed.buffers, BufferKind::Scratch, Str8Lit("buffer-b"));
+  view->buffer = buffer_b_handle;
+  Buffer *buffer_b = BufferFromHandle(&f.ed.buffers, buffer_b_handle);
+  SetScrollableText(&f, buffer_b, 80);
+  view->scroll_line = 10;
+
+  SendWheel(&f, (f32)text.x0 + 1.2f, (f32)text.y0 + 1.2f, 0.0f, 0.5f);
+  CHECK_EQ(view->scroll_line, 10);
+  CHECK(fabsf(f.ed.mouse.wheel_y_remainder - 0.5f) < 0.0001f);
+  CHECK(f.ed.mouse.wheel_buffer == buffer_b);
+
+  Destroy(&f);
+}
+
 TEST(mouse_wheel_shift_changes_reset_only_the_affected_axis) {
   Fixture f = MakeFixture("seed");
   f.ed.line_number_mode = LineNumberMode::Off;

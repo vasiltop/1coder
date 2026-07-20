@@ -99,6 +99,7 @@ struct MouseState {
   Panel *wheel_panel;
   View *wheel_view;
   Buffer *wheel_buffer;
+  BufferHandle wheel_buffer_handle;
   f32 wheel_x_remainder;
   f32 wheel_y_remainder;
   MouseWheelUnit wheel_x_unit;
