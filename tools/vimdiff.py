@@ -22,6 +22,7 @@ Usage:
 import argparse
 import concurrent.futures
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,15 +30,12 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EDITOR = os.path.join(ROOT, "build", "editor")
 
-# Settings that make neovim behave the way this editor does. Anything listed
-# here is a deliberate difference; anything not listed is a bug if it diverges.
+# Minimal settings: process isolation only. No behaviour settings that would
+# mask differences between neovim and this editor.
 #
-#   nocompatible     vim defaults rather than vi's
-#   sw=2 ts=2        matches kShiftWidth
-#   expandtab        this editor indents with spaces (see KNOWN_DIFFERENCES)
-#   nofixendofline   do not silently add a trailing newline on write
-#   noswapfile       no stray state between runs
-NVIM_SETTINGS = "set nocompatible sw=2 ts=2 expandtab nofixendofline noswapfile"
+#   nocompatible   vim defaults rather than vi's
+#   noswapfile     no stray state between runs
+NVIM_SETTINGS = "set nocompatible noswapfile"
 
 # Key names this editor and neovim both understand. Everything else is passed
 # through literally, so `<<` stays two less-than characters rather than being
@@ -46,6 +44,46 @@ KEY_NAMES = {
     "Esc", "CR", "Tab", "BS", "Space", "Del", "Up", "Down", "Left", "Right",
     "Home", "End", "PageUp", "PageDown",
 }
+
+
+class CaseError(Exception):
+    """Raised when a single test case fails to run (timeout, crash, or missing artifact)."""
+
+
+def run_subprocess(cmd, *, timeout=30, case_id="", env=None):
+    """Run *cmd*, raise CaseError on timeout or nonzero exit.
+
+    Diagnostics include the executable name, case identity, exit code, and
+    decoded stderr so failures are immediately actionable.
+    """
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, timeout=timeout, env=env
+        )
+    except subprocess.TimeoutExpired:
+        raise CaseError(
+            "timeout running %s for case %r" % (cmd[0], case_id)
+        )
+    if result.returncode != 0:
+        raise CaseError(
+            "exit %d from %s for case %r: %s"
+            % (result.returncode, cmd[0], case_id,
+               result.stderr.decode(errors="replace"))
+        )
+    return result
+
+
+def preflight():
+    """Verify prerequisites. Prints one actionable message and returns False if absent."""
+    if shutil.which("nvim") is None:
+        print("nvim not found: install neovim and ensure it is on PATH",
+              file=sys.stderr)
+        return False
+    if not (os.path.isfile(EDITOR) and os.access(EDITOR, os.X_OK)):
+        print("editor not built or not executable: %s" % EDITOR,
+              file=sys.stderr)
+        return False
+    return True
 
 
 def to_nvim_keys(keys):
@@ -81,7 +119,7 @@ def to_nvim_keys(keys):
     return "".join(out)
 
 
-def run_nvim(text, keys):
+def run_nvim(text, keys, case_id=""):
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
         f.write(text)
         path = f.name
@@ -89,15 +127,20 @@ def run_nvim(text, keys):
 
     escaped = to_nvim_keys(keys)
     try:
-        subprocess.run(
+        run_subprocess(
             ["nvim", "--headless", "-u", "NONE", "-i", "NONE", path,
              "-c", NVIM_SETTINGS,
              "-c", 'execute "normal! %s"' % escaped,
              "-c", 'call writefile([line(".").":".col(".")], "%s")' % pos_path,
              "-c", "wq"],
-            capture_output=True, timeout=30)
+            case_id=case_id,
+        )
+        if not os.path.exists(path):
+            raise CaseError("missing edited file for case %r" % case_id)
+        if not os.path.exists(pos_path):
+            raise CaseError("missing cursor dump for case %r" % case_id)
         out = open(path).read()
-        pos = open(pos_path).read().strip() if os.path.exists(pos_path) else "?"
+        pos = open(pos_path).read().strip()
     finally:
         for p in (path, pos_path):
             if os.path.exists(p):
@@ -105,7 +148,7 @@ def run_nvim(text, keys):
     return out, pos
 
 
-def run_ours(text, keys):
+def run_ours(text, keys, case_id=""):
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
         f.write(text)
         path = f.name
@@ -113,14 +156,18 @@ def run_ours(text, keys):
 
     env = dict(os.environ, SDL_VIDEODRIVER="dummy")
     try:
-        subprocess.run(
+        run_subprocess(
             [EDITOR, path, "--keys", keys + ":w<CR>", "--dump", pos_path],
-            capture_output=True, env=env, timeout=30)
+            env=env,
+            case_id=case_id,
+        )
+        if not os.path.exists(path):
+            raise CaseError("missing edited file for case %r" % case_id)
+        if not os.path.exists(pos_path):
+            raise CaseError("missing cursor dump for case %r" % case_id)
         out = open(path).read()
-        pos = "?"
-        if os.path.exists(pos_path):
-            # "line:col MODE" -- only the position is compared.
-            pos = open(pos_path).read().strip().split(" ")[0]
+        # "line:col MODE" -- only the position is compared.
+        pos = open(pos_path).read().strip().split(" ")[0]
     finally:
         for p in (path, pos_path):
             if os.path.exists(p):
@@ -190,37 +237,27 @@ def all_cases(quick=False):
             yield text_name, text, k
 
 
-# Divergences that are deliberate or already known, so the suite can be green
-# and a new failure means something. Each needs a reason.
-KNOWN_DIFFERENCES = {
-    # This editor indents with spaces; the user's nvim has no 'expandtab' and so
-    # indents with tabs. The oracle is run with expandtab to compare like for
-    # like -- rendering real tabs needs tab stops in the core, which do not
-    # exist yet.
-}
-
-
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("-k", "--filter", default="")
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("-j", "--jobs", type=int, default=8)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    if not os.path.exists(EDITOR):
-        print("editor not built: %s" % EDITOR, file=sys.stderr)
+    if not preflight():
         return 2
 
     cases = [c for c in all_cases(args.quick) if args.filter in c[2]]
 
     def check(case):
         text_name, text, keys = case
+        case_id = "%s:%s" % (text_name, keys)
         try:
-            nv = run_nvim(text, keys)
-            ov = run_ours(text, keys)
-        except Exception as exc:  # a timeout or crash is itself a failure
-            return (text_name, text, keys, ("EXCEPTION", str(exc)), ("", ""))
+            nv = run_nvim(text, keys, case_id=case_id)
+            ov = run_ours(text, keys, case_id=case_id)
+        except CaseError as exc:
+            return (text_name, text, keys, ("PROCESS-ERROR", str(exc)), ("", ""))
         return (text_name, text, keys, nv, ov)
 
     results = []
@@ -234,12 +271,11 @@ def main():
             if args.verbose:
                 print("ok   %-14s %s" % (text_name, keys))
             continue
-        if (text_name, keys) in KNOWN_DIFFERENCES:
-            continue
         failures.append((text_name, text, keys, nv, ov))
 
     for text_name, text, keys, nv, ov in failures:
-        print("FAIL %-14s keys=%r" % (text_name, keys))
+        case_id = "%s:%s" % (text_name, keys)
+        print("FAIL %-14s keys=%-20r  id=%s" % (text_name, keys, case_id))
         print("      input %r" % text)
         print("       nvim text=%r cursor=%s" % (nv[0], nv[1]))
         print("       ours text=%r cursor=%s" % (ov[0], ov[1]))
