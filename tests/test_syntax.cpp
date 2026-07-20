@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 #include "editor/buffer_registry.h"
 #include "editor/editor.h"
 #include "os/os_file.h"
