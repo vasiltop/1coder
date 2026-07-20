@@ -80,6 +80,7 @@ Use explicit hit regions instead of implicit whole-window behavior:
 
 The core resolves the region first, then decides the behavior. Nested split boundary discovery walks the split tree so the correct vertical-edge or status-line boundary is chosen even inside multi-level layouts.
 At any shared boundary, vertical split-edge hit testing takes precedence over the gutter.
+At a cell where a vertical split edge intersects a panel status line, the vertical split edge wins; a plain click focuses the pane on the owning side only if no drag occurs, and no horizontal status-line resize is armed at that corner.
 
 ## Behavior
 
@@ -122,6 +123,7 @@ Wheel motion targets the pane under the pointer, even if another pane is focused
 - `Shift` plus horizontal wheel pages horizontally if the platform reports that axis.
 
 Fractional deltas are accumulated per axis in `MouseState`. That keeps touchpads and other high-resolution devices smooth without losing partial motion.
+Wheel events over the global command-line/status row are always no-ops; they never fall back to the focused pane.
 
 ### Command line and status line
 
