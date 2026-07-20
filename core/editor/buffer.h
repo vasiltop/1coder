@@ -29,6 +29,7 @@ enum class BufferKind : u8 {
   Grep,       // search results
   FileList,   // fuzzy file finder
   Explorer,   // directory tree
+  Image,      // an image file, described by its header
   Git,        // git status / diff
   COUNT
 };

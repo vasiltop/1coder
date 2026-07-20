@@ -1,7 +1,9 @@
 #include "buffers/buf_explorer.h"
+#include "buffers/buf_image.h"
 #include "buffers/explorer_ops.h"
 #include "editor/command.h"
 #include "editor/editor.h"
+#include "editor/filetype.h"
 #include "os/os_file.h"
 #include "test.h"
 #include "test_tempdir.h"
@@ -783,6 +785,129 @@ TEST(explorer_a_failed_move_leaves_its_buffer_alone) {
   CHECK(StatusContains(&f, "failed"));
   CHECK(OsDirExists(TempPath(&f.dir, "sub")));
   CHECK_STR(opened->path, original);
+
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Filetype dispatch and images
+// ---------------------------------------------------------------------------
+
+namespace {
+
+BufferHandle FakeXyzOpen(Editor *ed, String8 path) {
+  (void)path;
+  return BufferOpen(&ed->buffers, BufferKind::Scratch, Str8Lit("[xyz]"));
+}
+
+// The smallest legal PNG header: signature, then an IHDR chunk whose payload
+// starts with the dimensions.
+void WriteFakePng(TempDir *dir, const char *name, u32 width, u32 height) {
+  u8 bytes[24] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n',
+                  0,    0,   0,   13,  'I',  'H',  'D',  'R'};
+  for (u32 i = 0; i < 4; i += 1) {
+    bytes[16 + i] = (u8)(width >> (24 - 8 * i));
+    bytes[20 + i] = (u8)(height >> (24 - 8 * i));
+  }
+  CHECK(OsFileWrite(TempPath(dir, name), String8{bytes, sizeof(bytes)}));
+}
+
+}  // namespace
+
+TEST(filetype_dispatch_picks_handlers_by_extension) {
+  EditorFixture f = MakeEditorFixture("filetype");
+
+  FiletypeRegister(&f.ed, Str8Lit("xyz"), FakeXyzOpen);
+  CHECK(OsFileWrite(TempPath(&f.dir, "a.xyz"), Str8Lit("x")));
+  CHECK(OsFileWrite(TempPath(&f.dir, "b.XYZ"), Str8Lit("x")));
+
+  Buffer *opened = BufferFromHandle(&f.ed.buffers, FiletypeOpen(&f.ed, TempPath(&f.dir, "a.xyz")));
+  CHECK(opened != nullptr);
+  CHECK_STR(opened->name, Str8Lit("[xyz]"));
+
+  // Extensions are matched case-insensitively, since the filesystem's case is
+  // not the user's intent.
+  opened = BufferFromHandle(&f.ed.buffers, FiletypeOpen(&f.ed, TempPath(&f.dir, "b.XYZ")));
+  CHECK_STR(opened->name, Str8Lit("[xyz]"));
+
+  // Anything unregistered is text, and a directory is the explorer.
+  opened = BufferFromHandle(&f.ed.buffers, FiletypeOpen(&f.ed, TempPath(&f.dir, "alpha.txt")));
+  CHECK_EQ((u32)opened->kind, (u32)BufferKind::File);
+
+  opened = BufferFromHandle(&f.ed.buffers, FiletypeOpen(&f.ed, TempPath(&f.dir, "sub")));
+  CHECK_EQ((u32)opened->kind, (u32)BufferKind::Explorer);
+
+  Destroy(&f);
+}
+
+TEST(image_buffer_reads_dimensions_from_the_header) {
+  EditorFixture f = MakeEditorFixture("image");
+
+  WriteFakePng(&f.dir, "picture.png", 1920, 1080);
+
+  Buffer *buffer =
+      BufferFromHandle(&f.ed.buffers, ImageBufferOpen(&f.ed, TempPath(&f.dir, "picture.png")));
+  CHECK(buffer != nullptr);
+  CHECK_EQ((u32)buffer->kind, (u32)BufferKind::Image);
+
+  const ImageInfo *info = ImageBufferInfo(buffer);
+  CHECK(info != nullptr);
+  CHECK_EQ(info->width, (u32)1920);
+  CHECK_EQ(info->height, (u32)1080);
+  CHECK_STR(info->format, Str8Lit("PNG"));
+
+  // The summary is the buffer's text, so the feature is useful with no
+  // renderer support at all.
+  String8 text = BufferTextAll(f.arena, buffer);
+  CHECK(Str8FindFirst(text, Str8Lit("1920x1080")) < text.size);
+  CHECK(Str8FindFirst(text, Str8Lit("picture.png")) < text.size);
+
+  // Read-only with no on_write, so :w cannot write the summary over the image.
+  CHECK(BufferIsReadOnly(buffer));
+
+  Destroy(&f);
+}
+
+TEST(image_buffer_survives_a_truncated_header) {
+  EditorFixture f = MakeEditorFixture("image_truncated");
+
+  // A valid signature and nothing behind it.
+  u8 signature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+  CHECK(OsFileWrite(TempPath(&f.dir, "broken.png"), String8{signature, sizeof(signature)}));
+
+  Buffer *buffer =
+      BufferFromHandle(&f.ed.buffers, ImageBufferOpen(&f.ed, TempPath(&f.dir, "broken.png")));
+  CHECK(buffer != nullptr);
+
+  const ImageInfo *info = ImageBufferInfo(buffer);
+  CHECK_STR(info->format, Str8Lit("PNG"));
+  CHECK_EQ(info->width, (u32)0);
+
+  // Saying so beats showing nothing, which would read as a bug in the viewer.
+  String8 text = BufferTextAll(f.arena, buffer);
+  CHECK(Str8FindFirst(text, Str8Lit("dimensions unavailable")) < text.size);
+
+  Destroy(&f);
+}
+
+TEST(explorer_enter_on_an_image_opens_an_image_buffer) {
+  EditorFixture f = MakeEditorFixture("explorer_image");
+
+  WriteFakePng(&f.dir, "aaa_shot.png", 640, 480);
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // aaa_shot.png sorts first among the files, after the sub/ directory.
+  Keys(&f, "j<CR>");
+
+  Buffer *opened = FocusedBuffer(&f);
+  CHECK_EQ((u32)opened->kind, (u32)BufferKind::Image);
+  CHECK_EQ(ImageBufferInfo(opened)->width, (u32)640);
+
+  // And <C-o> comes back, so images sit in the jump list like anything else.
+  Keys(&f, "<C-o>");
+  CHECK_EQ((u32)FocusedBuffer(&f)->kind, (u32)BufferKind::Explorer);
 
   Destroy(&f);
 }

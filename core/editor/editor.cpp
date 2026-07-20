@@ -1,6 +1,7 @@
 #include "editor/editor.h"
 
 #include "buffers/buf_explorer.h"
+#include "buffers/buf_image.h"
 #include "editor/command.h"
 #include "os/os_file.h"
 
@@ -43,6 +44,10 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   ed->command_buffer = CommandLineBufferOpen(ed);
   ed->command_view = PushStruct(arena, View);
   ViewInit(ed->command_view, ed->command_buffer);
+
+  // What <CR> on a path opens. Images are the only kind that needs more than
+  // "read it as text"; anything unregistered falls through to exactly that.
+  ImageRegisterFiletypes(ed);
 
   EditorInstallDefaultBindings(ed);
   EditorLayout(ed);

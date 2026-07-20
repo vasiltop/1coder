@@ -1,5 +1,6 @@
 #include "render/render_editor.h"
 
+#include "buffers/buf_image.h"
 #include "vim/vim_search.h"
 
 namespace {
@@ -160,6 +161,50 @@ void DrawStatusLine(RenderContext *ctx, Editor *ed, const Buffer *buffer, const 
   DrawPopClip(ctx->draw);
 }
 
+// An image buffer's text is a metadata summary, and it is drawn inside a frame
+// sized to the image's aspect ratio. No pixels are decoded yet -- core has no
+// decoder and this layer has no second texture -- so the frame is what conveys
+// the shape while the summary conveys the rest.
+//
+// When decoding lands it replaces the fill here and nothing else moves: the
+// rect is already the right one to draw into.
+void DrawImagePlaceholder(RenderContext *ctx, const ImageInfo *info, RectF32 text_rect) {
+  f32 available_w = text_rect.x1 - text_rect.x0;
+  f32 available_h = text_rect.y1 - text_rect.y0;
+  if (available_w <= 0.0f || available_h <= 0.0f) return;
+
+  // Leave a margin so the frame reads as an object in the panel rather than as
+  // a border on the panel.
+  f32 max_w = available_w * 0.8f;
+  f32 max_h = available_h * 0.8f;
+
+  f32 width = max_w;
+  f32 height = max_h;
+  if (info->width != 0 && info->height != 0) {
+    f32 aspect = (f32)info->width / (f32)info->height;
+    height = Min(max_h, max_w / aspect);
+    width = height * aspect;
+  }
+
+  f32 cx = (text_rect.x0 + text_rect.x1) * 0.5f;
+  f32 cy = (text_rect.y0 + text_rect.y1) * 0.5f;
+  RectF32 frame = {cx - width * 0.5f, cy - height * 0.5f, cx + width * 0.5f, cy + height * 0.5f};
+
+  DrawRect(ctx->draw, frame, ctx->theme.current_line);
+
+  // Four hairlines rather than an outline primitive, which the draw list has no
+  // need for anywhere else.
+  f32 t = 1.0f;
+  DrawRect(ctx->draw, RectF32{frame.x0, frame.y0, frame.x1, frame.y0 + t},
+           ctx->theme.split_border);
+  DrawRect(ctx->draw, RectF32{frame.x0, frame.y1 - t, frame.x1, frame.y1},
+           ctx->theme.split_border);
+  DrawRect(ctx->draw, RectF32{frame.x0, frame.y0, frame.x0 + t, frame.y1},
+           ctx->theme.split_border);
+  DrawRect(ctx->draw, RectF32{frame.x1 - t, frame.y0, frame.x1, frame.y1},
+           ctx->theme.split_border);
+}
+
 void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
   View *view = panel->view;
   Buffer *buffer = EditorBufferForView(ed, view);
@@ -187,6 +232,11 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
   if (columns <= 0 || rows <= 0) return;
 
   DrawPushClip(ctx->draw, text_rect);
+
+  // An image draws its frame behind the summary text, which then reads as a
+  // caption inside it.
+  const ImageInfo *image = ImageBufferInfo(buffer);
+  if (image) DrawImagePlaceholder(ctx, image, text_rect);
 
   RangeU64 visible = ViewVisibleLines(view, buffer, rows);
   RangeU64 selection = ViewSelection(view, buffer);
