@@ -273,6 +273,16 @@ bool FileHasContents(String8 path) {
   return ok;
 }
 
+bool FileContains(String8 path, String8 needle) {
+  Arena *arena = ArenaAlloc(KB(64));
+  if (arena == nullptr) return false;
+  FileContents contents = OsFileRead(arena, path);
+  bool ok = contents.ok && contents.data.size > 0 &&
+            Str8FindFirst(contents.data, needle) < contents.data.size;
+  ArenaRelease(arena);
+  return ok;
+}
+
 String8 RootName(String8 root) {
   String8 base = Str8PathBase(root);
   if (base.size > 0) return base;
@@ -1021,9 +1031,10 @@ TEST(lsp_client_real_transport_stop_delivers_exit_before_force) {
   }, 1500));
 
   LspClientStop(&client);
-  CHECK(WaitUntil([&]() { return FileHasContents(record_path); }, 400));
-  String8 lines = ReadFileOrFail(scope.arena, record_path);
-  CHECK(Str8FindFirst(lines, Str8Lit("\"method\":\"exit\"")) < lines.size);
+  // initialize is recorded long before stop, so waiting on non-empty alone races
+  // the server's post-shutdown sleep before it reads/records exit.
+  CHECK(WaitUntil(
+      [&]() { return FileContains(record_path, Str8Lit("\"method\":\"exit\"")); }, 1000));
 
   LspClientDestroy(&client);
 }
