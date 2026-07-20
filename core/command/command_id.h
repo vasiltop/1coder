@@ -217,6 +217,8 @@ inline constexpr CommandFlags CmdSingle = CommandFlags::Single;
   /* ---- compile ---- */                                                                                                            \
   X(compile,               "compile",               "Run a shell command in the compile buffer", CommandArg::Text, CmdSingle)        \
   X(recompile,             "recompile",             "Rerun the last compile command",  CommandArg::None, CmdSingle)                  \
+  X(next_error,            "next-error",            "Jump to the next compile error",  CommandArg::None, CmdSingle)                  \
+  X(prev_error,            "prev-error",            "Jump to the previous compile error", CommandArg::None, CmdSingle)               \
   /* ---- display ---- */                                                                                                            \
   X(line_numbers_absolute, "number",                "Show absolute line numbers",      CommandArg::None, CmdSingle)                  \
   X(line_numbers_relative, "relativenumber",        "Show relative line numbers",      CommandArg::None, CmdSingle)                  \

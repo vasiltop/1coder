@@ -1,6 +1,7 @@
 #include "render/render_editor.h"
 #include "render/render_metrics.h"
 
+#include "buffers/buf_compile.h"
 #include "buffers/buf_image.h"
 #include "editor/lsp.h"
 #include "render/render_lsp.h"
@@ -353,6 +354,8 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
     }
   }
   u64 cursor_line = ViewCursorLine(view, buffer);
+  u64 compile_highlight_line = 0;
+  bool has_compile_highlight = CompileHighlightLine(buffer, &compile_highlight_line);
 
   // Search matches, gathered once for the visible span rather than per line.
   // Only what is on screen is scanned, so highlighting costs the same on a
@@ -378,9 +381,18 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
                ctx->theme.current_line);
     }
 
+    // The active compile diagnostic is painted even in an unfocused window, so
+    // next/prev error keeps the locus obvious beside the source.
+    if (has_compile_highlight && line == compile_highlight_line) {
+      DrawRect(ctx->draw, RectF32{content_rect.x0, top, text_rect.x1, top + ctx->cell_height},
+               ctx->theme.search_match);
+    }
+
     if (gutter > 0) {
       DrawLineNumber(ctx, ed, view, buffer, line, content_rect.x0,
-                     top + ctx->atlas->ascent, gutter, line == cursor_line);
+                     top + ctx->atlas->ascent, gutter,
+                     line == cursor_line ||
+                         (has_compile_highlight && line == compile_highlight_line));
     }
     // Matches go under the selection, so a selected match still reads as
     // selected.
