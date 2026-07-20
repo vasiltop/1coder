@@ -138,17 +138,16 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
   TempArena scratch = ScratchBegin();
 
   // Repeat the register's contents `count` times before inserting, so 3p is a
-  // single undoable edit rather than three.
-  String8List parts = {};
-  for (u64 i = 0; i < count; i += 1) Str8ListPush(scratch.arena, &parts, reg.text);
-  String8 text = Str8ListJoin(scratch.arena, &parts, String8{nullptr, 0});
-
-  // Linewise content has to end in a newline or it would run into the line it
-  // lands next to. `yy` on a final line with no newline of its own produces
-  // exactly that case.
-  if (reg.linewise && text.size > 0 && text.str[text.size - 1] != '\n') {
-    text = PushStr8Cat(scratch.arena, text, Str8Lit("\n"));
+  // single undoable edit rather than three. For linewise registers each copy
+  // must carry its own trailing newline so that repeated copies remain on
+  // distinct lines when concatenated.
+  String8 piece = reg.text;
+  if (reg.linewise && piece.size > 0 && piece.str[piece.size - 1] != '\n') {
+    piece = PushStr8Cat(scratch.arena, piece, Str8Lit("\n"));
   }
+  String8List parts = {};
+  for (u64 i = 0; i < count; i += 1) Str8ListPush(scratch.arena, &parts, piece);
+  String8 text = Str8ListJoin(scratch.arena, &parts, String8{nullptr, 0});
 
   u64 cursor = pos;
 
@@ -159,23 +158,69 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
                    : BufferOffsetFromLine(buffer, line);
 
     // A final line with no newline of its own needs one adding first, or the
-    // pasted text would join onto it.
-    if (after && at > 0 && BufferByteAt(buffer, at - 1) != '\n') {
-      BufferInsert(ed, buffer, at, Str8Lit("\n"), pos, at + 1);
-      at += 1;
+    // pasted text would join onto it. For paste-after into a completely empty
+    // buffer the separator represents the "surviving empty line" Neovim keeps
+    // after `dd` on the last content line.
+    if (after) {
+      bool needs_sep = (at > 0 && BufferByteAt(buffer, at - 1) != '\n')
+                    || (at == 0 && BufferSize(buffer) == 0);
+      if (needs_sep) {
+        BufferInsert(ed, buffer, at, Str8Lit("\n"), pos, at + 1);
+        at += 1;
+      }
+    }
+
+    // When paste-after reaches the very end of the buffer the trailing '\n' in
+    // the linewise text must not be stored — the buffer invariant keeps content
+    // without a trailing newline and the save layer always appends one. Strip
+    // it here so we do not accumulate double newlines on each :w. Paste-before
+    // (after == false) does not strip: its trailing '\n' represents the blank
+    // line that follows the pasted content (e.g. ddP leaves content then the
+    // empty last line).
+    if (after && at == BufferSize(buffer) && text.size > 0 && text.str[text.size - 1] == '\n') {
+      text = Str8Chop(text, 1);
     }
 
     BufferInsert(ed, buffer, at, text, pos, at);
     cursor = at;
+
+    // Land on the first non-blank character of the newly pasted line.
+    u64 pasted_line = BufferLineFromOffset(buffer, cursor);
+    u64 line_end = BufferLineEnd(buffer, pasted_line);
+    while (cursor < line_end) {
+      u8 c = BufferByteAt(buffer, cursor);
+      if (c != ' ' && c != '\t') break;
+      cursor += 1;
+    }
   } else {
     // `p` pastes after the character under the cursor -- but on an empty line
     // there is no such character, and stepping forward would cross the newline
     // and land the text on the following line.
     u64 line_end = BufferLineEnd(buffer, BufferLineFromOffset(buffer, pos));
     u64 at = after ? Min(BufferNextCodepoint(buffer, pos), line_end) : pos;
-    // Characterwise paste leaves the cursor on the last pasted character.
     BufferInsert(ed, buffer, at, text, pos, at + text.size);
-    cursor = (text.size > 0) ? at + text.size - 1 : at;
+
+    // Determine where the cursor lands after a charwise paste. Neovim's rule:
+    //   - Text with no newlines: last inserted character (at + size - 1).
+    //   - Text ending with '\n' and pasting after (p): one past the last
+    //     inserted byte, on the new line that '\n' created.
+    //   - Otherwise (contains '\n' but ends on a non-newline, or paste-before
+    //     P with a newline-ending text): first inserted character (at).
+    if (text.size == 0) {
+      cursor = at;
+    } else {
+      bool has_newline = false;
+      for (u64 k = 0; k < text.size; k += 1) {
+        if (text.str[k] == '\n') { has_newline = true; break; }
+      }
+      if (!has_newline) {
+        cursor = at + text.size - 1;
+      } else if (after && text.str[text.size - 1] == '\n') {
+        cursor = at + text.size;
+      } else {
+        cursor = at;
+      }
+    }
   }
 
   ScratchEnd(scratch);

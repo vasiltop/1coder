@@ -1,5 +1,7 @@
 #include "editor/buffer_registry.h"
+#include "os/os_file.h"
 #include "test.h"
+#include "test_tempdir.h"
 
 namespace {
 
@@ -333,4 +335,44 @@ TEST(buffer_registry_full) {
   CHECK_EQ(BufferOpen(&f.reg, BufferKind::Scratch, Str8Lit("overflow")).index, 0);
 
   Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Save semantics (Neovim always appends a final newline on :w)
+// ---------------------------------------------------------------------------
+
+TEST(buffer_save_appends_newline_on_noeol) {
+  // A buffer loaded from a file without a trailing newline (no-eol) must still
+  // produce a final newline when saved, to match Neovim's :w behaviour.
+  TempDir dir = MakeTempDir("save_noeol");
+  Fixture f = MakeFixture();
+  Buffer *buffer = OpenWithText(&f, "hello");
+  buffer->final_newline = false;  // simulate a no-eol file
+
+  CHECK(BufferSaveFile(buffer, TempPath(&dir, "out.txt")));
+
+  FileContents got = OsFileRead(dir.arena, TempPath(&dir, "out.txt"));
+  CHECK(got.ok);
+  CHECK_STR(got.data, Str8Lit("hello\n"));
+
+  Destroy(&f);
+  Destroy(&dir);
+}
+
+TEST(buffer_save_appends_newline_on_empty_buffer) {
+  // An empty buffer (e.g. after deleting all content) must save as a single
+  // blank newline, matching what Neovim produces for an empty file on :w.
+  TempDir dir = MakeTempDir("save_empty");
+  Fixture f = MakeFixture();
+  Buffer *buffer = OpenWithText(&f, "");
+  // final_newline is true from BufferInit; size == 0 currently blocks the '\n'.
+
+  CHECK(BufferSaveFile(buffer, TempPath(&dir, "out.txt")));
+
+  FileContents got = OsFileRead(dir.arena, TempPath(&dir, "out.txt"));
+  CHECK(got.ok);
+  CHECK_STR(got.data, Str8Lit("\n"));
+
+  Destroy(&f);
+  Destroy(&dir);
 }

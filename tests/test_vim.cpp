@@ -1761,3 +1761,83 @@ TEST(vim_jump_list_across_buffers) {
 
   Destroy(&f);
 }
+
+// ---------------------------------------------------------------------------
+// Paste parity with Neovim
+// ---------------------------------------------------------------------------
+
+TEST(vim_linewise_paste_eof_no_extra_newline) {
+  // yyp on the only line in the buffer should give two identical lines in the
+  // buffer — *without* a trailing '\n' in the buffer text — so that the save
+  // layer adds exactly one final newline.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "yyp");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma\nalpha beta gamma"));
+  Destroy(&f);
+}
+
+TEST(vim_ddp_restores_content_without_extra_newline) {
+  // dd followed by p on a single-line buffer should produce the deleted content
+  // on a new line below the empty line that dd leaves behind — matching Neovim
+  // which always preserves at least one blank line after deleting the last line.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "ddp");
+  // "\n" is the surviving empty line; "alpha beta gamma" is the pasted content.
+  CHECK_STR(TextOf(&f), Str8Lit("\nalpha beta gamma"));
+  Destroy(&f);
+}
+
+TEST(vim_ddP_empty_buffer_trailing_empty_line) {
+  // ddP on a single-line buffer: the content goes before the empty last line,
+  // so the buffer ends with '\n' and the saved file has two trailing newlines.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "ddP");
+  // Content then the preserved empty line (represented as '\n' in the buffer).
+  CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma\n"));
+  Destroy(&f);
+}
+
+TEST(vim_counted_linewise_paste_three_distinct_lines) {
+  // yy2p must produce three separate lines, not two merged into one.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "yy2p");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma\nalpha beta gamma\nalpha beta gamma"));
+  Destroy(&f);
+}
+
+TEST(vim_linewise_paste_cursor_at_first_nonblank) {
+  // After yyp on an indented line the cursor should land on the first
+  // non-blank character of the pasted line, not column 0.
+  Fixture f = MakeFixture("    indented");
+  Type(&f, "yyp");
+  CHECK_STR(TextOf(&f), Str8Lit("    indented\n    indented"));
+  CHECK_EQ(CursorLine(&f), 1);
+  CHECK_EQ(CursorColumn(&f), 4);  // 0-indexed: four spaces, then 'i'
+  Destroy(&f);
+}
+
+TEST(vim_charwise_paste_cursor_embedded_newlines) {
+  // Charwise paste of text that contains newlines should leave the cursor at
+  // the first pasted character (position of insertion), not the last.
+  // blank-runs: "a\n\n\nb" at col 0, `ye` grabs "a\n\n\nb", `p` pastes after.
+  Fixture f = MakeFixture("a\n\n\nb");
+  Type(&f, "yep");
+  // text: original 'a' at 0, then inserted "a\n\n\nb" at 1 → "aa\n\n\nb\n\n\nb"
+  CHECK_STR(TextOf(&f), Str8Lit("aa\n\n\nb\n\n\nb"));
+  CHECK_EQ(CursorLine(&f), 0);
+  CHECK_EQ(CursorColumn(&f), 1);  // at == 1, first pasted char
+  Destroy(&f);
+}
+
+TEST(vim_charwise_paste_cursor_text_ends_with_newline) {
+  // Charwise paste of text that ends with '\n' should leave the cursor one
+  // position past the last inserted byte (on the new empty line).
+  // leading-blank: "\nafter blank", cursor at 0, `yw` grabs "\n", `p` pastes.
+  Fixture f = MakeFixture("\nafter blank");
+  Type(&f, "ywp");
+  CHECK_STR(TextOf(&f), Str8Lit("\n\nafter blank"));
+  CHECK_EQ(CursorLine(&f), 1);   // on the new empty line
+  CHECK_EQ(CursorColumn(&f), 0);
+  Destroy(&f);
+}
+

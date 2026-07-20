@@ -279,11 +279,10 @@ bool BufferSaveFile(Buffer *buffer, String8 path) {
 
   TempArena scratch = ScratchBegin1(buffer->arena);
   String8 text = BufferTextAll(scratch.arena, buffer);
-  // Put the terminator back on the way out. An empty buffer stays an empty
-  // file rather than becoming a single blank line.
-  if (buffer->final_newline && text.size > 0) {
-    text = PushStr8Cat(scratch.arena, text, Str8Lit("\n"));
-  }
+  // Neovim always appends a final newline on :w regardless of whether the file
+  // originally had one (no-eol) or whether the buffer is now empty after
+  // deletions. Unconditionally put the terminator back on the way out.
+  text = PushStr8Cat(scratch.arena, text, Str8Lit("\n"));
   bool ok = OsFileWrite(target, text);
 
   if (ok) {
