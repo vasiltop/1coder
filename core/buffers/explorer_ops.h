@@ -63,6 +63,10 @@ struct ExplorerOp {
   ExplorerOpKind kind;
   String8 from;  // absolute; empty for creates
   String8 to;    // absolute; empty for deletes
+  // Set by ExplorerApply. Callers reacting to an operation -- pointing an open
+  // buffer at a moved file, say -- must check this: a plan describes what was
+  // asked for, not what happened.
+  bool done;
 };
 
 struct ExplorerPlan {
@@ -91,5 +95,6 @@ struct ExplorerApplyResult {
 // Runs the plan: deletes, then moves, then creates. Moves go via temporary
 // names so that swapping two entries, or rotating a cycle of them, needs no
 // special case. Keeps going after a failure and reports the count, since
-// stopping halfway would leave a listing that matches neither state.
-[[nodiscard]] ExplorerApplyResult ExplorerApply(Arena *arena, const ExplorerPlan *plan);
+// stopping halfway would leave a listing that matches neither state. Marks
+// `done` on each operation that succeeded.
+[[nodiscard]] ExplorerApplyResult ExplorerApply(Arena *arena, ExplorerPlan *plan);

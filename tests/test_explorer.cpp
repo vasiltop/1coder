@@ -1,5 +1,6 @@
 #include "buffers/buf_explorer.h"
 #include "buffers/explorer_ops.h"
+#include "editor/command.h"
 #include "editor/editor.h"
 #include "os/os_file.h"
 #include "test.h"
@@ -557,6 +558,231 @@ TEST(explorer_enter_on_an_unwritten_line_does_not_open) {
   Keys(&f, "<CR>");
   CHECK_EQ((u32)FocusedBuffer(&f)->kind, (u32)BufferKind::Explorer);
   CHECK(!OsFileExists(TempPath(&f.dir, "hello.txt")));
+
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// :w -- confirmation and apply
+// ---------------------------------------------------------------------------
+
+namespace {
+
+void RunCommand(EditorFixture *f, const char *line) {
+  CommandExecLine(&f->ed, Str8C(line));
+}
+
+bool StatusContains(EditorFixture *f, const char *needle) {
+  String8 status = f->ed.status_message;
+  return Str8FindFirst(status, Str8C(needle)) < status.size;
+}
+
+}  // namespace
+
+TEST(explorer_write_asks_before_touching_anything) {
+  EditorFixture f = MakeEditorFixture("explorer_confirm");
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // Rename alpha.txt -> renamed.txt by editing its line.
+  Keys(&f, "jA_x<Esc>");
+  RunCommand(&f, "w");
+
+  // Nothing has happened yet: the plan is only described.
+  CHECK(StatusContains(&f, "Apply? [y/N]"));
+  CHECK(OsFileExists(TempPath(&f.dir, "alpha.txt")));
+  CHECK(f.ed.input.awaiting_confirm);
+
+  // Any key but y cancels, so a fumbled confirmation is never the destructive
+  // answer.
+  Keys(&f, "n");
+  CHECK(!f.ed.input.awaiting_confirm);
+  CHECK(StatusContains(&f, "cancelled"));
+  CHECK(OsFileExists(TempPath(&f.dir, "alpha.txt")));
+
+  // The edit is still in the buffer, so the answer can be reconsidered.
+  CHECK(BufferIsDirty(FocusedBuffer(&f)));
+  RunCommand(&f, "w");
+  Keys(&f, "y");
+
+  CHECK(!OsFileExists(TempPath(&f.dir, "alpha.txt")));
+  CHECK(OsFileExists(TempPath(&f.dir, "alpha.txt_x")));
+  // Contents follow the rename -- the whole reason ids exist.
+  CHECK_STR(OsFileRead(f.arena, TempPath(&f.dir, "alpha.txt_x")).data, Str8Lit("alpha\n"));
+
+  // The listing was reread, so it is clean and matches disk again.
+  CHECK(!BufferIsDirty(FocusedBuffer(&f)));
+  CHECK_EQ(BufferLineCount(FocusedBuffer(&f)), (u64)3);
+
+  Destroy(&f);
+}
+
+TEST(explorer_write_creates_and_deletes_on_confirm) {
+  EditorFixture f = MakeEditorFixture("explorer_apply_keys");
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // Delete beta.txt with dd, then add a file and a directory by typing lines.
+  Keys(&f, "Gdd");
+  Keys(&f, "Gonotes.md<Esc>");
+  Keys(&f, "odocs/<Esc>");
+  RunCommand(&f, "w");
+  Keys(&f, "y");
+
+  CHECK(!OsFileExists(TempPath(&f.dir, "beta.txt")));
+  CHECK(OsFileExists(TempPath(&f.dir, "notes.md")));
+  CHECK(OsDirExists(TempPath(&f.dir, "docs")));
+  // Untouched entries are left alone.
+  CHECK(OsFileExists(TempPath(&f.dir, "alpha.txt")));
+
+  Destroy(&f);
+}
+
+TEST(explorer_write_with_no_edits_does_nothing) {
+  EditorFixture f = MakeEditorFixture("explorer_noop");
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // Reordering lines is not a change: the diff never consults order.
+  Keys(&f, "ddp");
+  RunCommand(&f, "w");
+
+  CHECK(StatusContains(&f, "no changes"));
+  CHECK(!f.ed.input.awaiting_confirm);
+  CHECK(!BufferIsDirty(FocusedBuffer(&f)));
+
+  Destroy(&f);
+}
+
+TEST(explorer_write_refuses_a_duplicated_id) {
+  EditorFixture f = MakeEditorFixture("explorer_dupe_write");
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // yyp duplicates a line id and all. Copy and rename are both plausible
+  // readings, so nothing is armed and nothing runs.
+  Keys(&f, "jyyp");
+  RunCommand(&f, "w");
+
+  CHECK(StatusContains(&f, "duplicate id"));
+  CHECK(!f.ed.input.awaiting_confirm);
+  CHECK(OsFileExists(TempPath(&f.dir, "alpha.txt")));
+
+  Destroy(&f);
+}
+
+TEST(explorer_write_never_writes_the_listing_to_disk) {
+  EditorFixture f = MakeEditorFixture("explorer_no_clobber");
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  RunCommand(&f, "w");
+
+  // The on_write hook claims the write, so BufferSaveFile never runs -- which
+  // would otherwise try to write the listing text over the directory inode.
+  CHECK(OsDirExists(f.dir.path));
+  CHECK(!OsFileExists(f.dir.path));
+
+  Destroy(&f);
+}
+
+TEST(explorer_rename_carries_an_open_buffer_with_it) {
+  EditorFixture f = MakeEditorFixture("explorer_retarget");
+
+  BufferHandle file = EditorOpenFile(&f.ed, TempPath(&f.dir, "alpha.txt"));
+  Buffer *opened = BufferFromHandle(&f.ed.buffers, file);
+  CHECK(opened != nullptr);
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  Keys(&f, "jA_moved<Esc>");
+  RunCommand(&f, "w");
+  Keys(&f, "y");
+
+  // The open buffer followed its file, so a later :w goes to the new path
+  // rather than recreating the old one.
+  CHECK_STR(opened->path, OsPathAbsolute(f.arena, TempPath(&f.dir, "alpha.txt_moved")));
+  CHECK_STR(opened->name, Str8Lit("alpha.txt_moved"));
+
+  Destroy(&f);
+}
+
+TEST(explorer_deleting_an_open_file_keeps_its_text) {
+  EditorFixture f = MakeEditorFixture("explorer_orphan");
+
+  BufferHandle file = EditorOpenFile(&f.ed, TempPath(&f.dir, "alpha.txt"));
+  Buffer *opened = BufferFromHandle(&f.ed.buffers, file);
+  CHECK(opened != nullptr);
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  Keys(&f, "jdd");
+  RunCommand(&f, "w");
+  Keys(&f, "y");
+
+  CHECK(!OsFileExists(TempPath(&f.dir, "alpha.txt")));
+
+  // Closing the buffer would be the one outcome that loses work with no way
+  // back. Instead it is left dirty, so :w puts the file back.
+  CHECK_STR(BufferTextAll(f.arena, opened), Str8Lit("alpha"));
+  CHECK(BufferIsDirty(opened));
+
+  Destroy(&f);
+}
+
+TEST(explorer_directory_rename_moves_the_buffers_inside_it) {
+  EditorFixture f = MakeEditorFixture("explorer_dir_rename");
+
+  BufferHandle deep = EditorOpenFile(&f.ed, TempPath(&f.dir, "sub/deep.txt"));
+  Buffer *opened = BufferFromHandle(&f.ed.buffers, deep);
+  CHECK(opened != nullptr);
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // Rename the directory itself. sub/ is the first line, being a directory, and
+  // the insert goes before the trailing marker so the name stays a directory.
+  Keys(&f, "$i_renamed<Esc>");
+  RunCommand(&f, "w");
+  Keys(&f, "y");
+
+  CHECK(OsDirExists(TempPath(&f.dir, "sub_renamed")));
+  CHECK(!OsDirExists(TempPath(&f.dir, "sub")));
+
+  // Matching on the directory prefix is what carries the buffers inside along.
+  CHECK_STR(opened->path, OsPathAbsolute(f.arena, TempPath(&f.dir, "sub_renamed/deep.txt")));
+
+  Destroy(&f);
+}
+
+TEST(explorer_a_failed_move_leaves_its_buffer_alone) {
+  EditorFixture f = MakeEditorFixture("explorer_failed_move");
+
+  BufferHandle deep = EditorOpenFile(&f.ed, TempPath(&f.dir, "sub/deep.txt"));
+  Buffer *opened = BufferFromHandle(&f.ed.buffers, deep);
+  CHECK(opened != nullptr);
+  String8 original = PushStr8Copy(f.arena, opened->path);
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // Appending past the trailing marker asks to move sub/ inside itself, which
+  // the kernel refuses. A plan describes what was asked for, not what happened,
+  // so the buffer must not follow a move that never occurred.
+  Keys(&f, "A_nested<Esc>");
+  RunCommand(&f, "w");
+  Keys(&f, "y");
+
+  CHECK(StatusContains(&f, "failed"));
+  CHECK(OsDirExists(TempPath(&f.dir, "sub")));
+  CHECK_STR(opened->path, original);
 
   Destroy(&f);
 }

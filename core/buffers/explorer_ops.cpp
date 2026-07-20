@@ -266,7 +266,7 @@ void RecordFailure(ExplorerApplyResult *result, Arena *arena, const char *verb, 
 
 }  // namespace
 
-ExplorerApplyResult ExplorerApply(Arena *arena, const ExplorerPlan *plan) {
+ExplorerApplyResult ExplorerApply(Arena *arena, ExplorerPlan *plan) {
   ExplorerApplyResult result = {};
   if (plan->error.size != 0) return result;
 
@@ -277,10 +277,12 @@ ExplorerApplyResult ExplorerApply(Arena *arena, const ExplorerPlan *plan) {
   for (u64 i = 0; i < plan->count; i += 1) {
     ExplorerOp *op = &plan->ops[i];
     if (op->kind == ExplorerOpKind::Delete) {
-      if (OsFileDelete(op->from)) result.applied += 1;
+      op->done = OsFileDelete(op->from);
+      if (op->done) result.applied += 1;
       else RecordFailure(&result, arena, "delete", op->from);
     } else if (op->kind == ExplorerOpKind::DeleteDir) {
-      if (OsDirDeleteRecursive(op->from)) result.applied += 1;
+      op->done = OsDirDeleteRecursive(op->from);
+      if (op->done) result.applied += 1;
       else RecordFailure(&result, arena, "delete", op->from);
     }
   }
@@ -315,6 +317,7 @@ ExplorerApplyResult ExplorerApply(Arena *arena, const ExplorerPlan *plan) {
 
   for (u64 i = 0; i < staged_count; i += 1) {
     if (OsRename(staged[i], moves[i]->to)) {
+      moves[i]->done = true;
       result.applied += 1;
     } else {
       // Put it back rather than leaving a file under a temporary name.
@@ -328,10 +331,12 @@ ExplorerApplyResult ExplorerApply(Arena *arena, const ExplorerPlan *plan) {
   for (u64 i = 0; i < plan->count; i += 1) {
     ExplorerOp *op = &plan->ops[i];
     if (op->kind == ExplorerOpKind::Create) {
-      if (OsFileCreate(op->to)) result.applied += 1;
+      op->done = OsFileCreate(op->to);
+      if (op->done) result.applied += 1;
       else RecordFailure(&result, arena, "create", op->to);
     } else if (op->kind == ExplorerOpKind::CreateDir) {
-      if (OsMakeDirs(op->to)) result.applied += 1;
+      op->done = OsMakeDirs(op->to);
+      if (op->done) result.applied += 1;
       else RecordFailure(&result, arena, "create", op->to);
     }
   }

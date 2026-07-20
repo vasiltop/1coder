@@ -248,9 +248,13 @@ void ExplorerApplyPending(Editor *ed, Buffer *buffer) {
 
   // Point any buffer open on a moved path at its new location before the plan
   // is discarded, so an open file follows its rename instead of silently
-  // writing back to a path that no longer exists.
+  // writing back to a path that no longer exists. Only operations that actually
+  // happened count: a failed rename must leave its buffer pointing where the
+  // file still is.
   for (u64 i = 0; i < payload->pending.count; i += 1) {
     ExplorerOp *op = &payload->pending.ops[i];
+    if (!op->done) continue;
+
     if (op->kind == ExplorerOpKind::Move) EditorRetargetBufferPaths(ed, op->from, op->to);
     if (op->kind == ExplorerOpKind::Delete || op->kind == ExplorerOpKind::DeleteDir) {
       EditorOrphanBufferPaths(ed, op->from);
