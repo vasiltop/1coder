@@ -968,7 +968,8 @@ TEST(vim_visual_operators_restore_temporary_mouse_modes) {
   Type(&indent, ">");
   CHECK_EQ((u32)ModeOf(&indent), (u32)VimMode::Insert);
   CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
-  CHECK_STR(TextOf(&indent), Str8Lit("  one\n  two"));
+  // Clean Neovim defaults: noexpandtab → indent inserts a tab, not spaces.
+  CHECK_STR(TextOf(&indent), Str8Lit("\tone\n\ttwo"));
   Destroy(&indent);
 
   Fixture dedent = MakeFixture("  one\n  two");
