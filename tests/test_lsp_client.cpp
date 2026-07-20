@@ -12,7 +12,6 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
-#include <functional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -82,11 +81,6 @@ struct ApplyEditState {
 };
 
 struct DestroyClientState {
-  LspClient *client = nullptr;
-  u32 call_count = 0;
-};
-
-struct DestroyDuringApplyEditState {
   LspClient *client = nullptr;
   u32 call_count = 0;
 };
@@ -395,7 +389,7 @@ void DestroyClientOnResponse(void *user_data, const LspClientResponse *response)
 
 LspClientApplyEditResult DestroyDuringApplyEdit(void *user_data, const JsonValue *edit) {
   (void)edit;
-  DestroyDuringApplyEditState *state = (DestroyDuringApplyEditState *)user_data;
+  DestroyClientState *state = (DestroyClientState *)user_data;
   state->call_count += 1;
   LspClientApplyEditResult result = {};
   result.applied = true;
@@ -1065,33 +1059,6 @@ TEST(lsp_client_fake_server_script_exit_zero_terminates) {
   OsProcessDestroy(&process);
 }
 
-TEST(lsp_client_response_callback_may_destroy_client) {
-  ArenaScope scope;
-  ScopedFixtureDir fixture(scope.arena, "destroy_in_callback");
-  CallbackState callbacks = {};
-  MockTransport transport = {};
-  WakeCounter wake = {};
-  LspClient client = {};
-  (void)StartReadyClient(scope.arena, &client, &transport, &callbacks, &wake, fixture.path,
-                         Str8Lit("{\"capabilities\":{}}"));
-
-  DestroyClientState destroy_state = {};
-  destroy_state.client = &client;
-  u64 request_id =
-      LspClientSendRequestJson(&client, Str8Lit("textDocument/hover"), Str8Lit("{\"value\":\"x\"}"), nullptr,
-                               DestroyClientOnResponse, &destroy_state);
-  CHECK(request_id != 0);
-
-  transport.PushJson(PushStr8F(scope.arena, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"value\":\"ok\"}}",
-                               (unsigned long long)request_id));
-  LspClientTick(&client);
-
-  CHECK_EQ(destroy_state.call_count, (u32)1);
-  CHECK(client.impl == nullptr);
-  CHECK_EQ((u64)LspClientGetState(&client), (u64)LspClientState::Stopped);
-  LspClientTick(&client);
-}
-
 TEST(lsp_client_destroying_callback_completes_later_pending_once) {
   ArenaScope scope;
   ScopedFixtureDir fixture(scope.arena, "destroy_pending_tail");
@@ -1122,6 +1089,8 @@ TEST(lsp_client_destroying_callback_completes_later_pending_once) {
   CHECK(tail_response.has_error);
   CHECK_EQ(tail_response.error_code, (i64)kLspClientErrorStopped);
   CHECK(client.impl == nullptr);
+  CHECK_EQ((u64)LspClientGetState(&client), (u64)LspClientState::Stopped);
+  LspClientTick(&client);
 }
 
 TEST(lsp_client_handles_server_requests_and_unknown_methods) {
@@ -1206,7 +1175,7 @@ TEST(lsp_client_apply_edit_callback_may_destroy_client_after_reply) {
   MockTransport transport = {};
   WakeCounter wake = {};
   LspClient client = {};
-  DestroyDuringApplyEditState apply_edit = {};
+  DestroyClientState apply_edit = {};
   apply_edit.client = &client;
 
   LspClientCallbacks callbacks = {};

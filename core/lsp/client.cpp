@@ -64,8 +64,6 @@ LspClientImpl *GetImpl(const LspClient *client) {
 }
 
 String8 CopyString8(Arena *arena, String8 value) { return PushStr8Copy(arena, value); }
-void SetCachedStderrSummary(LspClientImpl *impl, String8 summary);
-void CacheStderrSummary(LspClientImpl *impl);
 
 bool ClientStillOwnsImpl(const LspClientImpl *impl) {
   return impl != nullptr && impl->owner != nullptr && impl->owner->impl == impl;
@@ -74,19 +72,6 @@ bool ClientStillOwnsImpl(const LspClientImpl *impl) {
 bool HasDeferredLifecycle(const LspClientImpl *impl) {
   return impl != nullptr && (impl->stop_requested || impl->destroy_deferred);
 }
-
-struct ScopedTick {
-  LspClientImpl *impl;
-
-  explicit ScopedTick(LspClientImpl *impl_) : impl(impl_) {
-    if (impl != nullptr) impl->tick_depth += 1;
-  }
-
-  ~ScopedTick() {
-    if (impl == nullptr) return;
-    impl->tick_depth -= 1;
-  }
-};
 
 struct ScopedCallback {
   LspClientImpl *impl;
@@ -235,15 +220,6 @@ bool TransportPop(LspClientImpl *impl, Arena *arena, LspInboundMessage *message)
   return LspTransportPop(&impl->transport, arena, message);
 }
 
-void TransportStop(LspClientImpl *impl) {
-  if (impl->config.transport_hooks != nullptr) {
-    impl->config.transport_hooks->stop(impl->config.transport_user_data);
-    CacheStderrSummary(impl);
-    return;
-  }
-  SetCachedStderrSummary(impl, LspTransportStopAndCaptureStderr(&impl->transport, impl->arena));
-}
-
 bool TransportFailed(LspClientImpl *impl) {
   if (impl->config.transport_hooks != nullptr) {
     return impl->config.transport_hooks->failed(impl->config.transport_user_data);
@@ -272,6 +248,15 @@ void SetCachedStderrSummary(LspClientImpl *impl, String8 summary) {
 
 void CacheStderrSummary(LspClientImpl *impl) {
   SetCachedStderrSummary(impl, TransportStderrSummary(impl));
+}
+
+void TransportStop(LspClientImpl *impl) {
+  if (impl->config.transport_hooks != nullptr) {
+    impl->config.transport_hooks->stop(impl->config.transport_user_data);
+    CacheStderrSummary(impl);
+    return;
+  }
+  SetCachedStderrSummary(impl, LspTransportStopAndCaptureStderr(&impl->transport, impl->arena));
 }
 
 void ClearRuntimeState(LspClientImpl *impl) {
