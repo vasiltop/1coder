@@ -8,6 +8,10 @@
 
 namespace {
 
+Arena *g_fake_clipboard_arena;
+String8 g_fake_clipboard;
+u32 g_fake_clipboard_reads;
+
 struct Fixture {
   Arena *arena;
   Editor ed;
@@ -28,6 +32,21 @@ void Destroy(Fixture *f) {
   EditorDestroy(&f->ed);
   ArenaRelease(f->arena);
 }
+
+String8 FakeClipboardRead(Arena *arena) {
+  g_fake_clipboard_reads += 1;
+  return PushStr8Copy(arena, g_fake_clipboard);
+}
+
+void InstallFakeClipboard(Fixture *f, String8 text) {
+  if (!g_fake_clipboard_arena) g_fake_clipboard_arena = ArenaAlloc(MB(4));
+  ArenaClear(g_fake_clipboard_arena);
+  g_fake_clipboard = PushStr8Copy(g_fake_clipboard_arena, text);
+  g_fake_clipboard_reads = 0;
+  f->ed.clipboard.read = FakeClipboardRead;
+}
+
+String8 TextOf(Arena *arena, Buffer *buffer) { return BufferTextAll(arena, buffer); }
 
 MouseEvent MouseAt(f32 grid_x, f32 grid_y) {
   MouseEvent event = {};
@@ -686,6 +705,190 @@ TEST(mouse_click_and_drag_command_line_uses_the_command_view) {
   CHECK_EQ((u32)f.ed.command_view->vim.mode, (u32)VimMode::Visual);
   CHECK_EQ(Selection(f.ed.command_view, command).min, 3);
   CHECK_EQ(Selection(f.ed.command_view, command).max, 6);
+
+  Destroy(&f);
+}
+
+TEST(mouse_middle_normal_pastes_after_clicked_position_from_clipboard) {
+  Fixture f = MakeFixture("left");
+  Panel *right = EditorSplit(&f.ed, Axis2::X);
+  EditorLayout(&f.ed);
+  Panel *left = f.ed.root_panel->first_child;
+  Buffer *right_buffer = EditorBufferForView(&f.ed, right->view);
+  BufferSetText(&f.ed, right_buffer, Str8Lit("abc"));
+  RectS32 right_text = EditorPanelTextRect(&f.ed, right);
+  InstallFakeClipboard(&f, Str8Lit("XYZ"));
+
+  EditorFocusPanel(&f.ed, left);
+  right->view->vim.pending_register = 'a';
+  EditorSetRegister(&f.ed, 'a', Str8Lit("keep"), false);
+
+  SendMouse(&f, MouseAction::Press, MouseButton::Middle, (f32)right_text.x0 + 1.2f,
+            (f32)right_text.y0 + 0.2f);
+
+  CHECK(f.ed.focused_panel == right);
+  CHECK_STR(BufferTextAll(f.arena, right_buffer), Str8Lit("abXYZc"));
+  CHECK_EQ(right->view->cursor, 4);
+  CHECK_EQ(right->view->vim.pending_register, 0);
+  CHECK_EQ(g_fake_clipboard_reads, 1);
+  CHECK_STR(EditorGetRegister(&f.ed, 'a').text, Str8Lit("keep"));
+
+  Destroy(&f);
+}
+
+TEST(mouse_middle_visual_replaces_charwise_and_linewise_selection) {
+  Fixture charwise = MakeFixture("abcdef");
+  InstallFakeClipboard(&charwise, Str8Lit("X"));
+  View *view = EditorFocusedView(&charwise.ed);
+  Buffer *buffer = EditorFocusedBuffer(&charwise.ed);
+  RectS32 text = EditorPanelTextRect(&charwise.ed, charwise.ed.focused_panel);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 1;
+  ViewSetCursor(view, buffer, 3);
+  SendMouse(&charwise, MouseAction::Press, MouseButton::Middle, (f32)text.x0 + 5.2f,
+            (f32)text.y0 + 0.2f);
+  CHECK_STR(TextOf(charwise.arena, buffer), Str8Lit("aXef"));
+  CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Normal);
+  CHECK_EQ(view->cursor, 1);
+  CHECK_STR(EditorGetRegister(&charwise.ed, 0).text, Str8Lit("bcd"));
+  CHECK(!EditorGetRegister(&charwise.ed, 0).linewise);
+  Destroy(&charwise);
+
+  Fixture linewise = MakeFixture("one\ntwo\nthree\n");
+  InstallFakeClipboard(&linewise, Str8Lit("alpha\nbeta\n"));
+  view = EditorFocusedView(&linewise.ed);
+  buffer = EditorFocusedBuffer(&linewise.ed);
+  text = EditorPanelTextRect(&linewise.ed, linewise.ed.focused_panel);
+
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = BufferOffsetFromLine(buffer, 1);
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+  SendMouse(&linewise, MouseAction::Press, MouseButton::Middle, (f32)text.x0 + 0.2f,
+            (f32)text.y0 + 0.2f);
+  CHECK_STR(TextOf(linewise.arena, buffer), Str8Lit("one\nalpha\nbeta\nthree\n"));
+  CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Normal);
+  CHECK_EQ(view->cursor, BufferOffsetFromLine(buffer, 1));
+  CHECK_STR(EditorGetRegister(&linewise.ed, 0).text, Str8Lit("two\n"));
+  CHECK(EditorGetRegister(&linewise.ed, 0).linewise);
+  Destroy(&linewise);
+}
+
+TEST(mouse_middle_insert_replace_and_command_line_insert_at_clicked_cursor) {
+  Fixture insert = MakeFixture("abcd");
+  InstallFakeClipboard(&insert, Str8Lit("ZZ"));
+  View *view = EditorFocusedView(&insert.ed);
+  Buffer *buffer = EditorFocusedBuffer(&insert.ed);
+  RectS32 text = EditorPanelTextRect(&insert.ed, insert.ed.focused_panel);
+
+  view->vim.mode = VimMode::Insert;
+  SendMouse(&insert, MouseAction::Press, MouseButton::Middle, (f32)text.x0 + 2.2f,
+            (f32)text.y0 + 0.2f);
+  CHECK_STR(TextOf(insert.arena, buffer), Str8Lit("abZZcd"));
+  CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Insert);
+  CHECK_EQ(view->cursor, 4);
+  Destroy(&insert);
+
+  Fixture replace = MakeFixture("abcdef");
+  InstallFakeClipboard(&replace, Str8Lit("XY"));
+  view = EditorFocusedView(&replace.ed);
+  buffer = EditorFocusedBuffer(&replace.ed);
+  text = EditorPanelTextRect(&replace.ed, replace.ed.focused_panel);
+
+  view->vim.mode = VimMode::Replace;
+  SendMouse(&replace, MouseAction::Press, MouseButton::Middle, (f32)text.x0 + 2.2f,
+            (f32)text.y0 + 0.2f);
+  CHECK_STR(TextOf(replace.arena, buffer), Str8Lit("abXYef"));
+  CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Replace);
+  CHECK_EQ(view->cursor, 4);
+  Destroy(&replace);
+
+  Fixture command = MakeFixture("buffer");
+  InstallFakeClipboard(&command, Str8Lit("Q\nR"));
+  CommandExec(&command.ed, CommandId::command_line_open);
+  Buffer *command_buffer = EditorBufferForView(&command.ed, command.ed.command_view);
+  BufferSetText(&command.ed, command_buffer, Str8Lit("abcd"));
+  f32 row = (f32)(command.ed.screen.y1 - 1) + 0.2f;
+
+  SendMouse(&command, MouseAction::Press, MouseButton::Middle, 3.2f, row);
+  CHECK_STR(TextOf(command.arena, command_buffer), Str8Lit("abQcd"));
+  CHECK_EQ(command.ed.command_view->cursor, 3);
+  Destroy(&command);
+}
+
+TEST(mouse_middle_empty_missing_and_read_only_preserve_state) {
+  Fixture empty = MakeFixture("abcdef");
+  InstallFakeClipboard(&empty, String8{nullptr, 0});
+  View *view = EditorFocusedView(&empty.ed);
+  Buffer *buffer = EditorFocusedBuffer(&empty.ed);
+  RectS32 text = EditorPanelTextRect(&empty.ed, empty.ed.focused_panel);
+
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 1;
+  ViewSetCursor(view, buffer, 3);
+  SendMouse(&empty, MouseAction::Press, MouseButton::Middle, (f32)text.x0 + 5.2f,
+            (f32)text.y0 + 0.2f);
+  CHECK_STR(TextOf(empty.arena, buffer), Str8Lit("abcdef"));
+  CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Visual);
+  CHECK_EQ(Selection(view, buffer).min, 1);
+  CHECK_EQ(Selection(view, buffer).max, 4);
+  Destroy(&empty);
+
+  Fixture missing = MakeFixture("abcdef");
+  view = EditorFocusedView(&missing.ed);
+  buffer = EditorFocusedBuffer(&missing.ed);
+  text = EditorPanelTextRect(&missing.ed, missing.ed.focused_panel);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 1;
+  ViewSetCursor(view, buffer, 3);
+  missing.ed.clipboard.read = nullptr;
+  SendMouse(&missing, MouseAction::Press, MouseButton::Middle, (f32)text.x0 + 5.2f,
+            (f32)text.y0 + 0.2f);
+  CHECK_STR(TextOf(missing.arena, buffer), Str8Lit("abcdef"));
+  CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Visual);
+  CHECK_EQ(Selection(view, buffer).min, 1);
+  CHECK_EQ(Selection(view, buffer).max, 4);
+  Destroy(&missing);
+
+  Fixture read_only = MakeFixture("abcdef");
+  InstallFakeClipboard(&read_only, Str8Lit("Z"));
+  view = EditorFocusedView(&read_only.ed);
+  buffer = EditorFocusedBuffer(&read_only.ed);
+  text = EditorPanelTextRect(&read_only.ed, read_only.ed.focused_panel);
+  buffer->flags |= BufferFlags::ReadOnly;
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 1;
+  ViewSetCursor(view, buffer, 3);
+  SendMouse(&read_only, MouseAction::Press, MouseButton::Middle, (f32)text.x0 + 5.2f,
+            (f32)text.y0 + 0.2f);
+  CHECK_STR(TextOf(read_only.arena, buffer), Str8Lit("abcdef"));
+  CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Visual);
+  CHECK_EQ(Selection(view, buffer).min, 1);
+  CHECK_EQ(Selection(view, buffer).max, 4);
+  Destroy(&read_only);
+}
+
+TEST(mouse_middle_command_line_visual_filtered_empty_clipboard_is_noop) {
+  Fixture f = MakeFixture("buffer");
+  InstallFakeClipboard(&f, Str8Lit("\nrest"));
+  CommandExec(&f.ed, CommandId::command_line_open);
+
+  Buffer *command = EditorBufferForView(&f.ed, f.ed.command_view);
+  View *view = f.ed.command_view;
+  BufferSetText(&f.ed, command, Str8Lit("abcd"));
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 1;
+  ViewSetCursor(view, command, 3);
+  view->vim.pending_register = 'a';
+
+  f32 row = (f32)(f.ed.screen.y1 - 1) + 0.2f;
+  SendMouse(&f, MouseAction::Press, MouseButton::Middle, 2.2f, row);
+
+  CHECK_STR(TextOf(f.arena, command), Str8Lit("abcd"));
+  CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Visual);
+  CHECK_EQ(Selection(view, command).min, 1);
+  CHECK_EQ(Selection(view, command).max, 4);
+  CHECK_EQ(view->vim.pending_register, 0);
+  CHECK_EQ(g_fake_clipboard_reads, 1);
 
   Destroy(&f);
 }

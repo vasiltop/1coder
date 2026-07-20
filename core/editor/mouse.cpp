@@ -2,6 +2,7 @@
 
 #include "buffers/buf_image.h"
 #include "vim/vim_motions.h"
+#include "vim/vim_operators.h"
 
 #include <math.h>
 
@@ -453,6 +454,69 @@ void HandleCommandLinePress(Editor *ed, MouseHit hit) {
   BeginCommandCapture(ed, hit);
 }
 
+void HandleMiddlePanelPress(Editor *ed, MouseHit hit) {
+  EditorFocusPanel(ed, hit.panel);
+  View *view = hit.view;
+  Buffer *buffer = hit.buffer;
+  if (!view || !buffer) return;
+
+  if (hit.kind == MouseHitKind::Image || hit.kind == MouseHitKind::StatusLine) return;
+  if (hit.kind != MouseHitKind::Text && hit.kind != MouseHitKind::Gutter) return;
+  view->vim.pending_register = 0;
+
+  Register reg = EditorGetRegister(ed, '*');
+  if (VimModeIsVisual(view->vim.mode)) {
+    u64 edit_serial = buffer->edit_serial;
+    u64 cursor_before = view->cursor;
+    VimMode mode_before = view->vim.mode;
+    (void)VimReplaceVisual(ed, view, buffer, reg);
+    if (buffer->edit_serial != edit_serial || view->cursor != cursor_before ||
+        view->vim.mode != mode_before) {
+      ScrollViewToOwnCursor(ed, hit.panel, view, buffer);
+    }
+    return;
+  }
+
+  if (reg.text.size == 0 || BufferIsReadOnly(buffer)) return;
+
+  u64 cursor = ViewClampCursorToMode(view, buffer, hit.offset);
+  if (VimModeIsInsert(view->vim.mode)) {
+    cursor = VimInsertRegister(ed, view, buffer, cursor, reg);
+  } else {
+    cursor = VimPasteRegister(ed, view, buffer, reg, cursor, 1, true);
+  }
+
+  ViewSetCursor(view, buffer, cursor);
+  ScrollViewToOwnCursor(ed, hit.panel, view, buffer);
+}
+
+void HandleMiddleCommandLinePress(Editor *ed, MouseHit hit) {
+  View *view = hit.view;
+  Buffer *buffer = hit.buffer;
+  if (!view || !buffer || hit.kind != MouseHitKind::CommandLine) return;
+
+  view->vim.pending_register = 0;
+
+  Register reg = EditorGetRegister(ed, '*');
+  if (VimModeIsVisual(view->vim.mode)) {
+    u64 edit_serial = buffer->edit_serial;
+    u64 cursor_before = view->cursor;
+    VimMode mode_before = view->vim.mode;
+    (void)VimReplaceVisual(ed, view, buffer, reg);
+    if (buffer->edit_serial != edit_serial || view->cursor != cursor_before ||
+        view->vim.mode != mode_before) {
+      ScrollViewToOwnCursor(ed, nullptr, view, buffer);
+    }
+    return;
+  }
+
+  if (reg.text.size == 0 || BufferIsReadOnly(buffer)) return;
+
+  u64 cursor = VimInsertRegister(ed, view, buffer, hit.offset, reg);
+  ViewSetCursor(view, buffer, cursor);
+  ScrollViewToOwnCursor(ed, nullptr, view, buffer);
+}
+
 }  // namespace
 
 MouseHit EditorMouseHitTest(Editor *ed, const MouseEvent &event) {
@@ -541,7 +605,9 @@ void EditorProcessMouse(Editor *ed, const MouseEvent &event) {
   mouse->latest_hit = hit;
 
   if (hit.kind == MouseHitKind::CommandLine) {
+    ClearCapture(mouse);
     if (event.button == MouseButton::Left) HandleCommandLinePress(ed, hit);
+    else if (event.button == MouseButton::Middle) HandleMiddleCommandLinePress(ed, hit);
     return;
   }
 
@@ -554,6 +620,9 @@ void EditorProcessMouse(Editor *ed, const MouseEvent &event) {
     HandleLeftPanelPress(ed, hit, event);
   } else if (event.button == MouseButton::Right) {
     HandleRightPanelPress(ed, hit);
+  } else if (event.button == MouseButton::Middle) {
+    ClearCapture(mouse);
+    HandleMiddlePanelPress(ed, hit);
   } else if (hit.panel) {
     EditorFocusPanel(ed, hit.panel);
     ClearCapture(mouse);
