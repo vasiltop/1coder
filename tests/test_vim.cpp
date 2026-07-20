@@ -1841,3 +1841,33 @@ TEST(vim_charwise_paste_cursor_text_ends_with_newline) {
   Destroy(&f);
 }
 
+TEST(vim_paste_undo_collapses_separator_and_content) {
+  // ddp on a single-line buffer inserts a separator '\n' then the content;
+  // a single undo must revert BOTH inserts and restore the post-dd empty state.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "dd");
+  CHECK_STR(TextOf(&f), Str8Lit(""));  // post-dd: buffer is empty
+
+  Type(&f, "p");
+  CHECK_STR(TextOf(&f), Str8Lit("\nalpha beta gamma"));  // paste inserted two things
+
+  // One `u` must restore the buffer to the empty post-dd state, not leave the
+  // separator '\n' behind (which would need a second undo).
+  Type(&f, "u");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
+
+  Destroy(&f);
+}
+
+TEST(vim_yyp_undo_restores_single_line) {
+  // yyp on the last line inserts a separator '\n' then the yanked content;
+  // one undo must revert both inserts and return to the original single line.
+  Fixture f = MakeFixture("alpha beta gamma");
+  Type(&f, "yyp");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma\nalpha beta gamma"));
+
+  Type(&f, "u");
+  CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma"));
+
+  Destroy(&f);
+}

@@ -135,6 +135,10 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
   Register reg = EditorGetRegister(ed, RegisterNormalise(view->vim.pending_register));
   if (reg.text.size == 0 || BufferIsReadOnly(buffer)) return pos;
 
+  // One undo step for the whole paste command, even when two BufferInsert
+  // calls are needed (separator + content).
+  BufferBeginEditGroup(buffer);
+
   TempArena scratch = ScratchBegin();
 
   // Repeat the register's contents `count` times before inserting, so 3p is a
@@ -224,6 +228,7 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
   }
 
   ScratchEnd(scratch);
+  BufferEndEditGroup(buffer);
   return cursor;
 }
 
