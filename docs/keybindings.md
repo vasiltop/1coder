@@ -20,7 +20,8 @@ any operator (`ciw`, `da(`) and in visual mode (`vi{`).
 
 `<C-h/j/k/l>` moves focus, `<leader>v` splits vertically and `<leader>h`
 horizontally (as `:vsplit` and `:split` do). The built-in `<C-w>` forms —
-`<C-w>v` `<C-w>s` `<C-w>hjkl` `<C-w>c` `<C-w>o` — work too.
+`<C-w>v` `<C-w>s` `<C-w>hjkl` `<C-w>c` `<C-w>o` — work too. `<C-f>` is the
+same as `<C-w>o`: close every other window.
 
 ## Mouse
 
