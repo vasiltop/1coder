@@ -1,6 +1,7 @@
 #include "editor/command.h"
 #include "editor/editor.h"
 #include "test.h"
+#include "vim/vim_operators.h"
 
 // These drive the editor the way a keyboard does -- through EditorProcessChord
 // -- so they exercise the keymap, the count parser, the operator machinery and
@@ -898,6 +899,187 @@ TEST(vim_visual_escape_leaves_text_alone) {
   Destroy(&f);
 }
 
+TEST(vim_visual_escape_restores_temporary_mouse_insert_mode) {
+  Fixture insert = MakeFixture("hello");
+  View *view = ViewOf(&insert);
+  Buffer *buffer = BufferOf(&insert);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Insert;
+  ViewSetCursor(view, buffer, 2);
+
+  Type(&insert, "<Esc>");
+  CHECK_EQ((u32)ModeOf(&insert), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&insert), Str8Lit("hello"));
+  Destroy(&insert);
+
+  Fixture replace = MakeFixture("hello");
+  view = ViewOf(&replace);
+  buffer = BufferOf(&replace);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 2);
+
+  Type(&replace, "<Esc>");
+  CHECK_EQ((u32)ModeOf(&replace), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  Destroy(&replace);
+}
+
+TEST(vim_visual_operators_restore_temporary_mouse_modes) {
+  Fixture yank = MakeFixture("alpha beta");
+  View *view = ViewOf(&yank);
+  Buffer *buffer = BufferOf(&yank);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 4);
+
+  Type(&yank, "y");
+  CHECK_EQ((u32)ModeOf(&yank), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&yank), Str8Lit("alpha beta"));
+  Destroy(&yank);
+
+  Fixture del = MakeFixture("alpha beta");
+  view = ViewOf(&del);
+  buffer = BufferOf(&del);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 4);
+
+  Type(&del, "d");
+  CHECK_EQ((u32)ModeOf(&del), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&del), Str8Lit(" beta"));
+  Destroy(&del);
+
+  Fixture indent = MakeFixture("one\ntwo");
+  view = ViewOf(&indent);
+  buffer = BufferOf(&indent);
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Insert;
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+
+  Type(&indent, ">");
+  CHECK_EQ((u32)ModeOf(&indent), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&indent), Str8Lit("  one\n  two"));
+  Destroy(&indent);
+
+  Fixture dedent = MakeFixture("  one\n  two");
+  view = ViewOf(&dedent);
+  buffer = BufferOf(&dedent);
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+
+  Type(&dedent, "<");
+  CHECK_EQ((u32)ModeOf(&dedent), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&dedent), Str8Lit("one\ntwo"));
+  Destroy(&dedent);
+
+  Fixture change = MakeFixture("alpha beta");
+  view = ViewOf(&change);
+  buffer = BufferOf(&change);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 4);
+
+  Type(&change, "c");
+  CHECK_EQ((u32)ModeOf(&change), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&change), Str8Lit(" beta"));
+  Destroy(&change);
+}
+
+TEST(vim_replace_visual_charwise_captures_unnamed_and_returns_normal) {
+  Fixture f = MakeFixture("abcdef");
+  View *view = ViewOf(&f);
+  Buffer *buffer = BufferOf(&f);
+
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 1;
+  ViewSetCursor(view, buffer, 3);
+
+  u64 cursor = VimReplaceVisual(&f.ed, view, buffer, Register{Str8Lit("X"), false});
+
+  CHECK_EQ(cursor, 1);
+  CHECK_STR(TextOf(&f), Str8Lit("aXef"));
+  CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Normal);
+  CHECK_EQ(view->cursor, 1);
+  CHECK_STR(EditorGetRegister(&f.ed, 0).text, Str8Lit("bcd"));
+  CHECK(!EditorGetRegister(&f.ed, 0).linewise);
+
+  Destroy(&f);
+}
+
+TEST(vim_replace_visual_restores_temporary_insert_and_replace_modes) {
+  Fixture insert = MakeFixture("abcdef");
+  View *view = ViewOf(&insert);
+  Buffer *buffer = BufferOf(&insert);
+
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 1;
+  view->vim.mouse_visual_return_mode = VimMode::Insert;
+  ViewSetCursor(view, buffer, 3);
+
+  u64 cursor = VimReplaceVisual(&insert.ed, view, buffer, Register{Str8Lit("XY"), false});
+
+  CHECK_EQ(cursor, 1);
+  CHECK_STR(TextOf(&insert), Str8Lit("aXYef"));
+  CHECK_EQ((u32)ModeOf(&insert), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_EQ(view->cursor, 1);
+  Destroy(&insert);
+
+  Fixture replace = MakeFixture("one\ntwo\nthree\n");
+  view = ViewOf(&replace);
+  buffer = BufferOf(&replace);
+
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = BufferOffsetFromLine(buffer, 1);
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+
+  cursor = VimReplaceVisual(&replace.ed, view, buffer, Register{Str8Lit("alpha\nbeta\n"), true});
+
+  CHECK_EQ(cursor, BufferOffsetFromLine(buffer, 1));
+  CHECK_STR(TextOf(&replace), Str8Lit("one\nalpha\nbeta\nthree\n"));
+  CHECK_EQ((u32)ModeOf(&replace), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(EditorGetRegister(&replace.ed, 0).text, Str8Lit("two\n"));
+  CHECK(EditorGetRegister(&replace.ed, 0).linewise);
+  Destroy(&replace);
+}
+
+TEST(vim_replace_visual_linewise_normalizes_missing_final_newline) {
+  Fixture f = MakeFixture("one\ntwo\nthree");
+  View *view = ViewOf(&f);
+  Buffer *buffer = BufferOf(&f);
+
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = BufferOffsetFromLine(buffer, 1);
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+
+  u64 cursor = VimReplaceVisual(&f.ed, view, buffer, Register{Str8Lit("tail"), true});
+
+  CHECK_EQ(cursor, BufferOffsetFromLine(buffer, 1));
+  CHECK_STR(TextOf(&f), Str8Lit("one\ntail\nthree"));
+  CHECK_EQ((u32)ModeOf(&f), (u32)VimMode::Normal);
+  CHECK_STR(EditorGetRegister(&f.ed, 0).text, Str8Lit("two\n"));
+  CHECK(EditorGetRegister(&f.ed, 0).linewise);
+
+  Destroy(&f);
+}
+
 // ---------------------------------------------------------------------------
 // Undo and repeat
 // ---------------------------------------------------------------------------
@@ -1317,6 +1499,18 @@ TEST(vim_clipboard_round_trip_keeps_its_kind) {
   CHECK_STR(TextOf(&g), Str8Lit("abc defabc "));
   CHECK_EQ(BufferLineCount(BufferOf(&g)), 1);
   Destroy(&g);
+
+  Destroy(&f);
+}
+
+TEST(vim_clipboard_aliases_share_linewise_metadata) {
+  Fixture f = MakeFixture("one\ntwo");
+  InstallFakeClipboard(&f);
+
+  Type(&f, "\"+yy");
+  Register star = EditorGetRegister(&f.ed, '*');
+  CHECK_STR(star.text, Str8Lit("one\n"));
+  CHECK(star.linewise);
 
   Destroy(&f);
 }

@@ -68,6 +68,10 @@ struct VimState {
   // Anchor for visual mode; the selection runs between this and the cursor.
   u64 visual_anchor;
 
+  // Insert/Replace mode to return to after a temporary mouse-created visual
+  // selection. Normal means "unset".
+  VimMode mouse_visual_return_mode;
+
   // Register chosen with `"`, or 0 for the unnamed one. '+' and '*' reach the
   // system clipboard. Survives from the `"` through an operator to the motion
   // that completes it, so `"+dw` works.
@@ -102,5 +106,9 @@ struct VimState {
 void VimStateReset(VimState *vim);
 // Clears the pending count and operator after a command runs.
 void VimClearPending(VimState *vim);
+[[nodiscard]] bool VimHasMouseVisualReturnMode(const VimState *vim);
+void VimSetMouseVisualReturnMode(VimState *vim, VimMode mode);
+void VimClearMouseVisualReturnMode(VimState *vim);
+[[nodiscard]] VimMode VimConsumeVisualExitMode(VimState *vim, VimMode fallback);
 
 [[nodiscard]] String8 VimModeName(VimMode mode);

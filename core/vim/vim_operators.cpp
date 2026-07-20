@@ -12,6 +12,37 @@ namespace {
                   LineRangeWithNewline(&buffer->lines, &buffer->text, last).max};
 }
 
+[[nodiscard]] u64 ReplaceModeRangeEnd(const Buffer *buffer, u64 pos, String8 text) {
+  u64 end = pos;
+  for (u64 at = 0; at < text.size;) {
+    DecodedCodepoint cp = Utf8Decode(text, at);
+    at += cp.advance;
+
+    u64 line = BufferLineFromOffset(buffer, end);
+    u64 line_end = BufferLineEnd(buffer, line);
+    if (end < line_end) end = BufferNextCodepoint(buffer, end);
+  }
+  return end;
+}
+
+[[nodiscard]] String8 BufferFilteredText(Arena *arena, const Buffer *buffer, String8 text) {
+  String8 filtered = PushStr8Copy(arena, text);
+  if (HasFlag(buffer->flags, BufferFlags::SingleLine)) {
+    u64 newline = Str8FindFirstChar(filtered, '\n');
+    if (newline < filtered.size) filtered = Str8Prefix(filtered, newline);
+  }
+  return filtered;
+}
+
+[[nodiscard]] String8 RegisterBufferText(Arena *arena, const Buffer *buffer, Register reg) {
+  String8 text = BufferFilteredText(arena, buffer, reg.text);
+  if (!HasFlag(buffer->flags, BufferFlags::SingleLine) && reg.linewise && text.size > 0 &&
+      text.str[text.size - 1] != '\n') {
+    text = PushStr8Cat(arena, text, Str8Lit("\n"));
+  }
+  return text;
+}
+
 }  // namespace
 
 RangeU64 VimRangeFromMotion(const Buffer *buffer, u64 from, MotionResult motion) {
@@ -165,9 +196,9 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
   }
 }
 
-u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool after) {
-  Register reg = EditorGetRegister(ed, RegisterNormalise(view->vim.pending_register));
-  if (reg.text.size == 0) return pos;
+u64 VimPasteRegister(Editor *ed, View *view, Buffer *buffer, Register reg, u64 pos, u64 count,
+                     bool after) {
+  if (reg.text.size == 0 || BufferIsReadOnly(buffer)) return pos;
 
   // One undo step for the whole paste, even when a separator needs inserting.
   BufferBeginEditGroup(buffer);
@@ -176,9 +207,11 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
 
   // Expand `count` copies now so the whole paste is one undoable edit.
   // Linewise pieces each need a trailing newline to stay on separate lines.
-  String8 piece = reg.text;
-  if (reg.linewise && piece.size > 0 && piece.str[piece.size - 1] != '\n') {
-    piece = PushStr8Cat(scratch.arena, piece, Str8Lit("\n"));
+  String8 piece = RegisterBufferText(scratch.arena, buffer, reg);
+  if (piece.size == 0) {
+    ScratchEnd(scratch);
+    BufferEndEditGroup(buffer);
+    return pos;
   }
   String8List parts = {};
   for (u64 i = 0; i < count; i += 1) Str8ListPush(scratch.arena, &parts, piece);
@@ -259,6 +292,54 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
   ScratchEnd(scratch);
   BufferEndEditGroup(buffer);
   return cursor;
+}
+
+u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool after) {
+  Register reg = EditorGetRegister(ed, RegisterNormalise(view->vim.pending_register));
+  return VimPasteRegister(ed, view, buffer, reg, pos, count, after);
+}
+
+u64 VimInsertRegister(Editor *ed, View *view, Buffer *buffer, u64 pos, Register reg) {
+  if (reg.text.size == 0 || BufferIsReadOnly(buffer)) return pos;
+
+  TempArena scratch = ScratchBegin();
+  String8 text = BufferFilteredText(scratch.arena, buffer, reg.text);
+  if (text.size == 0) {
+    ScratchEnd(scratch);
+    return view->cursor;
+  }
+
+  if (view->vim.mode == VimMode::Replace) {
+    u64 end = ReplaceModeRangeEnd(buffer, pos, text);
+    BufferReplace(ed, buffer, RangeU64{pos, end}, text, pos, pos + text.size);
+  } else {
+    BufferInsert(ed, buffer, pos, text, pos, pos + text.size);
+  }
+
+  ScratchEnd(scratch);
+  return pos + text.size;
+}
+
+u64 VimReplaceVisual(Editor *ed, View *view, Buffer *buffer, Register replacement) {
+  RangeU64 selection = ViewSelection(view, buffer);
+  if (replacement.text.size == 0 || BufferIsReadOnly(buffer)) return selection.min;
+
+  TempArena scratch = ScratchBegin();
+  String8 text = RegisterBufferText(scratch.arena, buffer, replacement);
+  if (text.size == 0) {
+    ScratchEnd(scratch);
+    return selection.min;
+  }
+  bool linewise = (view->vim.mode == VimMode::VisualLine);
+
+  VimYankRange(ed, view, buffer, selection, linewise);
+  BufferReplace(ed, buffer, selection, text, view->cursor, selection.min);
+
+  view->vim.mode = VimConsumeVisualExitMode(&view->vim, VimMode::Normal);
+  ViewSetCursor(view, buffer, selection.min);
+
+  ScratchEnd(scratch);
+  return selection.min;
 }
 
 u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool indent) {

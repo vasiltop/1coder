@@ -105,6 +105,25 @@ namespace {
 
 }  // namespace
 
+void EditorCancelPendingInput(Editor *ed) {
+  if (!ed) return;
+
+  InputState *input = &ed->input;
+  ClearPending(input);
+  input->awaiting_char_command = CommandId::None;
+  input->awaiting_register = false;
+  input->register_follow_up = CommandId::None;
+  input->awaiting_text_object = false;
+  input->text_object_inner = false;
+  input->awaiting_confirm = false;
+  input->confirm_command = CommandId::None;
+  input->confirm_buffer = BufferHandleZero();
+  input->macro_count_pending = 0;
+
+  View *view = EditorInputView(ed);
+  if (view) VimClearPending(&view->vim);
+}
+
 Keymap *EditorActiveKeymap(Editor *ed) {
   View *view = EditorInputView(ed);
   Buffer *buffer = EditorBufferForView(ed, view);

@@ -35,6 +35,10 @@ void VimYankRange(Editor *ed, View *view, Buffer *buffer, RangeU64 range, bool l
 // Pastes the unnamed register. Linewise content lands on its own line, which is
 // why the register remembers how it was captured.
 u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool after);
+u64 VimPasteRegister(Editor *ed, View *view, Buffer *buffer, Register reg, u64 pos, u64 count,
+                     bool after);
+u64 VimInsertRegister(Editor *ed, View *view, Buffer *buffer, u64 pos, Register reg);
+u64 VimReplaceVisual(Editor *ed, View *view, Buffer *buffer, Register replacement);
 
 // Clean Neovim defaults (-u NONE): noexpandtab, tabstop=8, shiftwidth=8.
 // Indent inserts one tab; dedent removes one tabstop worth of visual columns.
