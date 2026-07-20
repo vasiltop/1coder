@@ -85,6 +85,32 @@ wchar_t *PushWide(Arena *arena, String8 s) {
   return out;
 }
 
+// The CRT keeps its own copy of the environment, taken once at startup;
+// SetEnvironmentVariable updates only the Win32 block, so getenv cannot see a
+// variable the process set at runtime. Read the live block instead, as
+// PushComSpec below already does -- otherwise a test that redirects PATH to a
+// fixture directory silently gets the real PATH.
+String8 GetEnvVar(Arena *arena, const wchar_t *name) {
+  DWORD need = GetEnvironmentVariableW(name, nullptr, 0);
+  if (need == 0) return String8{};
+
+  TempArena scratch = ScratchBegin1(arena);
+  wchar_t *wide = PushArrayNoZero(scratch.arena, wchar_t, need);
+  DWORD got = GetEnvironmentVariableW(name, wide, need);
+  String8 result = {};
+  if (got != 0 && got < need) {
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, wide, (int)got, nullptr, 0, nullptr, nullptr);
+    if (bytes > 0) {
+      u8 *out = PushArrayNoZero(arena, u8, (u64)bytes + 1);
+      WideCharToMultiByte(CP_UTF8, 0, wide, (int)got, (char *)out, bytes, nullptr, nullptr);
+      out[bytes] = 0;
+      result = Str8(out, (u64)bytes);
+    }
+  }
+  ScratchEnd(scratch);
+  return result;
+}
+
 constexpr u64 kWinIoChunk = 0x10000000;
 
 bool HandleIsExecutablePath(String8 path) {
@@ -95,8 +121,8 @@ bool HandleIsExecutablePath(String8 path) {
 }
 
 String8List GetExecutableExtensions(Arena *arena) {
-  const char *raw = getenv("PATHEXT");
-  String8 path_ext = raw ? Str8C(raw) : Str8Lit(".COM;.EXE;.BAT;.CMD");
+  String8 raw = GetEnvVar(arena, L"PATHEXT");
+  String8 path_ext = raw.size ? raw : Str8Lit(".COM;.EXE;.BAT;.CMD");
   String8List list = {};
 
   u64 start = 0;
@@ -430,9 +456,14 @@ String8 TryDirectExecutable(Arena *arena, String8 name) {
 }
 
 String8 FindOnPath(Arena *arena, String8 name) {
+#if defined(_WIN32)
+  String8 path = GetEnvVar(arena, L"PATH");
+  if (path.size == 0) return String8{};
+#else
   const char *raw_path = getenv("PATH");
   if (!raw_path || !*raw_path) return String8{};
   String8 path = Str8C(raw_path);
+#endif
 
   TempArena scratch = ScratchBegin1(arena);
 #if defined(_WIN32)
@@ -542,6 +573,22 @@ String8 OsFindExecutable(Arena *arena, String8 name) {
 
   if (HasPathSyntax(name)) return TryDirectExecutable(arena, name);
   return FindOnPath(arena, name);
+}
+
+String8 OsShellExecutable(Arena *arena) {
+  if (!arena) return String8{};
+#if defined(_WIN32)
+  String8 comspec = GetEnvVar(arena, L"ComSpec");
+  if (comspec.size > 0) return comspec;
+  String8 found = OsFindExecutable(arena, Str8Lit("cmd.exe"));
+  if (found.size > 0) return found;
+  return PushStr8Copy(arena, Str8Lit("C:/Windows/System32/cmd.exe"));
+#else
+  if (HandleIsExecutablePath(Str8Lit("/bin/sh"))) return PushStr8Copy(arena, Str8Lit("/bin/sh"));
+  String8 found = OsFindExecutable(arena, Str8Lit("sh"));
+  if (found.size > 0) return found;
+  return PushStr8Copy(arena, Str8Lit("/bin/sh"));
+#endif
 }
 
 bool OsProcessStart(OsProcess *process, const OsProcessCommand *command) {

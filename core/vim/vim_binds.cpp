@@ -7,9 +7,8 @@
 // same KeymapBind used by any other code, so nothing about these is privileged.
 //
 // These mirror the user's neovim config (~/.config/nvim/lua/config/keymaps.lua)
-// for every feature that exists here. Its mappings that depend on plugins or
-// LSP -- the file explorer, mini.pick, compile-mode, dap, neogit, search
-// highlighting -- have no counterpart yet and are left out rather than
+// for every feature that exists here. Its mappings that depend on plugins --
+// dap, neogit -- have no counterpart yet and are left out rather than
 // approximated.
 //
 // Note how `d` is bound only as an operator in the normal map, with the motions
@@ -172,6 +171,9 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, "<leader>cf", CommandId::lsp_format);
   KeymapBind(normal, "<leader>rn", CommandId::lsp_rename);
   KeymapBind(normal, "<leader>d", CommandId::lsp_diagnostic_float);
+
+  // compile-mode.nvim's recompile binding.
+  KeymapBind(normal, "<leader>rc", CommandId::recompile);
 
   // ---- text objects ----
   // `i` and `a` are prefixes: the chord after them names the object. They apply

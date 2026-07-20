@@ -56,7 +56,7 @@ struct App {
 
   String8 font_path;
   String8 font_face;
-  u32 lsp_wake_event;
+  u32 wake_event;
 };
 
 // ---------------------------------------------------------------------------
@@ -83,12 +83,12 @@ void ClipboardWrite(String8 text) {
   ScratchEnd(scratch);
 }
 
-void LspWake(void *user_data) {
+void EditorWake(void *user_data) {
   App *app = (App *)user_data;
-  if (app == nullptr || app->lsp_wake_event == 0) return;
+  if (app == nullptr || app->wake_event == 0) return;
 
   SDL_Event event = {};
-  event.type = app->lsp_wake_event;
+  event.type = app->wake_event;
   (void)SDL_PushEvent(&event);
 }
 
@@ -260,20 +260,22 @@ int main(int argc, char **argv) {
 
   DrawInit(&app->draw, arena, app->renderer, &app->atlas);
   RenderContextInit(&app->render, &app->draw, &app->atlas);
-  app->lsp_wake_event = SDL_RegisterEvents(1);
+  app->wake_event = SDL_RegisterEvents(1);
 
   // ---- editor ----
   i32 width = 0, height = 0;
   SDL_GetWindowSizeInPixels(app->window, &width, &height);
   EditorInit(&app->editor, arena, RenderScreenCells(&app->render, width, height));
   EditorLspConfig lsp = {};
-  lsp.wake = LspWake;
+  lsp.wake = EditorWake;
   lsp.wake_user_data = app;
   EditorLspEnable(&app->editor, &lsp);
 
   app->editor.font_size = font_size;
   app->editor.clipboard.read = ClipboardRead;
   app->editor.clipboard.write = ClipboardWrite;
+  app->editor.wake = EditorWake;
+  app->editor.wake_user_data = app;
 
   // Files named on the command line, each in its own split after the first.
   for (int i = 0; i < file_argc; i += 1) {

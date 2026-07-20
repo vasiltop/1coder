@@ -1,5 +1,6 @@
 #include "editor/editor.h"
 
+#include "buffers/buf_compile.h"
 #include "buffers/buf_explorer.h"
 #include "buffers/buf_image.h"
 #include "editor/command.h"
@@ -64,6 +65,7 @@ void EditorDestroy(Editor *ed) {
   EditorLspDestroy(ed);
   if (ed->lsp_ui) EditorLspUiDestroy(ed->lsp_ui);
   ed->lsp_ui = nullptr;
+  CompileBufferShutdown(ed);
   BufferRegistryDestroy(&ed->buffers);
 
   for (u64 i = 0; i < kRegisterCount; i += 1) {
@@ -73,11 +75,17 @@ void EditorDestroy(Editor *ed) {
   if (ed->status_arena) ArenaRelease(ed->status_arena);
   if (ed->command_line_arena) ArenaRelease(ed->command_line_arena);
   if (ed->search_arena) ArenaRelease(ed->search_arena);
+  if (ed->compile_arena) ArenaRelease(ed->compile_arena);
   ed->status_arena = nullptr;
   ed->command_line_arena = nullptr;
+  ed->compile_arena = nullptr;
 }
 
-bool EditorTick(Editor *ed) { return EditorLspTick(ed); }
+bool EditorTick(Editor *ed) {
+  bool lsp_changed = EditorLspTick(ed);
+  bool compile_changed = CompileBufferTick(ed);
+  return lsp_changed || compile_changed;
+}
 
 void EditorLayout(Editor *ed) {
   // The bottom row belongs to the command line and global status, so panels

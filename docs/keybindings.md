@@ -85,11 +85,20 @@ current file's directory. See [search](search.md) and [explorer](explorer.md).
 
 ## Language server protocol
 
-`gi` jumps to definition, `gd` to type definition, `gD` to implementation, `gt`
-shows type info. `<leader>cf` formats, `<leader>rn` renames, `<leader>d` lists
-diagnostics. In normal mode `<C-Space>` hovers; in insert mode it completes
-(cycle with Up/Down or Ctrl-N/Ctrl-P, accept with Enter, dismiss with Esc).
-See [language server protocol](lsp.md).
+`gi` jumps to implementation, `gd` to definition, `gD` to declaration, and `gt`
+to type definition. `<leader>cf` formats, `<leader>rn` renames, and `<leader>d`
+shows diagnostics at the cursor. In normal mode `<C-Space>` hovers; in insert
+mode it completes (cycle with Up/Down or Ctrl-N/Ctrl-P, accept with Enter,
+dismiss with Esc). See [language server protocol](lsp.md).
+
+## Compile
+
+`:compile <command>` runs any shell command and streams its output into a
+`[compile]` buffer. If that buffer is already visible in some window, that
+window is reused; otherwise it opens in a vertical split beside the current
+one (`:vsplit` / `<leader>v`). With no argument it opens the command window
+prefilled with the last command, or `make -k` if none has been run yet.
+`:recompile` and `<leader>rc` rerun the last command.
 
 ## The command window
 

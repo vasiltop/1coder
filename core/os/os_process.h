@@ -23,6 +23,8 @@ struct OsProcessRead {
 };
 
 [[nodiscard]] String8 OsFindExecutable(Arena *arena, String8 name);
+// Absolute path of the platform shell: /bin/sh, or %ComSpec% on Windows.
+[[nodiscard]] String8 OsShellExecutable(Arena *arena);
 [[nodiscard]] bool OsProcessStart(OsProcess *process, const OsProcessCommand *command);
 [[nodiscard]] bool OsProcessWrite(OsProcess *process, String8 bytes);
 [[nodiscard]] OsProcessRead OsProcessReadStdout(OsProcess *process, u8 *buffer, u64 capacity);

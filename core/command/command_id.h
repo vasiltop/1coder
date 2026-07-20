@@ -205,6 +205,9 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(lsp_completion,        "completion",            "Request manual completion",       CommandArg::None, CmdNone)        \
   X(lsp_hover,             "hover",                 "Show hover information",          CommandArg::None, CmdNone)        \
   X(lsp_diagnostic_float,  "diagnostic-float",      "Show diagnostics at cursor",      CommandArg::None, CmdNone)        \
+  /* ---- compile ---- */                                                                                                \
+  X(compile,               "compile",               "Run a shell command in the compile buffer", CommandArg::Text, CmdNone) \
+  X(recompile,             "recompile",             "Rerun the last compile command",  CommandArg::None, CmdNone)        \
   /* ---- display ---- */                                                                                                \
   X(line_numbers_absolute, "number",                "Show absolute line numbers",      CommandArg::None, CmdNone)        \
   X(line_numbers_relative, "relativenumber",        "Show relative line numbers",      CommandArg::None, CmdNone)        \
