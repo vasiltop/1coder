@@ -1,4 +1,5 @@
 #include "render/glyph_atlas.h"
+#include "render/render_metrics.h"
 
 #include "os/os_file.h"
 
@@ -117,7 +118,7 @@ bool GlyphAtlasInit(GlyphAtlas *atlas, Arena *arena, SDL_Renderer *renderer, Str
   // width for the whole grid.
   i32 advance = 0, bearing = 0;
   stbtt_GetCodepointHMetrics(info, 'M', &advance, &bearing);
-  atlas->advance = (f32)advance * atlas->scale;
+  atlas->advance = RenderCellMetric((f32)advance * atlas->scale);
 
   atlas->width = kAtlasWidth;
   atlas->height = kAtlasHeight;

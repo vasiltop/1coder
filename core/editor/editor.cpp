@@ -4,6 +4,7 @@
 #include "buffers/buf_image.h"
 #include "editor/command.h"
 #include "os/os_file.h"
+#include "text/syntax.h"
 
 // Provided by core/buffers/buf_command.cpp.
 BufferHandle CommandLineBufferOpen(Editor *ed);
@@ -230,6 +231,8 @@ BufferHandle EditorOpenFile(Editor *ed, String8 path) {
     buffer->path = PushStr8Copy(buffer->arena, absolute);
     buffer->name = PushStr8Copy(buffer->arena, Str8PathBase(absolute));
   }
+
+  SyntaxAttach(buffer, absolute);
 
   ScratchEnd(scratch);
   return handle;

@@ -99,7 +99,7 @@ enable_testing()
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS tests/*.cpp)
 
 add_executable(editor_tests ${TEST_SOURCES})
-target_include_directories(editor_tests PRIVATE tests)
+target_include_directories(editor_tests PRIVATE tests app)
 target_compile_options(editor_tests PRIVATE ${EDITOR_COMPILE_OPTIONS})
 target_link_libraries(editor_tests PRIVATE editor_core)
 
