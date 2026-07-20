@@ -113,9 +113,9 @@ struct MockTransport {
     Wake();
   }
 
-  void MarkFailed(String8 reason, String8 stderr = {}) {
+  void MarkFailed(String8 reason, String8 stderr_text = {}) {
     failure_reason = Copy(reason);
-    if (stderr.size > 0) stderr_summary = Copy(stderr);
+    if (stderr_text.size > 0) stderr_summary = Copy(stderr_text);
     Wake();
   }
 
