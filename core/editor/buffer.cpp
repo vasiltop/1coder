@@ -1,6 +1,8 @@
 #include "editor/buffer.h"
 
+#include "editor/editor.h"
 #include "editor/lsp.h"
+#include "editor/lsp_ui.h"
 #include "os/os_file.h"
 
 namespace {
@@ -10,6 +12,11 @@ namespace {
 // demand as a buffer actually grows.
 constexpr u64 kBufferArenaReserve = MB(64);
 constexpr u64 kBufferTextReserve = MB(512);
+
+void InvalidateLspPopup(Editor *ed, Buffer *buffer) {
+  if (ed == nullptr) return;
+  EditorLspUiInvalidatePopupIfStale(ed->lsp_ui, buffer);
+}
 
 }  // namespace
 
@@ -91,6 +98,7 @@ void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
   if (buffer->hooks.on_edit) {
     buffer->hooks.on_edit(ed, buffer, clamped, insert_text.size);
   }
+  InvalidateLspPopup(ed, buffer);
 
   ScratchEnd(scratch);
 }
@@ -110,6 +118,7 @@ void BufferSetText(Editor *ed, Buffer *buffer, String8 text) {
     buffer->hooks.on_edit(ed, buffer, RangeU64{0, 0}, text.size);
   }
   EditorLspAfterBufferReset(ed, buffer);
+  InvalidateLspPopup(ed, buffer);
 }
 
 u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
@@ -137,6 +146,7 @@ u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
     if (buffer->hooks.on_edit) {
       buffer->hooks.on_edit(ed, buffer, current, old_text.size);
     }
+    InvalidateLspPopup(ed, buffer);
     ScratchEnd(scratch);
   }
 
@@ -169,6 +179,7 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved) {
     if (buffer->hooks.on_edit) {
       buffer->hooks.on_edit(ed, buffer, current, new_text.size);
     }
+    InvalidateLspPopup(ed, buffer);
     ScratchEnd(scratch);
   }
 

@@ -37,6 +37,7 @@ struct ClipboardHooks {
 };
 
 struct EditorLsp;
+struct EditorLspUi;
 
 // Where a partly-typed chord sequence has got to, plus the machinery for
 // repeating the last change with `.`.
@@ -128,6 +129,7 @@ struct Editor {
 
   ClipboardHooks clipboard;
   EditorLsp *lsp;
+  EditorLspUi *lsp_ui;
 
   String8 cwd;
   String8 status_message;
@@ -147,6 +149,10 @@ struct Editor {
   // What the prompt is for: ':' runs a command, '/' and '?' search. The
   // character is also what the renderer draws in front of the typed text.
   u8 command_line_prompt;
+  Arena *command_line_arena;
+  String8 command_line_purpose;
+  bool command_line_rename_active;
+  BufferHandle command_line_rename_target;
 
   // In-file search. The pattern is editor-wide rather than per-view, as vim's
   // is: `/` in one window sets what `n` finds in every other.

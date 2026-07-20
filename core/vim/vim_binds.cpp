@@ -118,6 +118,10 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, "u", CommandId::undo);
   KeymapBind(normal, "<C-r>", CommandId::redo);
   KeymapBind(normal, ".", CommandId::repeat);
+  KeymapBind(normal, "gi", CommandId::lsp_implementation);
+  KeymapBind(normal, "gd", CommandId::lsp_definition);
+  KeymapBind(normal, "gD", CommandId::lsp_declaration);
+  KeymapBind(normal, "gt", CommandId::lsp_type_definition);
 
   // Jump list: <C-o> older, <C-i> newer. Tab is bound too because this input
   // path keeps Tab and Ctrl-I as distinct chords, while vim treats them alike.
@@ -145,6 +149,7 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, "<C-j>", CommandId::focus_down);
   KeymapBind(normal, "<C-k>", CommandId::focus_up);
   KeymapBind(normal, "<C-l>", CommandId::focus_right);
+  KeymapBind(normal, "<C-Space>", CommandId::lsp_hover);
 
   // ---- leader bindings ----
   // <leader>h and <leader>v mirror :split and :vsplit, so h is the horizontal
@@ -162,6 +167,9 @@ void EditorInstallDefaultBindings(Editor *ed) {
   // The explorer for the containing directory. `-` does the same thing; this is
   // the discoverable spelling of it.
   KeymapBind(normal, "<leader>e", CommandId::explorer_parent);
+  KeymapBind(normal, "<leader>cf", CommandId::lsp_format);
+  KeymapBind(normal, "<leader>rn", CommandId::lsp_rename);
+  KeymapBind(normal, "<leader>d", CommandId::lsp_diagnostic_float);
 
   // ---- text objects ----
   // `i` and `a` are prefixes: the chord after them names the object. They apply
@@ -229,6 +237,7 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(insert, "<C-BS>", CommandId::delete_word_before);
   // <C-r>{reg} inserts a register without leaving insert mode, as vim does.
   KeymapBind(insert, "<C-r>", CommandId::insert_register_prompt);
+  KeymapBind(insert, "<C-Space>", CommandId::lsp_completion);
   KeymapBind(insert, "<Left>", CommandId::cursor_left);
   KeymapBind(insert, "<Down>", CommandId::cursor_down);
   KeymapBind(insert, "<Up>", CommandId::cursor_up);

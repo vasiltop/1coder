@@ -1,6 +1,7 @@
 #include "editor/lsp.h"
 
 #include "editor/editor.h"
+#include "editor/lsp_ui.h"
 #include "lsp/json.h"
 
 #include <deque>
@@ -244,6 +245,37 @@ bool WriteDidClose(JsonWriter *writer, void *user_data) {
          JsonWriteObjectEnd(writer);
 }
 
+void ApplyNotification(EditorLsp *state, String8 method, const JsonValue *params) {
+  if (state == nullptr || state->editor == nullptr) return;
+
+  if (Str8Match(method, Str8Lit("textDocument/publishDiagnostics"))) {
+    String8 error = {};
+    if (!EditorLspUiApplyPublishDiagnostics(state->editor->lsp_ui, state->editor, params, &error)) {
+      if (error.size > 0) {
+        EditorSetStatusF(state->editor, "LSP: %.*s", (int)error.size, (char *)error.str);
+      } else {
+        EditorSetStatus(state->editor, Str8Lit("LSP: malformed diagnostics"));
+      }
+    }
+    return;
+  }
+
+  if (Str8Match(method, Str8Lit("window/showMessage")) ||
+      Str8Match(method, Str8Lit("window/logMessage"))) {
+    String8 message = {};
+    JsonValue *message_value = params ? JsonObjectGet(params, Str8Lit("message")) : nullptr;
+    if (JsonGetString(message_value, &message) && message.size > 0) {
+      EditorSetStatusF(state->editor, "LSP: %.*s", (int)message.size, (char *)message.str);
+    } else {
+      EditorSetStatus(state->editor, Str8Lit("LSP: malformed notification"));
+    }
+  }
+}
+
+void OnClientNotification(void *user_data, String8 method, const JsonValue *params) {
+  ApplyNotification((EditorLsp *)user_data, method, params);
+}
+
 void EraseDocument(EditorLsp *state, BufferHandle handle) {
   if (state == nullptr || handle.index == 0) return;
   for (auto it = state->documents.begin(); it != state->documents.end(); ++it) {
@@ -305,6 +337,7 @@ void StopAndClear(EditorLsp *state) {
   }
   state->sessions.clear();
   state->missing_servers.clear();
+  EditorLspUiReset(state->editor ? state->editor->lsp_ui : nullptr);
 }
 
 EditorLspSession *CreateSession(EditorLsp *state, LspLanguage language, String8 language_id,
@@ -333,6 +366,8 @@ EditorLspSession *CreateSession(EditorLsp *state, LspLanguage language, String8 
   config.workspace_root = root;
   config.wake = state->config.wake;
   config.wake_user_data = state->config.wake_user_data;
+  config.callbacks.notification = OnClientNotification;
+  config.callbacks.user_data = state;
   config.shutdown_timeout_ms = state->config.shutdown_timeout_ms;
   if (!LspClientConfigure(&session.client, &config)) {
     state->sessions.pop_back();
