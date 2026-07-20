@@ -164,6 +164,7 @@ class TestCorpus(unittest.TestCase):
     def test_focused_excluded_quick_included_full(self):
         quick = {(tn, k) for tn, _, k in vimdiff.all_cases(quick=True)}
         full  = {(tn, k) for tn, _, k in vimdiff.all_cases(quick=False)}
+        self.assertLessEqual(quick, full)
         for tn, k in vimdiff.FOCUSED_CASES:
             self.assertNotIn((tn, k), quick, "focused in quick: %r" % k)
             self.assertIn((tn, k), full,    "focused missing from full: %r" % k)

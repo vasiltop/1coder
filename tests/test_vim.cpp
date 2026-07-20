@@ -1004,6 +1004,13 @@ TEST(vim_text_object_word) {
   Destroy(&f);
 }
 
+TEST(vim_inner_word_on_empty_line_is_noop) {
+  Fixture f = MakeFixture("\nafter blank\n");
+  Type(&f, "diw");
+  CHECK_STR(TextOf(&f), Str8Lit("\nafter blank\n"));
+  Destroy(&f);
+}
+
 TEST(vim_text_object_delimited_and_quoted) {
   Fixture f = MakeFixture("foo(barbaz) end");
   Type(&f, "f(lci(X<Esc>");
@@ -2190,6 +2197,14 @@ TEST(vim_charwise_delete_singleline_empty_keeps_newline) {
   Type(&f, "d$");
   CHECK_STR(TextOf(&f), Str8Lit(""));
   CHECK(BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_charwise_delete_empty_buffer_keeps_noeol) {
+  Fixture f = MakeFixture("");
+  BufferOf(&f)->final_newline = false;
+  Type(&f, "d$");
+  CHECK(!BufferOf(&f)->final_newline);
   Destroy(&f);
 }
 

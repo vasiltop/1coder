@@ -214,7 +214,7 @@ MOTIONS = [
 
 OPERATORS = [
     "dw", "dW", "de", "db", "d$", "d0", "d^", "d_", "dd", "2dd", "dj", "dk", "dG", "dgg",
-    "yw", "yy", "ye", "y$",
+    "yw", "yy", "ye", "y$", "diw",
     "cwZZ<Esc>", "cc新<Esc>", "c$Q<Esc>",
     ">>", "<<", ">j", "2>>",
 ]
@@ -226,7 +226,7 @@ EDITS = [
 ]
 
 PASTES = [
-    "yyp", "yyP", "ywp", "ywP", "yep", "ddp", "ddP", "dwp", "dwP",
+    "p", "P", "yyp", "yyP", "ywp", "ywP", "yep", "ddp", "ddP", "dwp", "dwP",
     "yy2p", "xp", "xP",
 ]
 

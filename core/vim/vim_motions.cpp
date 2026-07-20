@@ -386,7 +386,9 @@ MotionResult MotionMatchingBracket(const Buffer *b, const View *, u64 pos, u64, 
 
 TextObjectResult TextObjectWord(const Buffer *b, u64 pos, u64 count, bool inner, bool big) {
   u64 size = BufferSize(b);
-  if (size == 0) return TextObjectResult{RangeU64{0, 0}, false, false};
+  if (pos >= size || IsNewline(b, pos)) {
+    return TextObjectResult{RangeU64{pos, pos}, false, false};
+  }
 
   auto classify = big ? ClassOfBig : ClassOf;
   CharClass start_class = classify(BufferByteAt(b, pos));

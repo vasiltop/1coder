@@ -103,6 +103,7 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
     }
 
     case OperatorKind::Delete: {
+      u64 size_before = BufferSize(buffer);
       BufferBeginEditGroup(buffer);
       VimYankRange(ed, view, buffer, range, linewise);
 
@@ -114,7 +115,7 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
 
       BufferDelete(ed, buffer, range, view->cursor, range.min);
 
-      if (BufferSize(buffer) == 0)
+      if (BufferSize(buffer) == 0 && (cross_line || size_before > 0))
         BufferSetFinalNewline(buffer, !cross_line);
 
       BufferEndEditGroup(buffer);
