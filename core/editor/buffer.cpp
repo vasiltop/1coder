@@ -67,7 +67,6 @@ void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
 
   if (RangeEmpty(clamped) && new_text.size == 0) return;
 
-  // Capture pre-mutation syntax state for incremental update.
   SyntaxEdit syn_edit = SyntaxBeginEdit(buffer, clamped);
 
   // Snapshot the outgoing text for undo before the gap buffer forgets it.
@@ -84,8 +83,7 @@ void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
 
   LineIndexEdit(&buffer->lines, &buffer->text, clamped, insert_text.size);
 
-  // Incremental syntax update after line index is consistent.
-  SyntaxEndEdit(buffer, syn_edit, RangeU64{clamped.min, clamped.min + insert_text.size});
+  SyntaxEndEdit(buffer, syn_edit);
 
   UndoPush(&buffer->undo, clamped, old_text, insert_text, cursor_before, cursor_after);
 
@@ -106,9 +104,6 @@ void BufferSetText(Editor *ed, Buffer *buffer, String8 text) {
   if (text.size) GapBufferInsert(&buffer->text, 0, text);
 
   LineIndexRebuild(&buffer->lines, &buffer->text);
-  // A whole-buffer replacement invalidates every token by construction, so a
-  // highlighted buffer must re-lex rather than keep showing stale ranges.
-  // SyntaxRebuild no-ops when nothing is attached.
   SyntaxRebuild(buffer);
   UndoClear(&buffer->undo);
   buffer->flags &= ~BufferFlags::Dirty;
@@ -132,7 +127,6 @@ u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
     const UndoRecord *rec = &step.records[i - 1];
     RangeU64 current = RangeU64{rec->range.min, rec->range.min + rec->new_text.size};
 
-    // Capture pre-mutation syntax state.
     SyntaxEdit syn_edit = SyntaxBeginEdit(buffer, current);
 
     TempArena scratch = ScratchBegin();
@@ -142,8 +136,7 @@ u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
     if (old_text.size) GapBufferInsert(&buffer->text, current.min, old_text);
     LineIndexEdit(&buffer->lines, &buffer->text, current, old_text.size);
 
-    // Incremental syntax update.
-    SyntaxEndEdit(buffer, syn_edit, RangeU64{current.min, current.min + old_text.size});
+    SyntaxEndEdit(buffer, syn_edit);
 
     buffer->edit_serial += 1;
 
@@ -170,7 +163,6 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved) {
     const UndoRecord *rec = &step.records[i];
     RangeU64 current = RangeU64{rec->range.min, rec->range.min + rec->old_text.size};
 
-    // Capture pre-mutation syntax state.
     SyntaxEdit syn_edit = SyntaxBeginEdit(buffer, current);
 
     TempArena scratch = ScratchBegin();
@@ -180,8 +172,7 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved) {
     if (new_text.size) GapBufferInsert(&buffer->text, current.min, new_text);
     LineIndexEdit(&buffer->lines, &buffer->text, current, new_text.size);
 
-    // Incremental syntax update.
-    SyntaxEndEdit(buffer, syn_edit, RangeU64{current.min, current.min + new_text.size});
+    SyntaxEndEdit(buffer, syn_edit);
 
     buffer->edit_serial += 1;
 
@@ -318,7 +309,6 @@ bool BufferSaveFile(Buffer *buffer, String8 path) {
     if (path_changed) {
       buffer->path = PushStr8Copy(buffer->arena, path);
       buffer->name = PushStr8Copy(buffer->arena, Str8PathBase(path));
-      // Reselect syntax if the language changed due to new extension.
       SyntaxAttach(buffer, path);
     }
     buffer->flags &= ~BufferFlags::Dirty;

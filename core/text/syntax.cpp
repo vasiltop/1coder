@@ -2,29 +2,12 @@
 
 #include "editor/buffer.h"
 
-// Full-buffer lexer. See syntax.h for the shape of the cache this fills in;
-// this file is the scanner itself.
-//
-// The design is deliberately dumb: no lookahead beyond what a single language
-// rule needs, no AST, no incremental re-lex (that is Task 3). Every rule reads
-// straight from LanguageDefinition, so adding a language is a data change in
-// syntax_languages.cpp, never a change here.
-
 namespace {
 
 constexpr u64 kSyntaxArenaReserve = MB(64);
 constexpr u64 kSyntaxInitialLineCapacity = 256;
 constexpr u64 kSyntaxInitialTokenCapacity = 256;
 
-// ---------------------------------------------------------------------------
-// Byte-level matching against buffer storage
-//
-// The gap buffer is not contiguous, so every comparison goes through
-// BufferByteAt one byte at a time rather than taking a pointer into it.
-// ---------------------------------------------------------------------------
-
-// True when the bytes at [pos, pos + pattern.size) equal `pattern`, without
-// reading past `end`.
 [[nodiscard]] bool MatchAt(const Buffer *buffer, u64 pos, u64 end, String8 pattern) {
   if (pattern.size == 0 || pos + pattern.size > end) return false;
   for (u64 k = 0; k < pattern.size; k += 1) {
@@ -33,9 +16,6 @@ constexpr u64 kSyntaxInitialTokenCapacity = 256;
   return true;
 }
 
-// True when [start, end) contains exactly `word`'s bytes -- used to compare a
-// scanned identifier against a keyword table entry without ever materialising
-// the identifier as a String8.
 [[nodiscard]] bool IdentifierEquals(const Buffer *buffer, u64 start, u64 end, String8 word) {
   if (end - start != word.size) return false;
   for (u64 k = 0; k < word.size; k += 1) {
@@ -44,10 +24,6 @@ constexpr u64 kSyntaxInitialTokenCapacity = 256;
   return true;
 }
 
-// Searches [start, end) for `close`, honouring backslash escapes when
-// requested (block comments do not support escaping their closer; quoted
-// strings and backtick/triple strings do). On success `*out_end` is the
-// offset just past the matched closer.
 [[nodiscard]] bool FindClose(const Buffer *buffer, u64 start, u64 end, String8 close,
                               bool allow_escape, u64 *out_end) {
   u64 i = start;
@@ -87,15 +63,6 @@ constexpr u64 kSyntaxInitialTokenCapacity = 256;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Growth helpers
-//
-// Both arrays live in the cache's dedicated arena, so "growing" means pushing
-// a bigger block and copying forward -- the arena is a bump allocator, not a
-// realloc, so the previous (smaller) block is simply abandoned. Doubling
-// bounds the total waste to the same order as the final size.
-// ---------------------------------------------------------------------------
-
 void EnsureLineCapacity(SyntaxCache *cache, u64 needed) {
   if (needed <= cache->line_capacity) return;
 
@@ -108,12 +75,7 @@ void EnsureLineCapacity(SyntaxCache *cache, u64 needed) {
   cache->line_capacity = new_capacity;
 }
 
-// `current_count` is the number of live tokens *right now* -- during
-// SyntaxRebuild that is the scan's running local counter, not
-// `buffer->tokens.count` (which stays 0 until the whole rebuild finishes and
-// is assigned once at the end). Copying from `buffer->tokens.count` instead
-// would see 0 on every growth mid-rebuild and silently drop every token
-// appended so far into uninitialized memory.
+// Rebuild tracks live tokens locally, so callers pass the count to preserve.
 void EnsureTokenCapacity(Buffer *buffer, u64 current_count, u64 needed) {
   SyntaxCache *cache = &buffer->syntax;
   if (needed <= cache->token_capacity) return;
@@ -127,18 +89,12 @@ void EnsureTokenCapacity(Buffer *buffer, u64 current_count, u64 needed) {
   cache->token_capacity = new_capacity;
 }
 
-// Appends a token, dropping empty ranges so the array stays the non-empty,
-// non-Default set the renderer seam promises.
 void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind kind) {
   if (end <= start) return;
   EnsureTokenCapacity(buffer, *token_count, *token_count + 1);
   buffer->tokens.tokens[*token_count] = Token{start, end, kind};
   *token_count += 1;
 }
-
-// ---------------------------------------------------------------------------
-// Identifier classification
-// ---------------------------------------------------------------------------
 
 [[nodiscard]] TokenKind ClassifyIdentifier(const Buffer *buffer, const LanguageDefinition *lang,
                                             u64 start, u64 end, u64 line_end) {
@@ -149,24 +105,12 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
     }
   }
 
-  // Not a keyword: a call site is the identifier immediately (modulo
-  // horizontal whitespace) followed by '('.
   u64 p = end;
   while (p < line_end && CharIsSpace(BufferByteAt(buffer, p))) p += 1;
   if (p < line_end && BufferByteAt(buffer, p) == '(') return TokenKind::Function;
 
   return TokenKind::Default;
 }
-
-// ---------------------------------------------------------------------------
-// Number scanning
-//
-// Covers decimal integers/floats/exponents and 0x/0b/0o-prefixed integers,
-// with '_' digit separators. Stops at the first byte that would not extend a
-// sensible numeric literal, so a suffix like the `f` in `1.0f` or trailing
-// prose like `123abc` is left for the identifier scanner (which will simply
-// not classify it, leaving it Default) rather than folded into the number.
-// ---------------------------------------------------------------------------
 
 [[nodiscard]] u64 ScanNumber(const Buffer *buffer, u64 start, u64 end) {
   u64 i = start;
@@ -221,14 +165,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
   return i;
 }
 
-// ---------------------------------------------------------------------------
-// Per-line scan
-// ---------------------------------------------------------------------------
-
-// Scans one line's bytes [range.min, range.max), which never include the
-// line's newline (BufferLineRange excludes it), continuing whatever
-// multiline construct `incoming` describes and returning the state the next
-// line inherits.
 [[nodiscard]] SyntaxState ScanLine(Buffer *buffer, const LanguageDefinition *lang, RangeU64 range,
                                     SyntaxState incoming, u64 *token_count) {
   u64 i = range.min;
@@ -236,8 +172,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
   const u64 end = range.max;
   SyntaxMode mode = incoming.mode;
 
-  // Continue a construct opened on a previous line before anything else --
-  // it takes precedence over every other rule until it closes.
   if (mode == SyntaxMode::BlockComment) {
     u64 close_end = 0;
     if (FindClose(buffer, i, end, lang->block_comment_close, false, &close_end)) {
@@ -271,12 +205,7 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
     }
   }
 
-  // A leading '#' (modulo indentation) on an otherwise-fresh line is a whole-
-  // line preprocessor directive for languages that have them (C/C++). This
-  // must only fire when `i` is still at the true line start: if a multiline
-  // construct carried in from a previous line and closed mid-line above, `i`
-  // has already moved past that closer, and whatever follows on the same
-  // line is not line-leading even though `mode` just resolved to Default.
+  // A directive is valid only before any other token on the physical line.
   if (lang->preprocessor_directives && i == line_start && i < end) {
     u64 p = i;
     while (p < end && CharIsSpace(BufferByteAt(buffer, p))) p += 1;
@@ -289,7 +218,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
   while (i < end) {
     u8 c = BufferByteAt(buffer, i);
 
-    // Block comment open.
     if (lang->block_comment_open.size > 0 && MatchAt(buffer, i, end, lang->block_comment_open)) {
       u64 close_end = 0;
       u64 search_start = i + lang->block_comment_open.size;
@@ -303,7 +231,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
       continue;
     }
 
-    // Line comments -- the rest of the line, no state carried.
     bool matched_line_comment = false;
     for (u64 lc = 0; lc < lang->line_comment_count; lc += 1) {
       String8 prefix = lang->line_comments[lc];
@@ -316,7 +243,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
     }
     if (matched_line_comment) break;
 
-    // Triple-quoted strings (Python).
     if (lang->triple_quoted_strings) {
       bool is_single = MatchAt(buffer, i, end, Str8Lit("'''"));
       bool is_double = !is_single && MatchAt(buffer, i, end, Str8Lit("\"\"\""));
@@ -335,7 +261,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
       }
     }
 
-    // Backtick strings (JS/TS/Go).
     if (lang->backtick_strings && c == '`') {
       u64 close_end = 0;
       if (FindClose(buffer, i + 1, end, Str8Lit("`"), true, &close_end)) {
@@ -348,8 +273,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
       continue;
     }
 
-    // Double-quoted strings. Unterminated stops at line end -- no state is
-    // carried across lines for these, unlike block/triple/backtick.
     if (c == '"') {
       u64 close_end = 0;
       bool closed = FindClose(buffer, i + 1, end, Str8Lit("\""), true, &close_end);
@@ -359,7 +282,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
       continue;
     }
 
-    // Single-quoted strings or characters, depending on the language.
     if (c == '\'') {
       u64 close_end = 0;
       bool closed = FindClose(buffer, i + 1, end, Str8Lit("'"), true, &close_end);
@@ -370,7 +292,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
       continue;
     }
 
-    // Numbers.
     if (CharIsDigit(c) || (c == '.' && i + 1 < end && CharIsDigit(BufferByteAt(buffer, i + 1)))) {
       u64 number_end = ScanNumber(buffer, i, end);
       AppendToken(buffer, token_count, i, number_end, TokenKind::Number);
@@ -378,7 +299,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
       continue;
     }
 
-    // Identifiers, keyword classification, and function-call detection.
     if (CharIsAlpha(c) || c == '_') {
       u64 ident_end = i + 1;
       while (ident_end < end) {
@@ -393,7 +313,6 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
       continue;
     }
 
-    // Operators: runs of adjacent operator bytes become one token.
     if (IsOperatorByte(c)) {
       u64 op_end = i + 1;
       while (op_end < end && IsOperatorByte(BufferByteAt(buffer, op_end))) op_end += 1;
@@ -402,16 +321,12 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
       continue;
     }
 
-    // Punctuation: one byte each.
     if (IsPunctuationByte(c)) {
       AppendToken(buffer, token_count, i, i + 1, TokenKind::Punctuation);
       i += 1;
       continue;
     }
 
-    // Whitespace and anything unrecognised -- including UTF-8 continuation
-    // and lead bytes, which stay Default and keep offsets byte-based rather
-    // than being decoded here -- advance one byte at a time.
     i += 1;
   }
 
@@ -424,17 +339,11 @@ void SyntaxAttach(Buffer *buffer, String8 path) {
   const LanguageDefinition *lang = SyntaxLanguageForPath(path);
   SyntaxCache *cache = &buffer->syntax;
 
-  // Reattaching the same resolved language changes nothing structural, so
-  // callers -- e.g. re-opening or re-saving the same file -- do not pay for a
-  // rebuild they do not need.
   if (cache->arena != nullptr && cache->language == lang) return;
 
   if (cache->arena == nullptr) {
     cache->arena = ArenaAlloc(kSyntaxArenaReserve);
   } else {
-    // Changing language: drop everything derived from the old one. Clearing
-    // (rather than releasing) keeps the already-committed pages, so repeated
-    // attach/detach on the same buffer does not keep re-growing.
     ArenaClear(cache->arena);
   }
 
@@ -457,9 +366,6 @@ void SyntaxRebuild(Buffer *buffer) {
   SyntaxCache *cache = &buffer->syntax;
   if (cache->arena == nullptr || cache->language == nullptr) return;
 
-  // Every token and every line-cache entry is derived fresh below, so reclaim
-  // the arena up front rather than letting each rebuild pile more geometric
-  // growth atop the last one.
   ArenaClear(cache->arena);
   cache->lines = nullptr;
   cache->line_count = 0;
@@ -488,10 +394,6 @@ void SyntaxRebuild(Buffer *buffer) {
   buffer->tokens.count = token_count;
 }
 
-// ---------------------------------------------------------------------------
-// Incremental syntax update
-// ---------------------------------------------------------------------------
-
 SyntaxEdit SyntaxBeginEdit(const Buffer *buffer, RangeU64 old_range) {
   SyntaxEdit edit = {};
   const SyntaxCache *cache = &buffer->syntax;
@@ -506,12 +408,10 @@ SyntaxEdit SyntaxBeginEdit(const Buffer *buffer, RangeU64 old_range) {
   edit.old_start_line = BufferLineFromOffset(buffer, start_off);
   edit.old_end_line = BufferLineFromOffset(buffer, end_off);
 
-  // State entering the first changed line.
   edit.start_state = (edit.old_start_line == 0)
     ? SyntaxState{SyntaxMode::Default}
     : cache->lines[edit.old_start_line - 1].outgoing;
 
-  // Token boundaries: prefix tokens are all tokens before old_start_line.
   edit.prefix_token_end = cache->lines[edit.old_start_line].first_token;
 
   edit.old_token_count = buffer->tokens.count;
@@ -519,17 +419,15 @@ SyntaxEdit SyntaxBeginEdit(const Buffer *buffer, RangeU64 old_range) {
   return edit;
 }
 
-void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 /*new_range*/) {
+void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit) {
   SyntaxCache *cache = &buffer->syntax;
   if (cache->arena == nullptr || cache->language == nullptr) return;
 
   u64 new_size = BufferSize(buffer);
   u64 new_line_count = BufferLineCount(buffer);
 
-  // Byte delta for shifting suffix tokens.
   i64 byte_delta = (i64)new_size - (i64)edit.old_size;
 
-  // Line geometry.
   i64 line_delta = (i64)new_line_count - (i64)edit.old_line_count;
   u64 old_edited_lines = edit.old_end_line - edit.old_start_line + 1;
   u64 new_edited_lines = (u64)((i64)old_edited_lines + line_delta);
@@ -538,10 +436,8 @@ void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 /*new_range*/) {
     ? (edit.old_line_count - edit.old_end_line - 1) : 0;
   u64 total_new_lines = edit.old_start_line + new_edited_lines + old_suffix_lines;
 
-  // Grow line cache if needed.
   EnsureLineCapacity(cache, total_new_lines);
 
-  // Move suffix line-cache entries to their new positions.
   u64 old_suffix_idx = edit.old_end_line + 1;
   u64 new_suffix_idx = edit.old_start_line + new_edited_lines;
 
@@ -556,12 +452,6 @@ void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 /*new_range*/) {
   }
   cache->line_count = total_new_lines;
 
-  // --- Rescan lines, collecting tokens into scratch storage. ---
-  // We scan from edit.old_start_line onward.  After all lines in the new
-  // edited region are scanned, we check each suffix line: if the state we
-  // carry into it equals its (already-moved) cached incoming state, we stop
-  // (convergence) and retain the remaining suffix tokens with a byte shift.
-
   TempArena scratch = ScratchBegin(&cache->arena, 1);
 
   u64 rescan_cap = 256;
@@ -570,11 +460,9 @@ void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 /*new_range*/) {
 
   SyntaxState state = edit.start_state;
   u64 lines_scanned = 0;
-  u64 converge_line = total_new_lines; // line where we stopped (suffix kept from here)
+  u64 converge_line = total_new_lines;
 
   for (u64 line = edit.old_start_line; line < total_new_lines; line += 1) {
-    // Check convergence: once we are past the edited region and our state
-    // matches the cached incoming state of this (moved) suffix line, stop.
     if (line >= new_suffix_idx) {
       if (state.mode == cache->lines[line].incoming.mode) {
         converge_line = line;
@@ -586,8 +474,7 @@ void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 /*new_range*/) {
     SyntaxState incoming = state;
     u64 first_tok = rescan_count;
 
-    // Redirect buffer->tokens to our scratch array so ScanLine/AppendToken
-    // works unmodified.
+    // Reuse ScanLine with scratch token storage.
     Token *saved_tokens = buffer->tokens.tokens;
     u64 saved_count_val = buffer->tokens.count;
     u64 saved_cap = cache->token_capacity;
@@ -598,7 +485,6 @@ void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 /*new_range*/) {
     u64 local_count = rescan_count;
     state = ScanLine(buffer, cache->language, range, incoming, &local_count);
 
-    // Pick up growth if EnsureTokenCapacity triggered.
     rescan_tokens = buffer->tokens.tokens;
     rescan_cap = cache->token_capacity;
     rescan_count = local_count;
@@ -611,26 +497,18 @@ void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 /*new_range*/) {
     lines_scanned += 1;
   }
 
-  // --- Determine suffix tokens to retain ---
-  // If we converged at `converge_line`, the suffix tokens start at the old
-  // token index stored in that line's (moved) cache entry.  Otherwise there
-  // are no suffix tokens to retain (we rescanned everything).
-  u64 retained_suffix_token_start = edit.old_token_count; // sentinel: nothing
+  u64 retained_suffix_token_start = edit.old_token_count;
   u64 retained_suffix_count = 0;
   if (converge_line < total_new_lines) {
     retained_suffix_token_start = cache->lines[converge_line].first_token;
     retained_suffix_count = edit.old_token_count - retained_suffix_token_start;
   }
 
-  // --- Splice token array: [prefix] [rescanned] [shifted suffix] ---
   u64 new_total_tokens = edit.prefix_token_end + rescan_count + retained_suffix_count;
 
-  // Growth must preserve the entire old array (not just prefix) because the
-  // retained suffix is read from old indices after reallocation.
+  // The retained suffix is still read from old indices after growth.
   EnsureTokenCapacity(buffer, edit.old_token_count, new_total_tokens);
 
-  // Shift and copy retained suffix tokens.  Source and destination may overlap
-  // so copy in the safe direction.
   if (retained_suffix_count > 0) {
     u64 src = retained_suffix_token_start;
     u64 dst = edit.prefix_token_end + rescan_count;
@@ -651,22 +529,18 @@ void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 /*new_range*/) {
     }
   }
 
-  // Copy rescanned tokens.
   for (u64 i = 0; i < rescan_count; i += 1) {
     buffer->tokens.tokens[edit.prefix_token_end + i] = rescan_tokens[i];
   }
 
   buffer->tokens.count = new_total_tokens;
 
-  // --- Fix up first_token indices and update suffix incoming states. ---
   u64 running = 0;
   for (u64 line = 0; line < total_new_lines; line += 1) {
     cache->lines[line].first_token = running;
     running += cache->lines[line].token_count;
   }
 
-  // If we converged, fix the incoming state of the convergence line to match
-  // (it already should, but be explicit).
   if (converge_line < total_new_lines) {
     cache->lines[converge_line].incoming = state;
   }

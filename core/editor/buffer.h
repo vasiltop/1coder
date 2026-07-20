@@ -100,7 +100,7 @@ struct Buffer {
   LineIndex lines;
   UndoStack undo;
   TokenArray tokens;
-  SyntaxCache syntax;  // producer of `tokens`, when highlighting is attached
+  SyntaxCache syntax;
 
   // Bumped on every edit. Lets consumers -- dot-repeat recording, syntax
   // providers -- notice a change without diffing the text.

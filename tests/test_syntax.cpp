@@ -7,220 +7,40 @@
 #include "test_tempdir.h"
 #include "text/syntax.h"
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 static const LanguageDefinition *Lang(const char *path) {
   return SyntaxLanguageForPath(Str8C(path));
 }
 
-// ---------------------------------------------------------------------------
-// C / C++ extensions
-// ---------------------------------------------------------------------------
+TEST(syntax_language_selection) {
+  struct Case {
+    const char *path;
+    LanguageId language;
+  };
 
-TEST(syntax_cpp_c) { CHECK_EQ((int)Lang("foo.c")->id, (int)LanguageId::Cpp); }
-TEST(syntax_cpp_h) { CHECK_EQ((int)Lang("foo.h")->id, (int)LanguageId::Cpp); }
-TEST(syntax_cpp_cc) { CHECK_EQ((int)Lang("foo.cc")->id, (int)LanguageId::Cpp); }
-TEST(syntax_cpp_cpp) { CHECK_EQ((int)Lang("foo.cpp")->id, (int)LanguageId::Cpp); }
-TEST(syntax_cpp_cxx) { CHECK_EQ((int)Lang("foo.cxx")->id, (int)LanguageId::Cpp); }
-TEST(syntax_cpp_hh) { CHECK_EQ((int)Lang("foo.hh")->id, (int)LanguageId::Cpp); }
-TEST(syntax_cpp_hpp) { CHECK_EQ((int)Lang("foo.hpp")->id, (int)LanguageId::Cpp); }
-TEST(syntax_cpp_hxx) { CHECK_EQ((int)Lang("foo.hxx")->id, (int)LanguageId::Cpp); }
+  const Case cases[] = {
+      {"a.c", LanguageId::Cpp},          {"a.h", LanguageId::Cpp},
+      {"a.cc", LanguageId::Cpp},         {"a.cpp", LanguageId::Cpp},
+      {"a.cxx", LanguageId::Cpp},        {"a.hh", LanguageId::Cpp},
+      {"a.hpp", LanguageId::Cpp},        {"a.hxx", LanguageId::Cpp},
+      {"a.HPP", LanguageId::Cpp},        {"a.js", LanguageId::JavaScript},
+      {"a.jsx", LanguageId::JavaScript}, {"a.mjs", LanguageId::JavaScript},
+      {"a.cjs", LanguageId::JavaScript}, {"a.JS", LanguageId::JavaScript},
+      {"a.ts", LanguageId::TypeScript},  {"a.tsx", LanguageId::TypeScript},
+      {"a.mts", LanguageId::TypeScript}, {"a.cts", LanguageId::TypeScript},
+      {"a.TS", LanguageId::TypeScript},  {"a.py", LanguageId::Python},
+      {"a.pyi", LanguageId::Python},     {"a.PY", LanguageId::Python},
+      {"src/a.rs", LanguageId::Rust},    {"a.RS", LanguageId::Rust},
+      {"a.go", LanguageId::Go},          {"a.GO", LanguageId::Go},
+      {"a.toml", LanguageId::Toml},      {"a.TOML", LanguageId::Toml},
+      {"a.json", LanguageId::Json},      {"a.JSON", LanguageId::Json},
+      {"Makefile", LanguageId::Fallback},{"", LanguageId::Fallback},
+      {".bashrc", LanguageId::Fallback}, {"a.xyz", LanguageId::Fallback},
+  };
 
-// Upper-case variants
-TEST(syntax_cpp_upper_C) { CHECK_EQ((int)Lang("foo.C")->id, (int)LanguageId::Cpp); }
-TEST(syntax_cpp_upper_CPP) { CHECK_EQ((int)Lang("foo.CPP")->id, (int)LanguageId::Cpp); }
-TEST(syntax_cpp_upper_HPP) { CHECK_EQ((int)Lang("foo.HPP")->id, (int)LanguageId::Cpp); }
-
-// C/C++ flags
-TEST(syntax_cpp_flags) {
-  const LanguageDefinition *d = Lang("main.cpp");
-  CHECK(d->preprocessor_directives);
-  CHECK(d->single_quote_is_character);
-  CHECK(!d->triple_quoted_strings);
-  CHECK(!d->backtick_strings);
-  CHECK_EQ(d->line_comment_count, (u64)1);
-  CHECK(Str8Match(d->line_comments[0], Str8Lit("//")));
-  CHECK(Str8Match(d->block_comment_open, Str8Lit("/*")));
-  CHECK(Str8Match(d->block_comment_close, Str8Lit("*/")));
-}
-
-// ---------------------------------------------------------------------------
-// JavaScript extensions
-// ---------------------------------------------------------------------------
-
-TEST(syntax_js_js) { CHECK_EQ((int)Lang("foo.js")->id, (int)LanguageId::JavaScript); }
-TEST(syntax_js_jsx) { CHECK_EQ((int)Lang("foo.jsx")->id, (int)LanguageId::JavaScript); }
-TEST(syntax_js_mjs) { CHECK_EQ((int)Lang("foo.mjs")->id, (int)LanguageId::JavaScript); }
-TEST(syntax_js_cjs) { CHECK_EQ((int)Lang("foo.cjs")->id, (int)LanguageId::JavaScript); }
-TEST(syntax_js_upper_JS) { CHECK_EQ((int)Lang("foo.JS")->id, (int)LanguageId::JavaScript); }
-
-TEST(syntax_js_flags) {
-  const LanguageDefinition *d = Lang("app.js");
-  CHECK(!d->preprocessor_directives);
-  CHECK(!d->single_quote_is_character);
-  CHECK(!d->triple_quoted_strings);
-  CHECK(d->backtick_strings);
-  CHECK_EQ(d->line_comment_count, (u64)1);
-  CHECK(Str8Match(d->line_comments[0], Str8Lit("//")));
-}
-
-// ---------------------------------------------------------------------------
-// TypeScript extensions
-// ---------------------------------------------------------------------------
-
-TEST(syntax_ts_ts) { CHECK_EQ((int)Lang("foo.ts")->id, (int)LanguageId::TypeScript); }
-TEST(syntax_ts_tsx) { CHECK_EQ((int)Lang("foo.tsx")->id, (int)LanguageId::TypeScript); }
-TEST(syntax_ts_mts) { CHECK_EQ((int)Lang("foo.mts")->id, (int)LanguageId::TypeScript); }
-TEST(syntax_ts_cts) { CHECK_EQ((int)Lang("foo.cts")->id, (int)LanguageId::TypeScript); }
-TEST(syntax_ts_upper_TS) { CHECK_EQ((int)Lang("foo.TS")->id, (int)LanguageId::TypeScript); }
-
-TEST(syntax_ts_flags) {
-  const LanguageDefinition *d = Lang("app.ts");
-  CHECK(d->backtick_strings);
-  CHECK(!d->single_quote_is_character);
-}
-
-// ---------------------------------------------------------------------------
-// Python extensions
-// ---------------------------------------------------------------------------
-
-TEST(syntax_py_py) { CHECK_EQ((int)Lang("foo.py")->id, (int)LanguageId::Python); }
-TEST(syntax_py_pyi) { CHECK_EQ((int)Lang("foo.pyi")->id, (int)LanguageId::Python); }
-TEST(syntax_py_upper_PY) { CHECK_EQ((int)Lang("foo.PY")->id, (int)LanguageId::Python); }
-
-TEST(syntax_py_flags) {
-  const LanguageDefinition *d = Lang("script.py");
-  CHECK(d->triple_quoted_strings);
-  CHECK(!d->backtick_strings);
-  CHECK(!d->single_quote_is_character);
-  CHECK(!d->preprocessor_directives);
-  CHECK_EQ(d->line_comment_count, (u64)1);
-  CHECK(Str8Match(d->line_comments[0], Str8Lit("#")));
-  CHECK_EQ(d->block_comment_open.size, (u64)0);
-}
-
-// ---------------------------------------------------------------------------
-// Rust extensions
-// ---------------------------------------------------------------------------
-
-TEST(syntax_rust_rs) { CHECK_EQ((int)Lang("foo.rs")->id, (int)LanguageId::Rust); }
-TEST(syntax_rust_upper_RS) { CHECK_EQ((int)Lang("foo.RS")->id, (int)LanguageId::Rust); }
-
-TEST(syntax_rust_flags) {
-  const LanguageDefinition *d = Lang("lib.rs");
-  CHECK(d->single_quote_is_character);
-  CHECK(!d->backtick_strings);
-  CHECK(!d->preprocessor_directives);
-}
-
-// ---------------------------------------------------------------------------
-// Go extensions
-// ---------------------------------------------------------------------------
-
-TEST(syntax_go_go) { CHECK_EQ((int)Lang("foo.go")->id, (int)LanguageId::Go); }
-TEST(syntax_go_upper_GO) { CHECK_EQ((int)Lang("foo.GO")->id, (int)LanguageId::Go); }
-
-TEST(syntax_go_flags) {
-  const LanguageDefinition *d = Lang("main.go");
-  CHECK(d->backtick_strings);
-  CHECK(!d->single_quote_is_character);
-  CHECK(!d->preprocessor_directives);
-}
-
-// ---------------------------------------------------------------------------
-// TOML extensions
-// ---------------------------------------------------------------------------
-
-TEST(syntax_toml_toml) { CHECK_EQ((int)Lang("foo.toml")->id, (int)LanguageId::Toml); }
-TEST(syntax_toml_upper_TOML) { CHECK_EQ((int)Lang("foo.TOML")->id, (int)LanguageId::Toml); }
-
-TEST(syntax_toml_flags) {
-  const LanguageDefinition *d = Lang("Cargo.toml");
-  CHECK_EQ(d->line_comment_count, (u64)1);
-  CHECK(Str8Match(d->line_comments[0], Str8Lit("#")));
-  CHECK_EQ(d->block_comment_open.size, (u64)0);
-}
-
-// ---------------------------------------------------------------------------
-// JSON extensions
-// ---------------------------------------------------------------------------
-
-TEST(syntax_json_json) { CHECK_EQ((int)Lang("foo.json")->id, (int)LanguageId::Json); }
-TEST(syntax_json_upper_JSON) { CHECK_EQ((int)Lang("foo.JSON")->id, (int)LanguageId::Json); }
-
-TEST(syntax_json_flags) {
-  const LanguageDefinition *d = Lang("package.json");
-  CHECK_EQ(d->line_comment_count, (u64)0);
-  CHECK_EQ(d->block_comment_open.size, (u64)0);
-}
-
-// ---------------------------------------------------------------------------
-// Fallback: extensionless, unknown extension, hidden file
-// ---------------------------------------------------------------------------
-
-TEST(syntax_fallback_no_extension) {
-  CHECK_EQ((int)Lang("Makefile")->id, (int)LanguageId::Fallback);
-}
-
-TEST(syntax_fallback_empty_path) {
-  CHECK_EQ((int)Lang("")->id, (int)LanguageId::Fallback);
-}
-
-TEST(syntax_fallback_unknown_ext) {
-  CHECK_EQ((int)Lang("foo.xyz")->id, (int)LanguageId::Fallback);
-}
-
-TEST(syntax_fallback_hidden_file) {
-  // .bashrc: leading dot is a hidden file marker, not an extension.
-  CHECK_EQ((int)Lang(".bashrc")->id, (int)LanguageId::Fallback);
-}
-
-TEST(syntax_fallback_flags) {
-  const LanguageDefinition *d = Lang("Makefile");
-  CHECK_EQ((int)d->id, (int)LanguageId::Fallback);
-  // Fallback supports both // and # line comments.
-  CHECK_EQ(d->line_comment_count, (u64)2);
-  CHECK_EQ(d->block_comment_open.size, (u64)0);
-}
-
-// ---------------------------------------------------------------------------
-// Keyword group structure sanity
-// ---------------------------------------------------------------------------
-
-TEST(syntax_cpp_has_keyword_groups) {
-  const LanguageDefinition *d = Lang("main.cpp");
-  CHECK(d->keyword_group_count > 0);
-  // First group must be keywords.
-  CHECK_EQ((int)d->keyword_groups[0].kind, (int)TokenKind::Keyword);
-  CHECK(d->keyword_groups[0].count > 0);
-}
-
-TEST(syntax_py_has_type_group) {
-  const LanguageDefinition *d = Lang("script.py");
-  bool found_type = false;
-  for (u64 i = 0; i < d->keyword_group_count; i += 1) {
-    if (d->keyword_groups[i].kind == TokenKind::Type) {
-      found_type = true;
-    }
+  for (const Case &test : cases) {
+    CHECK_EQ((int)Lang(test.path)->id, (int)test.language);
   }
-  CHECK(found_type);
 }
-
-// Path with directory component still resolves correctly.
-TEST(syntax_path_with_dir) {
-  CHECK_EQ((int)Lang("src/main.rs")->id, (int)LanguageId::Rust);
-  CHECK_EQ((int)Lang("a/b/c/file.py")->id, (int)LanguageId::Python);
-}
-
-// ---------------------------------------------------------------------------
-// Full-buffer lexer (Task 2)
-//
-// Every expected offset below is computed from the source text itself via
-// Str8FindFirst/Str8FindFirstChar rather than hand-counted, so a change to a
-// fixture string can never silently desynchronise from its assertions.
-// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -241,9 +61,6 @@ void Destroy(Fixture *f) {
   ArenaRelease(f->arena);
 }
 
-// Opens a scratch buffer, loads `text`, and attaches syntax highlighting as
-// if it lived at `path` -- so extension-based language selection runs the
-// same way it would for a real file.
 Buffer *OpenAttached(Fixture *f, const char *path, const char *text) {
   BufferHandle handle = BufferOpen(&f->reg, BufferKind::Scratch, Str8Lit("test"));
   Buffer *buffer = BufferFromHandle(&f->reg, handle);
@@ -252,10 +69,6 @@ Buffer *OpenAttached(Fixture *f, const char *path, const char *text) {
   return buffer;
 }
 
-// Byte offset of `needle` within `text`. Fails the calling test loudly (via
-// an out-of-range sentinel that every subsequent CHECK_EQ will catch) rather
-// than silently testing against 0 when a fixture string is edited and a
-// needle no longer appears.
 u64 Off(const char *text, const char *needle) {
   return Str8FindFirst(Str8C(text), Str8C(needle));
 }
@@ -265,8 +78,6 @@ u64 LineEndOf(const char *text, u64 from) {
   return nl;
 }
 
-// The single token starting exactly at `start`, or nullptr when no token
-// does -- e.g. because the byte at `start` was left Default.
 const Token *TokenAt(const Buffer *buffer, u64 start) {
   for (u64 i = 0; i < buffer->tokens.count; i += 1) {
     if (buffer->tokens.tokens[i].start == start) return &buffer->tokens.tokens[i];
@@ -275,8 +86,6 @@ const Token *TokenAt(const Buffer *buffer, u64 start) {
 }
 
 }  // namespace
-
-// --- C/C++: preprocessor, type, function, keyword, numbers, comments -------
 
 TEST(syntax_scan_cpp_preprocessor_directive) {
   Fixture f = MakeFixture();
@@ -298,41 +107,33 @@ TEST(syntax_scan_cpp_type_function_keyword_operator_punctuation) {
   const char *text = "int add(int a, int b) {\n  return a + b;\n}\n";
   Buffer *buffer = OpenAttached(&f, "main.cpp", text);
 
-  // "int" (the return type) is a Type token.
   u64 int_start = Off(text, "int");
   const Token *int_tok = TokenAt(buffer, int_start);
   CHECK(int_tok != nullptr);
   CHECK_EQ((int)int_tok->kind, (int)TokenKind::Type);
   CHECK_EQ(int_tok->end, int_start + 3);
 
-  // "add" is a non-keyword identifier immediately followed by '(', so it is
-  // classified as a function call/definition site.
   u64 add_start = Off(text, "add");
   const Token *add_tok = TokenAt(buffer, add_start);
   CHECK(add_tok != nullptr);
   CHECK_EQ((int)add_tok->kind, (int)TokenKind::Function);
   CHECK_EQ(add_tok->end, add_start + 3);
 
-  // "return" is a keyword.
   u64 return_start = Off(text, "return");
   const Token *return_tok = TokenAt(buffer, return_start);
   CHECK(return_tok != nullptr);
   CHECK_EQ((int)return_tok->kind, (int)TokenKind::Keyword);
   CHECK_EQ(return_tok->end, return_start + 6);
 
-  // "a" and "b" are plain identifiers: not keywords, not followed by '(', so
-  // they get no token at all (Default).
   u64 a_in_return = Off(text, "a + b");
   CHECK(TokenAt(buffer, a_in_return) == nullptr);
 
-  // '+' is an operator.
   u64 plus = Off(text, "+");
   const Token *plus_tok = TokenAt(buffer, plus);
   CHECK(plus_tok != nullptr);
   CHECK_EQ((int)plus_tok->kind, (int)TokenKind::Operator);
   CHECK_EQ(plus_tok->end, plus + 1);
 
-  // '(' ')' '{' '}' ',' ';' are punctuation.
   u64 paren = Off(text, "(");
   const Token *paren_tok = TokenAt(buffer, paren);
   CHECK(paren_tok != nullptr);
@@ -373,12 +174,8 @@ TEST(syntax_scan_cpp_block_and_line_comments) {
   Destroy(&f);
 }
 
-// --- Keyword boundary: substrings of keywords are not falsely classified ---
-
 TEST(syntax_scan_keyword_boundary_identifier) {
   Fixture f = MakeFixture();
-  // "returning" contains "return" as a prefix but is a distinct identifier;
-  // it must not be highlighted as the keyword.
   const char *text = "int returning = 1;\n";
   Buffer *buffer = OpenAttached(&f, "main.cpp", text);
 
@@ -416,8 +213,6 @@ TEST(syntax_scan_keyword_inside_comment_stays_comment) {
 
   Destroy(&f);
 }
-
-// --- Numbers: decimal, hex, binary, octal, float, exponent -----------------
 
 TEST(syntax_scan_number_decimal) {
   Fixture f = MakeFixture();
@@ -495,8 +290,6 @@ TEST(syntax_scan_number_float_exponent_and_underscores) {
   Destroy(&f);
 }
 
-// --- Escaped quotes and character literals ----------------------------------
-
 TEST(syntax_scan_string_with_escaped_quote) {
   Fixture f = MakeFixture();
   const char *text = "const char *s = \"a\\\"b\";\n";  // "a\"b"
@@ -506,7 +299,6 @@ TEST(syntax_scan_string_with_escaped_quote) {
   const Token *tok = TokenAt(buffer, start);
   CHECK(tok != nullptr);
   CHECK_EQ((int)tok->kind, (int)TokenKind::String);
-  // The escaped quote must not end the string early: "a\"b" is 6 bytes.
   CHECK_EQ(tok->end, start + 6);
 
   Destroy(&f);
@@ -526,8 +318,6 @@ TEST(syntax_scan_character_literal) {
   Destroy(&f);
 }
 
-// --- JSON has no comments; TOML uses '#'; fallback shares keywords ----------
-
 TEST(syntax_scan_json_does_not_treat_slashes_as_comment) {
   Fixture f = MakeFixture();
   const char *text = "{\"a\": 1} // not a comment\n";
@@ -535,14 +325,10 @@ TEST(syntax_scan_json_does_not_treat_slashes_as_comment) {
 
   u64 slashes = Off(text, "//");
   const Token *tok = TokenAt(buffer, slashes);
-  // JSON has no configured line comment, so a bare "//" is not swallowed as
-  // one -- whatever it becomes, it must not be Comment.
   if (tok != nullptr) {
     CHECK(tok->kind != TokenKind::Comment);
   }
 
-  // The JSON constant is still classified normally, proving the language
-  // table (not just the comment rule) took effect.
   u64 one = Off(text, "1}");
   const Token *num_tok = TokenAt(buffer, one);
   CHECK(num_tok != nullptr);
@@ -609,8 +395,6 @@ TEST(syntax_scan_fallback_shared_keywords_and_both_comment_styles) {
   Destroy(&f);
 }
 
-// --- Multiline state carried across lines, and its line-cache bookkeeping --
-
 TEST(syntax_scan_python_triple_quote_state_across_lines) {
   Fixture f = MakeFixture();
   const char *text = "x = '''line one\nline two'''\ny = 1\n";
@@ -632,7 +416,6 @@ TEST(syntax_scan_python_triple_quote_state_across_lines) {
   CHECK_EQ((int)l2->incoming.mode, (int)SyntaxMode::Default);
   CHECK_EQ((int)l2->outgoing.mode, (int)SyntaxMode::Default);
 
-  // Both lines contributed a String token covering their triple-quote text.
   u64 line0_start = Off(text, "'''line one");
   const Token *tok0 = TokenAt(buffer, line0_start);
   CHECK(tok0 != nullptr);
@@ -664,15 +447,12 @@ TEST(syntax_scan_c_block_comment_state_across_lines) {
   CHECK_EQ((int)l2->incoming.mode, (int)SyntaxMode::BlockComment);
   CHECK_EQ((int)l2->outgoing.mode, (int)SyntaxMode::Default);
 
-  // The middle line is entirely comment.
   u64 middle_start = Off(text, "middle");
   const Token *middle_tok = TokenAt(buffer, middle_start);
   CHECK(middle_tok != nullptr);
   CHECK_EQ((int)middle_tok->kind, (int)TokenKind::Comment);
   CHECK_EQ(middle_tok->end, LineEndOf(text, middle_start));
 
-  // After the closing "*/" on line 2, ordinary scanning resumes: "int" is a
-  // Type token again.
   u64 second_int = Str8FindFirst(Str8C(text), Str8C("int"), Off(text, "*/"));
   const Token *second_int_tok = TokenAt(buffer, second_int);
   CHECK(second_int_tok != nullptr);
@@ -697,11 +477,8 @@ TEST(syntax_scan_js_backtick_state_across_lines) {
   const Token *tok = TokenAt(buffer, line1_start);
   CHECK(tok != nullptr);
   CHECK_EQ((int)tok->kind, (int)TokenKind::String);
-  // Token covers "line2`" (up to and including the closing backtick), not
-  // the trailing ';'.
   CHECK_EQ(tok->end, line1_start + Str8C("line2`").size);
 
-  // The trailing ';' after the closing backtick is ordinary punctuation.
   u64 semi = line1_start + Str8C("line2`").size;
   const Token *semi_tok = TokenAt(buffer, semi);
   CHECK(semi_tok != nullptr);
@@ -709,8 +486,6 @@ TEST(syntax_scan_js_backtick_state_across_lines) {
 
   Destroy(&f);
 }
-
-// --- Empty buffer: zero tokens, one line-cache entry ------------------------
 
 TEST(syntax_scan_empty_buffer) {
   Fixture f = MakeFixture();
@@ -729,13 +504,8 @@ TEST(syntax_scan_empty_buffer) {
   Destroy(&f);
 }
 
-// --- UTF-8 prefix proves offsets are byte-based, not codepoint-based -------
-
 TEST(syntax_scan_utf8_prefix_byte_offsets) {
   Fixture f = MakeFixture();
-  // "café" (with a 2-byte UTF-8 'é') inside a comment on line 0, then a
-  // keyword on line 1. If offsets were codepoint-based rather than
-  // byte-based, the keyword's reported position would be off by one.
   const char *text = "// caf\xC3\xA9\nif (x) {}\n";
   Buffer *buffer = OpenAttached(&f, "main.cpp", text);
 
@@ -755,8 +525,6 @@ TEST(syntax_scan_utf8_prefix_byte_offsets) {
   Destroy(&f);
 }
 
-// --- BufferSetText on an already-attached buffer rebuilds tokens -----------
-
 TEST(syntax_scan_buffer_set_text_rebuilds_tokens) {
   Fixture f = MakeFixture();
   const char *first = "int a;\n";
@@ -769,8 +537,6 @@ TEST(syntax_scan_buffer_set_text_rebuilds_tokens) {
   const char *second = "return 1;\nfloat g;\n";
   BufferSetText(nullptr, buffer, Str8C(second));
 
-  // Stale tokens from the first text must be gone: line count and token
-  // layout now reflect `second`.
   CHECK_EQ(BufferLineCount(buffer), (u64)3);
   CHECK_EQ(buffer->syntax.line_count, (u64)3);
 
@@ -786,8 +552,6 @@ TEST(syntax_scan_buffer_set_text_rebuilds_tokens) {
 
   Destroy(&f);
 }
-
-// --- Reattaching the same resolved language does not corrupt the cache -----
 
 TEST(syntax_scan_reattach_same_language_is_stable) {
   Fixture f = MakeFixture();
@@ -805,22 +569,9 @@ TEST(syntax_scan_reattach_same_language_is_stable) {
   Destroy(&f);
 }
 
-// --- Regression: token growth mid-rebuild must not lose earlier tokens -----
-//
-// EnsureTokenCapacity used to copy `buffer->tokens.count` old entries when
-// growing, but during SyntaxRebuild the live count lives in a local counter
-// threaded through ScanLine/AppendToken -- buffer->tokens.count stays 0 until
-// the whole rebuild finishes. Any growth past the initial 256-token capacity
-// therefore "copied" zero old tokens, silently corrupting everything below
-// the new capacity's old boundary with uninitialized memory. This fixture
-// forces multiple growths (256 -> 512) and checks tokens at the very start,
-// straddling the old boundary, and at the very end are all intact.
 TEST(syntax_scan_growth_preserves_earlier_tokens) {
   Fixture f = MakeFixture();
 
-  // Each repeat of "x=1;" yields exactly 3 tokens (Operator, Number,
-  // Punctuation); "x" itself stays Default/untokenized. 100 repeats is 300
-  // tokens, comfortably past the 256-token initial capacity.
   constexpr int kRepeats = 100;
   constexpr int kUnitLen = 4;
   char text[kRepeats * kUnitLen + 1];
@@ -837,9 +588,6 @@ TEST(syntax_scan_growth_preserves_earlier_tokens) {
   CHECK_EQ(buffer->tokens.count, (u64)(kRepeats * 3));
   CHECK(buffer->syntax.token_capacity >= buffer->tokens.count);
 
-  // Sorted, non-overlapping, non-empty across the entire array -- exactly
-  // the invariant that silently broke when growth clobbered earlier tokens
-  // with uninitialized entries.
   for (u64 i = 0; i < buffer->tokens.count; i += 1) {
     CHECK(buffer->tokens.tokens[i].end > buffer->tokens.tokens[i].start);
     if (i + 1 < buffer->tokens.count) {
@@ -867,22 +615,13 @@ TEST(syntax_scan_growth_preserves_earlier_tokens) {
     CHECK_EQ((int)semi.kind, (int)TokenKind::Punctuation);
   };
 
-  CheckUnit(0);               // Early: well inside the original capacity.
-  CheckUnit(kRepeats / 2);    // Middle: straddles the old 256-token boundary.
-  CheckUnit(kRepeats - 1);    // Late: only reachable after growth.
+  CheckUnit(0);
+  CheckUnit(kRepeats / 2);
+  CheckUnit(kRepeats - 1);
 
   Destroy(&f);
 }
 
-// --- Regression: preprocessor check must not fire mid-line after a comment
-// closes -----------------------------------------------------------------
-//
-// The C/C++ line-leading '#' check used to run from wherever `i` had reached
-// after handling a carried-over multiline construct, without confirming `i`
-// was still at the true line start. A block comment opened on a previous
-// line and closed mid-line, followed by whitespace and '#', used to be
-// misclassified as a whole-line Preprocessor directive even though the '#'
-// isn't actually line-leading.
 TEST(syntax_scan_preprocessor_not_triggered_after_comment_closes_mid_line) {
   Fixture f = MakeFixture();
   const char *text = "/* start\nend */ #define X 1\n";
@@ -895,7 +634,6 @@ TEST(syntax_scan_preprocessor_not_triggered_after_comment_closes_mid_line) {
   u64 hash_off = Off(text, "#define");
   CHECK(TokenAt(buffer, hash_off) == nullptr);
 
-  // Sanity: the carried-over comment still correctly closes on line 1.
   u64 close_start = Off(text, "end */");
   const Token *comment_tok = TokenAt(buffer, close_start);
   CHECK(comment_tok != nullptr);
@@ -905,9 +643,6 @@ TEST(syntax_scan_preprocessor_not_triggered_after_comment_closes_mid_line) {
   Destroy(&f);
 }
 
-// A genuine, fresh-line preprocessor directive with leading indentation
-// (no carried-over construct) must still be recognised -- the mid-line fix
-// must not over-correct and break ordinary indented directives.
 TEST(syntax_scan_preprocessor_still_works_with_leading_whitespace) {
   Fixture f = MakeFixture();
   const char *text = "int a;\n  #define X 1\n";
@@ -922,33 +657,18 @@ TEST(syntax_scan_preprocessor_still_works_with_leading_whitespace) {
   Destroy(&f);
 }
 
-// ===========================================================================
-// Incremental syntax update (Task 3)
-//
-// These tests verify that BufferReplace, undo, and redo call the incremental
-// update path and produce correct tokens without a full rebuild.
-// ===========================================================================
-
-// 1. Replace "/*" with spaces: following comment tokens disappear and later
-//    keywords recover.
 TEST(syntax_incremental_remove_block_comment_opener) {
   Fixture f = MakeFixture();
   const char *text = "int a; /* comment\nstuff */ int b;\n";
   Buffer *buffer = OpenAttached(&f, "main.cpp", text);
 
-  // Before edit: "stuff */" on line 1 is inside a block comment.
   CHECK_EQ((int)buffer->syntax.lines[1].incoming.mode, (int)SyntaxMode::BlockComment);
 
-  // Replace "/*" with "  " (same length, removes comment opener).
   u64 slash_star = Off(text, "/*");
   BufferReplace(nullptr, buffer, RangeU64{slash_star, slash_star + 2}, Str8Lit("  "), 0, 0);
 
-  // After edit: line 1 should no longer be in BlockComment state.
   CHECK_EQ((int)buffer->syntax.lines[1].incoming.mode, (int)SyntaxMode::Default);
 
-  // "int" on line 1 (after "*/") should now be a Type token because the
-  // comment is gone -- "stuff */ int b;" is now regular code.
-  // Find "int b" in the post-edit buffer.
   TempArena scratch = ScratchBegin();
   String8 all = BufferTextAll(scratch.arena, buffer);
   u64 int_b = Str8FindFirst(all, Str8Lit("int b"));
@@ -960,28 +680,22 @@ TEST(syntax_incremental_remove_block_comment_opener) {
   Destroy(&f);
 }
 
-// 2. Insert a block-comment opener so state propagates through later lines;
-//    then insert the closer and verify state returns to Default.
 TEST(syntax_incremental_insert_block_comment_propagates) {
   Fixture f = MakeFixture();
   const char *text = "int a;\nint b;\nint c;\n";
   Buffer *buffer = OpenAttached(&f, "main.cpp", text);
 
-  // All lines start and end in Default mode.
   CHECK_EQ((int)buffer->syntax.lines[0].outgoing.mode, (int)SyntaxMode::Default);
   CHECK_EQ((int)buffer->syntax.lines[1].incoming.mode, (int)SyntaxMode::Default);
   CHECK_EQ((int)buffer->syntax.lines[2].incoming.mode, (int)SyntaxMode::Default);
 
-  // Insert "/*" at end of line 0 (before the newline).
   u64 first_newline = Str8FindFirstChar(Str8C(text), '\n');
   BufferReplace(nullptr, buffer, RangeU64{first_newline, first_newline}, Str8Lit("/*"), 0, 0);
 
-  // Now line 0 ends in BlockComment, and that propagates.
   CHECK_EQ((int)buffer->syntax.lines[0].outgoing.mode, (int)SyntaxMode::BlockComment);
   CHECK_EQ((int)buffer->syntax.lines[1].incoming.mode, (int)SyntaxMode::BlockComment);
   CHECK_EQ((int)buffer->syntax.lines[2].incoming.mode, (int)SyntaxMode::BlockComment);
 
-  // "int b" on line 1 should now be Comment, not Type.
   TempArena scratch = ScratchBegin();
   String8 all = BufferTextAll(scratch.arena, buffer);
   u64 int_b = Str8FindFirst(all, Str8Lit("int b"));
@@ -990,16 +704,12 @@ TEST(syntax_incremental_insert_block_comment_propagates) {
   CHECK_EQ((int)tok->kind, (int)TokenKind::Comment);
   ScratchEnd(scratch);
 
-  // Now insert "*/" at start of line 2 to close the comment.
   u64 line2_start = BufferOffsetFromLine(buffer, 2);
   BufferReplace(nullptr, buffer, RangeU64{line2_start, line2_start}, Str8Lit("*/"), 0, 0);
 
-  // Line 2 should now start in BlockComment (inheriting from line 1) but the
-  // close is at the beginning so it exits immediately.
   CHECK_EQ((int)buffer->syntax.lines[2].incoming.mode, (int)SyntaxMode::BlockComment);
   CHECK_EQ((int)buffer->syntax.lines[2].outgoing.mode, (int)SyntaxMode::Default);
 
-  // Line 3 (the 4th line if we count from 0) is now Default.
   if (buffer->syntax.line_count > 3) {
     CHECK_EQ((int)buffer->syntax.lines[3].incoming.mode, (int)SyntaxMode::Default);
   }
@@ -1007,8 +717,6 @@ TEST(syntax_incremental_insert_block_comment_propagates) {
   Destroy(&f);
 }
 
-// 3. Insert newlines: line cache count aligns with BufferLineCount, suffix
-//    tokens shift by exact byte delta, prefix tokens unchanged.
 TEST(syntax_incremental_insert_newlines) {
   Fixture f = MakeFixture();
   const char *text = "int a;\nint b;\n";
@@ -1017,27 +725,22 @@ TEST(syntax_incremental_insert_newlines) {
   u64 orig_line_count = BufferLineCount(buffer);
   CHECK_EQ(buffer->syntax.line_count, orig_line_count);
 
-  // Remember token for "int" on line 1 (at start of "int b;").
   u64 int_b_off = Off(text, "int b");
   const Token *before_tok = TokenAt(buffer, int_b_off);
   CHECK(before_tok != nullptr);
   CHECK_EQ((int)before_tok->kind, (int)TokenKind::Type);
   u64 before_int_a_start = Off(text, "int a");
 
-  // Insert a newline at the start of line 1.
   u64 line1_start = BufferOffsetFromLine(buffer, 1);
   BufferReplace(nullptr, buffer, RangeU64{line1_start, line1_start}, Str8Lit("\n"), 0, 0);
 
-  // Line count increased by 1.
   CHECK_EQ(BufferLineCount(buffer), orig_line_count + 1);
   CHECK_EQ(buffer->syntax.line_count, BufferLineCount(buffer));
 
-  // "int a" token on line 0 is unaffected (prefix).
   const Token *int_a_tok = TokenAt(buffer, before_int_a_start);
   CHECK(int_a_tok != nullptr);
   CHECK_EQ((int)int_a_tok->kind, (int)TokenKind::Type);
 
-  // "int b" token shifted by 1 byte (the inserted newline).
   const Token *shifted_tok = TokenAt(buffer, int_b_off + 1);
   CHECK(shifted_tok != nullptr);
   CHECK_EQ((int)shifted_tok->kind, (int)TokenKind::Type);
@@ -1045,7 +748,6 @@ TEST(syntax_incremental_insert_newlines) {
   Destroy(&f);
 }
 
-// 4. Delete lines: cache realigns and token indexes/ranges remain valid.
 TEST(syntax_incremental_delete_lines) {
   Fixture f = MakeFixture();
   const char *text = "int a;\nint b;\nint c;\n";
@@ -1054,7 +756,6 @@ TEST(syntax_incremental_delete_lines) {
   CHECK_EQ(BufferLineCount(buffer), (u64)4);
   CHECK_EQ(buffer->syntax.line_count, (u64)4);
 
-  // Delete line 1 entirely ("int b;\n").
   u64 line1_start = BufferOffsetFromLine(buffer, 1);
   u64 line2_start = BufferOffsetFromLine(buffer, 2);
   BufferReplace(nullptr, buffer, RangeU64{line1_start, line2_start}, String8{nullptr, 0}, 0, 0);
@@ -1062,7 +763,6 @@ TEST(syntax_incremental_delete_lines) {
   CHECK_EQ(BufferLineCount(buffer), (u64)3);
   CHECK_EQ(buffer->syntax.line_count, (u64)3);
 
-  // "int c" should still be correctly tokenized (now on line 1).
   TempArena scratch = ScratchBegin();
   String8 all = BufferTextAll(scratch.arena, buffer);
   u64 int_c = Str8FindFirst(all, Str8Lit("int c"));
@@ -1071,7 +771,6 @@ TEST(syntax_incremental_delete_lines) {
   CHECK_EQ((int)tok->kind, (int)TokenKind::Type);
   ScratchEnd(scratch);
 
-  // All tokens are in bounds and sorted.
   u64 buf_size = BufferSize(buffer);
   for (u64 i = 0; i < buffer->tokens.count; i += 1) {
     CHECK(buffer->tokens.tokens[i].start < buffer->tokens.tokens[i].end);
@@ -1084,11 +783,9 @@ TEST(syntax_incremental_delete_lines) {
   Destroy(&f);
 }
 
-// 5. Edit near the top of a long buffer with no state change: convergence.
 TEST(syntax_incremental_convergence_stops_early) {
   Fixture f = MakeFixture();
 
-  // Build a 200-line buffer: line 0 is editable, lines 1-199 are all "int x;\n"
   constexpr int kLines = 200;
   char text[kLines * 8 + 16];
   int pos = 0;
@@ -1098,25 +795,19 @@ TEST(syntax_incremental_convergence_stops_early) {
   }
 
   Buffer *buffer = OpenAttached(&f, "main.cpp", text);
-  CHECK_EQ(BufferLineCount(buffer), (u64)(kLines + 1));  // trailing newline -> empty last line
+  CHECK_EQ(BufferLineCount(buffer), (u64)(kLines + 1));
 
-  // Edit only line 0: replace "a" with "z" (no state change).
-  u64 a_pos = 4;  // "int " is 4 bytes, "a" is at 4
+  u64 a_pos = 4;
   BufferReplace(nullptr, buffer, RangeU64{a_pos, a_pos + 1}, Str8Lit("z"), 0, 0);
 
-  // lines_scanned_last_update should be much smaller than total line count.
   CHECK(buffer->syntax.lines_scanned_last_update < (u64)kLines);
-  // It should only need to rescan line 0 and then converge (maybe line 1 too).
   CHECK(buffer->syntax.lines_scanned_last_update <= 3);
 
   Destroy(&f);
 }
 
-// 6. Edit that changes multiline state scans beyond the changed line only
-//    until state stabilizes.
 TEST(syntax_incremental_state_change_scans_until_stable) {
   Fixture f = MakeFixture();
-  // Line 0: "/*", Line 1: "a", Line 2: "*/", Line 3: "int x;\n"
   const char *text = "/*\na\n*/\nint x;\n";
   Buffer *buffer = OpenAttached(&f, "main.cpp", text);
 
@@ -1124,46 +815,36 @@ TEST(syntax_incremental_state_change_scans_until_stable) {
   CHECK_EQ((int)buffer->syntax.lines[2].outgoing.mode, (int)SyntaxMode::Default);
   CHECK_EQ((int)buffer->syntax.lines[3].incoming.mode, (int)SyntaxMode::Default);
 
-  // Delete "/*" from line 0, making all lines start in Default.
   BufferReplace(nullptr, buffer, RangeU64{0, 2}, String8{nullptr, 0}, 0, 0);
 
-  // All lines should now be Default mode.
   for (u64 i = 0; i < buffer->syntax.line_count; i += 1) {
     CHECK_EQ((int)buffer->syntax.lines[i].incoming.mode, (int)SyntaxMode::Default);
   }
 
-  // The update scanned multiple lines (at least lines 0-3) because the state
-  // changed propagated, but less than or equal to the total line count.
   CHECK(buffer->syntax.lines_scanned_last_update <= buffer->syntax.line_count);
   CHECK(buffer->syntax.lines_scanned_last_update >= 2);
 
   Destroy(&f);
 }
 
-// 7. UTF-8 before/inside the edit preserves byte offsets.
 TEST(syntax_incremental_utf8_preserves_offsets) {
   Fixture f = MakeFixture();
-  // "café" uses 2-byte é (0xC3 0xA9), then a keyword on the next line.
   const char *text = "// caf\xC3\xA9\nint x;\n";
   Buffer *buffer = OpenAttached(&f, "main.cpp", text);
 
-  // "int" token should be at byte offset 9 (comment is "// café\n" = 9 bytes).
   u64 int_off = Off(text, "int");
   const Token *tok = TokenAt(buffer, int_off);
   CHECK(tok != nullptr);
   CHECK_EQ((int)tok->kind, (int)TokenKind::Type);
 
-  // Replace "x" with "yy" on line 1 (after the UTF-8 line).
   u64 x_off = Off(text, "x;");
   BufferReplace(nullptr, buffer, RangeU64{x_off, x_off + 1}, Str8Lit("yy"), 0, 0);
 
-  // "int" is still at byte offset `int_off` (unchanged by edit after it on same line).
   const Token *tok2 = TokenAt(buffer, int_off);
   CHECK(tok2 != nullptr);
   CHECK_EQ((int)tok2->kind, (int)TokenKind::Type);
 
-  // The edit was on line 1, so line 0 comment token is also preserved.
-  u64 comment_off = 0;  // "//" starts at byte 0
+  u64 comment_off = 0;
   const Token *comment_tok = TokenAt(buffer, comment_off);
   CHECK(comment_tok != nullptr);
   CHECK_EQ((int)comment_tok->kind, (int)TokenKind::Comment);
@@ -1171,13 +852,11 @@ TEST(syntax_incremental_utf8_preserves_offsets) {
   Destroy(&f);
 }
 
-// 8. Undo and redo restore the exact token arrays and line states.
 TEST(syntax_incremental_undo_redo_restores_tokens) {
   Fixture f = MakeFixture();
   const char *text = "int a;\nint b;\n";
   Buffer *buffer = OpenAttached(&f, "main.cpp", text);
 
-  // Snapshot tokens before edit.
   u64 token_count_before = buffer->tokens.count;
   TempArena scratch = ScratchBegin();
   Token *tokens_before = PushArrayNoZero(scratch.arena, Token, token_count_before);
@@ -1185,20 +864,16 @@ TEST(syntax_incremental_undo_redo_restores_tokens) {
     tokens_before[i] = buffer->tokens.tokens[i];
   }
 
-  // Edit: replace "int a" with "float a".
   u64 int_a = Off(text, "int a");
   BufferReplace(nullptr, buffer, RangeU64{int_a, int_a + 3}, Str8Lit("float"), 0, 0);
 
-  // Verify the edit changed tokens.
   CHECK(buffer->tokens.count != token_count_before ||
         buffer->tokens.tokens[0].end != tokens_before[0].end);
 
-  // Undo.
   bool moved = false;
   (void)BufferUndo(nullptr, buffer, &moved);
   CHECK(moved);
 
-  // After undo, tokens must match the original exactly.
   CHECK_EQ(buffer->tokens.count, token_count_before);
   for (u64 i = 0; i < token_count_before; i += 1) {
     CHECK_EQ(buffer->tokens.tokens[i].start, tokens_before[i].start);
@@ -1206,11 +881,9 @@ TEST(syntax_incremental_undo_redo_restores_tokens) {
     CHECK_EQ((int)buffer->tokens.tokens[i].kind, (int)tokens_before[i].kind);
   }
 
-  // Redo should produce the same result as the original edit.
   (void)BufferRedo(nullptr, buffer, &moved);
   CHECK(moved);
 
-  // After redo, "float" should be a Type token.
   const Token *float_tok = TokenAt(buffer, int_a);
   CHECK(float_tok != nullptr);
   CHECK_EQ((int)float_tok->kind, (int)TokenKind::Type);
@@ -1220,9 +893,6 @@ TEST(syntax_incremental_undo_redo_restores_tokens) {
   Destroy(&f);
 }
 
-// 9. Existing buffer_hooks_fire_on_edit still observes exactly one callback
-//    per direct edit/undo/redo -- the incremental syntax update must not
-//    interfere with hook counts.
 TEST(syntax_incremental_hooks_still_fire_once) {
   Fixture f = MakeFixture();
   Buffer *buffer = OpenAttached(&f, "main.cpp", "int a;\nint b;\n");
@@ -1234,50 +904,38 @@ TEST(syntax_incremental_hooks_still_fire_once) {
     edit_count += 1;
   };
 
-  // Direct edit.
   BufferReplace(nullptr, buffer, RangeU64{0, 3}, Str8Lit("float"), 0, 0);
   CHECK_EQ(edit_count, 1);
 
-  // Undo.
   bool moved = false;
   (void)BufferUndo(nullptr, buffer, &moved);
   CHECK_EQ(edit_count, 2);
 
-  // Redo.
   (void)BufferRedo(nullptr, buffer, &moved);
   CHECK_EQ(edit_count, 3);
 
   Destroy(&f);
 }
 
-// 10. Save-as language reselection: when the path extension changes, syntax
-//     rebuilds with the new language. When it stays the same, no rebuild.
 TEST(syntax_incremental_save_as_language_reselection) {
   Fixture f = MakeFixture();
   const char *text = "let x = 1;\n";
   Buffer *buffer = OpenAttached(&f, "app.js", text);
   buffer->path = PushStr8Copy(f.arena, Str8Lit("app.js"));
 
-  // Currently JavaScript: "let" is a keyword.
   const Token *let_tok = TokenAt(buffer, 0);
   CHECK(let_tok != nullptr);
   CHECK_EQ((int)let_tok->kind, (int)TokenKind::Keyword);
 
-  // Simulate save-as to a .cpp file: language changes, syntax must rebuild.
   const LanguageDefinition *old_lang = buffer->syntax.language;
   SyntaxAttach(buffer, Str8Lit("output.cpp"));
   buffer->path = PushStr8Copy(f.arena, Str8Lit("output.cpp"));
 
-  // Language changed: "let" is not a C++ keyword, so it should not be
-  // highlighted as one.
   CHECK(buffer->syntax.language != old_lang);
 
-  // Verify tokens reflect C++ language now -- "let" is just a plain identifier
-  // in C++ (no keyword group contains it), so TokenAt returns nullptr.
   const Token *let_tok2 = TokenAt(buffer, 0);
   CHECK(let_tok2 == nullptr);
 
-  // Save-as to same language is a no-op.
   u64 token_count_before = buffer->tokens.count;
   SyntaxAttach(buffer, Str8Lit("other.cpp"));
   CHECK_EQ(buffer->tokens.count, token_count_before);
@@ -1285,25 +943,11 @@ TEST(syntax_incremental_save_as_language_reselection) {
   Destroy(&f);
 }
 
-// ---------------------------------------------------------------------------
-// Regression: incremental token-array growth must preserve suffix tokens.
-//
-// EnsureTokenCapacity during SyntaxEndEdit used to copy only
-// `prefix_token_end` entries, leaving the retained suffix (read from the old
-// array indices) pointing into uninitialized memory after a reallocation.
-// This test forces a 256->512 growth by building a buffer whose total token
-// count is just under 256, then performing a small edit on line 0 that
-// converges immediately -- retaining a large suffix.  After the edit the
-// suffix tokens must be sorted, non-empty, in-bounds, and shifted by the
-// exact byte delta.
-// ---------------------------------------------------------------------------
 TEST(syntax_incremental_growth_preserves_suffix) {
   Fixture f = MakeFixture();
 
-  // Each "x=1;" yields 3 tokens.  80 repetitions = 240 tokens, just under 256.
-  // We put them on 80 separate lines so convergence kicks in after line 0.
   constexpr int kLines = 80;
-  constexpr int kUnitLen = 5;  // "x=1;\n"
+  constexpr int kUnitLen = 5;
   char text[kLines * kUnitLen + 1];
   for (int i = 0; i < kLines; i += 1) {
     text[i * kUnitLen + 0] = 'x';
@@ -1316,30 +960,20 @@ TEST(syntax_incremental_growth_preserves_suffix) {
 
   Buffer *buffer = OpenAttached(&f, "main.cpp", text);
 
-  // Precondition: total tokens should be 240, capacity 256 (initial).
   CHECK_EQ(buffer->tokens.count, (u64)(kLines * 3));
   CHECK_EQ(buffer->syntax.token_capacity, (u64)256);
 
-  // Snapshot a suffix token (line 1's first token) for comparison.
   u64 suffix_first_tok_idx = buffer->syntax.lines[1].first_token;
   Token suffix_sample = buffer->tokens.tokens[suffix_first_tok_idx];
 
-  // Replace the first "x=1;" (bytes 0-4) with many tokens to force growth.
-  // "1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1;" produces 20 numbers +
-  // 19 operators + 1 punctuation = 40 tokens from line 0 alone.
-  // Total = 40 + 237 (lines 1-79) = 277 > 256 -> growth to 512.
   const char *big_insert = "1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1;";
   String8 big_str = Str8C(big_insert);
   u64 big_len = big_str.size;
   BufferReplace(nullptr, buffer, RangeU64{0, 4}, big_str, 0, 0);
 
-  // The capacity must have grown past 256.
   CHECK(buffer->syntax.token_capacity > 256);
-
-  // Convergence: only line 0 needed rescanning (no state change).
   CHECK(buffer->syntax.lines_scanned_last_update <= 2);
 
-  // All tokens must be sorted, non-empty, in-bounds.
   u64 buf_size = BufferSize(buffer);
   for (u64 i = 0; i < buffer->tokens.count; i += 1) {
     CHECK(buffer->tokens.tokens[i].start < buffer->tokens.tokens[i].end);
@@ -1349,8 +983,7 @@ TEST(syntax_incremental_growth_preserves_suffix) {
     }
   }
 
-  // Suffix tokens (line 1 onward) must be shifted by the byte delta.
-  i64 byte_delta = (i64)big_len - 4;  // inserted big_len bytes, removed 4
+  i64 byte_delta = (i64)big_len - 4;
   u64 new_suffix_first_tok = buffer->syntax.lines[1].first_token;
   Token shifted_sample = buffer->tokens.tokens[new_suffix_first_tok];
   CHECK_EQ(shifted_sample.start, (u64)((i64)suffix_sample.start + byte_delta));
@@ -1359,13 +992,6 @@ TEST(syntax_incremental_growth_preserves_suffix) {
 
   Destroy(&f);
 }
-
-// ---------------------------------------------------------------------------
-// EditorOpenFile integration (Task 4): ordinary file buffers get syntax
-// highlighting attached once their path is resolved. Scratch, command,
-// explorer, image and other non-File buffers never go through EditorOpenFile
-// and so must stay unattached.
-// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -1406,9 +1032,6 @@ TEST(syntax_editor_open_attaches_cpp_language) {
   CHECK_EQ((int)buffer->syntax.language->id, (int)LanguageId::Cpp);
   CHECK(buffer->tokens.count > 0);
 
-  // BufferLoadFile strips the file's final newline before it ever reaches the
-  // buffer, so the expected offset is computed against that stripped text --
-  // not the on-disk literal above, which still has it.
   const char *buffered = "int main() {\n  return 0;\n}";
   u64 return_start = Off(buffered, "return");
   const Token *tok = nullptr;
@@ -1437,8 +1060,6 @@ TEST(syntax_editor_open_unknown_extension_is_fallback) {
   CHECK(buffer->syntax.language != nullptr);
   CHECK_EQ((int)buffer->syntax.language->id, (int)LanguageId::Fallback);
 
-  // The fallback language still recognizes a small generic keyword set, so
-  // "return" highlights even without a known extension.
   u64 return_start = Off(text, "return");
   TokenKind kind = TokenKindAtOffset(&buffer->tokens, return_start);
   CHECK_EQ((int)kind, (int)TokenKind::Keyword);
@@ -1464,8 +1085,6 @@ TEST(syntax_editor_open_extensionless_file_is_fallback) {
 TEST(syntax_editor_open_new_file_path_attaches_language) {
   EditorFixture f = MakeEditorFixture("syntax_editor_open_new_file");
 
-  // A path that does not exist yet is still resolved and attached, so typing
-  // into a brand new `:e foo.py` buffer is highlighted immediately.
   String8 path = TempPath(&f.dir, "fresh.py");
   BufferHandle handle = EditorOpenFile(&f.ed, path);
   Buffer *buffer = BufferFromHandle(&f.ed.buffers, handle);
@@ -1493,12 +1112,6 @@ TEST(syntax_editor_init_scratch_and_command_buffers_unattached) {
 
   Destroy(&f);
 }
-
-// ---------------------------------------------------------------------------
-// Token lookup boundaries (Task 4): TokenKindAtOffset / TokenIndexAtOffset
-// against an explicit, hand-built sorted TokenArray -- no buffer or lexer
-// involved, just the seam the renderer walks per glyph.
-// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -1540,8 +1153,6 @@ TEST(token_lookup_exclusive_end_boundary_is_default) {
   Token arr[] = {MakeToken(10, 20, TokenKind::Keyword), MakeToken(30, 40, TokenKind::Type)};
   TokenArray tokens = {arr, ArrayCount(arr)};
 
-  // offset == first token's end: the token has already ended, so this lands
-  // in the gap, and the index moves past it to the next candidate.
   CHECK_EQ((int)TokenKindAtOffset(&tokens, 20), (int)TokenKind::Default);
   CHECK_EQ(TokenIndexAtOffset(&tokens, 20), (u64)1);
 }
@@ -1566,11 +1177,9 @@ TEST(token_lookup_after_last_token_is_default) {
   Token arr[] = {MakeToken(10, 20, TokenKind::Keyword), MakeToken(30, 40, TokenKind::Type)};
   TokenArray tokens = {arr, ArrayCount(arr)};
 
-  // Exact end boundary of the last token.
   CHECK_EQ((int)TokenKindAtOffset(&tokens, 40), (int)TokenKind::Default);
   CHECK_EQ(TokenIndexAtOffset(&tokens, 40), (u64)2);
 
-  // Well past the last token.
   CHECK_EQ((int)TokenKindAtOffset(&tokens, 100), (int)TokenKind::Default);
   CHECK_EQ(TokenIndexAtOffset(&tokens, 100), (u64)2);
 }

@@ -2,14 +2,6 @@
 
 #include "base/base_string.h"
 
-// ---------------------------------------------------------------------------
-// Keyword tables
-// Each table is a plain C array of String8 pointing into the read-only
-// string literal segment.  No arena, no allocation.
-// ---------------------------------------------------------------------------
-
-// --- C / C++ ----------------------------------------------------------------
-
 static const String8 kCppKeywords[] = {
     Str8LitComp("if"),        Str8LitComp("else"),     Str8LitComp("for"),
     Str8LitComp("while"),     Str8LitComp("do"),        Str8LitComp("switch"),
@@ -55,8 +47,6 @@ static const String8 kCppExtensions[] = {
     Str8LitComp("hh"),  Str8LitComp("hpp"), Str8LitComp("hxx"),
 };
 
-// --- JavaScript -------------------------------------------------------------
-
 static const String8 kJsKeywords[] = {
     Str8LitComp("if"),       Str8LitComp("else"),      Str8LitComp("for"),
     Str8LitComp("while"),    Str8LitComp("do"),         Str8LitComp("switch"),
@@ -89,8 +79,6 @@ static const String8 kJsExtensions[] = {
     Str8LitComp("js"),  Str8LitComp("jsx"),
     Str8LitComp("mjs"), Str8LitComp("cjs"),
 };
-
-// --- TypeScript -------------------------------------------------------------
 
 static const String8 kTsKeywords[] = {
     Str8LitComp("if"),         Str8LitComp("else"),       Str8LitComp("for"),
@@ -138,8 +126,6 @@ static const String8 kTsExtensions[] = {
     Str8LitComp("mts"), Str8LitComp("cts"),
 };
 
-// --- Python -----------------------------------------------------------------
-
 static const String8 kPyKeywords[] = {
     Str8LitComp("if"),      Str8LitComp("elif"),     Str8LitComp("else"),
     Str8LitComp("for"),     Str8LitComp("while"),    Str8LitComp("break"),
@@ -175,8 +161,6 @@ static const KeywordGroup kPyGroups[] = {
 static const String8 kPyExtensions[] = {
     Str8LitComp("py"), Str8LitComp("pyi"),
 };
-
-// --- Rust -------------------------------------------------------------------
 
 static const String8 kRustKeywords[] = {
     Str8LitComp("if"),       Str8LitComp("else"),     Str8LitComp("for"),
@@ -217,8 +201,6 @@ static const String8 kRustExtensions[] = {
     Str8LitComp("rs"),
 };
 
-// --- Go ---------------------------------------------------------------------
-
 static const String8 kGoKeywords[] = {
     Str8LitComp("if"),      Str8LitComp("else"),    Str8LitComp("for"),
     Str8LitComp("range"),   Str8LitComp("break"),   Str8LitComp("continue"),
@@ -257,8 +239,6 @@ static const String8 kGoExtensions[] = {
     Str8LitComp("go"),
 };
 
-// --- TOML -------------------------------------------------------------------
-
 static const String8 kTomlKeywords[] = {
     Str8LitComp("true"),  Str8LitComp("false"),
 };
@@ -271,8 +251,6 @@ static const String8 kTomlExtensions[] = {
     Str8LitComp("toml"),
 };
 
-// --- JSON -------------------------------------------------------------------
-
 static const String8 kJsonConstants[] = {
     Str8LitComp("true"),  Str8LitComp("false"),  Str8LitComp("null"),
 };
@@ -284,8 +262,6 @@ static const KeywordGroup kJsonGroups[] = {
 static const String8 kJsonExtensions[] = {
     Str8LitComp("json"),
 };
-
-// --- Fallback ---------------------------------------------------------------
 
 static const String8 kFallbackKeywords[] = {
     Str8LitComp("if"),    Str8LitComp("else"),   Str8LitComp("for"),
@@ -302,10 +278,6 @@ static const KeywordGroup kFallbackGroups[] = {
     {kFallbackKeywords,  ArrayCount(kFallbackKeywords),  TokenKind::Keyword},
     {kFallbackConstants, ArrayCount(kFallbackConstants), TokenKind::Constant},
 };
-
-// ---------------------------------------------------------------------------
-// Language table
-// ---------------------------------------------------------------------------
 
 static const LanguageDefinition kLanguages[] = {
     // Fallback (index 0)
@@ -400,12 +372,10 @@ static const LanguageDefinition kLanguages[] = {
     },
 };
 
-// ---------------------------------------------------------------------------
-
 const LanguageDefinition *SyntaxLanguageForPath(String8 path) {
   String8 ext = Str8PathExt(path);
   if (ext.size == 0) {
-    return &kLanguages[0];  // fallback
+    return &kLanguages[0];
   }
 
   for (u64 lang = 1; lang < ArrayCount(kLanguages); lang += 1) {
@@ -417,5 +387,5 @@ const LanguageDefinition *SyntaxLanguageForPath(String8 path) {
     }
   }
 
-  return &kLanguages[0];  // unknown extension -> fallback
+  return &kLanguages[0];
 }

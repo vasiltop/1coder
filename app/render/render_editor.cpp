@@ -59,10 +59,6 @@ void DrawBufferLine(RenderContext *ctx, const Buffer *buffer, u64 line, RectF32 
                     f32 baseline_y, u64 scroll_column, i32 columns) {
   RangeU64 range = BufferLineRange(buffer, line);
 
-  // A line is drawn left to right, so its tokens are walked the same way: one
-  // binary search to find where the line starts, then a monotonic advance
-  // past every token that has already ended by the current glyph's offset.
-  // That turns what would be O(glyphs * log tokens) into O(glyphs + tokens).
   const TokenArray *tokens = &buffer->tokens;
   u64 token_index = TokenIndexAtOffset(tokens, range.min);
 

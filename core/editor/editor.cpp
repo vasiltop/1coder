@@ -232,10 +232,6 @@ BufferHandle EditorOpenFile(Editor *ed, String8 path) {
     buffer->name = PushStr8Copy(buffer->arena, Str8PathBase(absolute));
   }
 
-  // Ordinary file buffers get syntax highlighting keyed off the resolved
-  // path's extension. Scratch, command, explorer and image buffers never
-  // reach here -- they are constructed through their own BufferOpen calls --
-  // so nothing else needs to opt out.
   SyntaxAttach(buffer, absolute);
 
   ScratchEnd(scratch);
