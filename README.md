@@ -10,15 +10,7 @@ Unpack it and put `1coder` somewhere on your `PATH`.
 
 ## Configuring it
 
-There are no config files, and there is no plugin system. Fonts come from the
-environment:
-
-```sh
-EDITOR_FONT_SIZE=16 1coder file.c
-```
-
-Everything else — colours, keybindings, defaults — is a source change and a
-rebuild.
+There are no config files, and there is no plugin system. To configure the editor you must rebuild it from source.
 
 ## Building
 
