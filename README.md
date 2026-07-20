@@ -1,12 +1,12 @@
-# 1coderr
+# 1coder
 
 A modal text editor with vim keybindings. One binary, no config files, no plugin
 manager, no scripting language.
 
 ## Install
 
-Download from the [latest release](https://github.com/vasiltop/1coderr/releases/latest):
-Unpack it and put `1coderr` somewhere on your `PATH`.
+Download from the [latest release](https://github.com/vasiltop/1coder/releases/latest):
+Unpack it and put `1coder` somewhere on your `PATH`.
 
 ## Configuring it
 
@@ -14,7 +14,7 @@ There are no config files, and there is no plugin system. Fonts come from the
 environment:
 
 ```sh
-EDITOR_FONT_SIZE=16 1coderr file.c
+EDITOR_FONT_SIZE=16 1coder file.c
 ```
 
 Everything else — colours, keybindings, defaults — is a source change and a
@@ -23,6 +23,6 @@ rebuild.
 ## Building
 
 ```sh
-git clone --recurse-submodules https://github.com/vasiltop/1coderr
+git clone --recurse-submodules https://github.com/vasiltop/1coder
 cmake -B build -S . && cmake --build build -j
 ```
