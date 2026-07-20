@@ -113,7 +113,7 @@ String8 LexicallyNormalizeAbsolutePath(Arena *arena, String8 path) {
   String8 root = RootPrefix(path);
   String8 normalized = String8{};
   if (components.node_count == 0) {
-    normalized = (root.size > 0) ? root : path;
+    normalized = PushStr8Copy(arena, (root.size > 0) ? root : path);
   } else {
     String8 joined = Str8ListJoin(scratch.arena, &components, Str8Lit("/"));
     normalized = (root.size > 0) ? PushStr8Cat(arena, root, joined) : PushStr8Copy(arena, joined);
@@ -239,6 +239,8 @@ void ZeroCommand(LspServerCommand *command) {
 }
 
 }  // namespace
+
+String8 LspNormalizePath(Arena *arena, String8 path) { return NormalizeFilePath(arena, path); }
 
 bool LspLanguageForPath(String8 path, LspLanguage *language, String8 *language_id) {
   if (language) *language = {};

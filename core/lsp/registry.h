@@ -15,6 +15,7 @@ struct LspServerCommand {
   String8 root;
 };
 
+[[nodiscard]] String8 LspNormalizePath(Arena *arena, String8 path);
 [[nodiscard]] bool LspLanguageForPath(String8 path, LspLanguage *language, String8 *language_id);
 [[nodiscard]] String8 LspFindProjectRoot(Arena *arena, LspLanguage language, String8 file_path);
 [[nodiscard]] bool LspResolveServerCommand(Arena *arena, LspLanguage language, String8 root,

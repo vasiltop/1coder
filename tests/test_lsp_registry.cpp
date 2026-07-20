@@ -148,6 +148,15 @@ void CheckCommand(const LspServerCommand &command, LspLanguage language, String8
   for (u64 i = 0; i < argument_count; i += 1) CHECK_STR(command.arguments[i], arguments[i]);
 }
 
+void ReuseScratchStorage(Arena *arena) {
+  for (u64 i = 0; i < 16; i += 1) {
+    TempArena scratch = ScratchBegin1(arena);
+    u8 *bytes = PushArrayNoZero(scratch.arena, u8, 4096);
+    memset(bytes, 'x', 4096);
+    ScratchEnd(scratch);
+  }
+}
+
 }  // namespace
 
 TEST(lsp_registry_maps_supported_extensions_case_insensitively) {
@@ -240,6 +249,29 @@ TEST(lsp_registry_finds_git_markers_falls_back_without_markers_and_stops_at_root
   String8 root_file = OsPathJoin(scope.arena, drive_root, Str8Lit("1coder_lsp_registry_root_stop.go"));
   CHECK_STR(LspFindProjectRoot(scope.arena, LspLanguage::Go, root_file), drive_root);
 }
+
+TEST(lsp_registry_normalized_root_paths_are_owned_after_scratch_reuse) {
+  ArenaScope scope;
+
+  String8 root = RootOfPath(OsGetCwd(scope.arena));
+  String8 reducing = OsPathJoin(scope.arena, root, Str8Lit("1coder-lsp-root/.."));
+  String8 normalized = LspNormalizePath(scope.arena, reducing);
+  ReuseScratchStorage(scope.arena);
+
+  CHECK_STR(normalized, root);
+}
+
+#if defined(_WIN32)
+TEST(lsp_registry_normalizes_windows_drive_root_paths) {
+  ArenaScope scope;
+
+  String8 drive_root = RootOfPath(OsGetCwd(scope.arena));
+  String8 reducing = OsPathJoin(scope.arena, drive_root, Str8Lit("1coder-lsp-root/.."));
+
+  CHECK_STR(LspNormalizePath(scope.arena, drive_root), drive_root);
+  CHECK_STR(LspNormalizePath(scope.arena, reducing), drive_root);
+}
+#endif
 
 TEST(lsp_registry_resolves_server_commands_from_path_and_prefers_basedpyright) {
   ArenaScope scope;
