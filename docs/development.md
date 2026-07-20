@@ -77,5 +77,4 @@ Mode, so the tests that need them skip rather than fail.
 
 Tree-sitter highlighting (the `TokenArray` seam and the theme's colour table are
 in place and unused), a git client, marks, visual block mode (the `VimMode` case
-exists as a seam), regular expressions in search, and image rendering beyond the
-placeholder buffer.
+exists as a seam), and regular expressions in search.
