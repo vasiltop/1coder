@@ -141,6 +141,8 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   /* ---- edits ---- */                                                                                                  \
   X(delete_char,           "delete-char",           "Delete character under cursor",   CommandArg::None, CmdHidden)      \
   X(delete_char_before,    "delete-char-before",    "Delete character before cursor",  CommandArg::None, CmdHidden)      \
+  X(replace_char,          "replace-char",          "Replace character under cursor",  CommandArg::None, CmdHidden)      \
+  X(toggle_case,           "toggle-case",           "Toggle case of character",        CommandArg::None, CmdHidden)      \
   X(delete_line,           "delete",                "Delete lines",                    CommandArg::None, CmdRange)       \
   X(delete_to_line_end,    "delete-to-line-end",    "Delete to end of line",           CommandArg::None, CmdHidden)      \
   X(change_line,           "change-line",           "Change current line",             CommandArg::None, CmdHidden)      \

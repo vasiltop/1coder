@@ -62,14 +62,27 @@ RangeU64 VimRangeFromMotion(const Buffer *buffer, u64 from, MotionResult motion)
         if (range.max == line_start && line > 0) {
           u64 previous_end = BufferLineEnd(buffer, line - 1);
           if (previous_end > range.min) range.max = previous_end;
+        } else {
+          // When `w` lands partway into the next line (not at its very start),
+          // clip the range to the end of the source line so `dw` never deletes
+          // a newline or content from the following line.
+          u64 from_line = BufferLineFromOffset(buffer, range.min);
+          if (line > from_line) {
+            u64 from_end = BufferLineEnd(buffer, from_line);
+            range.max = (from_end > range.min) ? from_end : range.min;
+          }
         }
       }
       break;
     }
-    case MotionKind::Inclusive:
-      // The character at the far end is part of the span, so step past it.
-      range.max = Min(BufferNextCodepoint(buffer, range.max), BufferSize(buffer));
+    case MotionKind::Inclusive: {
+      // The character at the far end is part of the span, so step past it,
+      // clamped to the line boundary so inclusive motions cannot cross newlines.
+      u64 next = BufferNextCodepoint(buffer, range.max);
+      u64 line_nl = BufferLineEnd(buffer, BufferLineFromOffset(buffer, range.max));
+      range.max = (next <= line_nl) ? next : line_nl;
       break;
+    }
     case MotionKind::Linewise: {
       // Take the lines the two *endpoints* sit on, rather than expanding the
       // byte range. When the target lands exactly on a line start, the byte
@@ -91,6 +104,7 @@ void VimYankRange(Editor *ed, View *view, Buffer *buffer, RangeU64 range, bool l
                   bool from_yank) {
   TempArena scratch = ScratchBegin();
   String8 text = BufferTextRange(scratch.arena, buffer, range);
+  if (linewise && text.size == 0 && (from_yank || buffer->final_newline)) text = Str8Lit("\n");
 
   u8 name = RegisterNormalise(view->vim.pending_register);
   EditorSetRegister(ed, name, text, linewise);
@@ -116,17 +130,28 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
   switch (op) {
     case OperatorKind::Yank: {
       VimYankRange(ed, view, buffer, range, linewise, true);
-      // Yank leaves the cursor at the start of the yanked span.
       return range.min;
     }
 
     case OperatorKind::Delete: {
+      u64 size_before = BufferSize(buffer);
+      BufferBeginEditGroup(buffer);
       VimYankRange(ed, view, buffer, range, linewise);
+
+      u64 del_start_line = BufferLineFromOffset(buffer, range.min);
+      u64 del_end_line   = (range.max > range.min)
+                               ? BufferLineFromOffset(buffer, range.max - 1)
+                               : del_start_line;
+      bool cross_line    = linewise || del_end_line > del_start_line;
+
       BufferDelete(ed, buffer, range, view->cursor, range.min);
 
+      if (BufferSize(buffer) == 0 && (cross_line || size_before > 0))
+        BufferSetFinalNewline(buffer, !cross_line);
+
+      BufferEndEditGroup(buffer);
+
       if (linewise) {
-        // The cursor lands on whichever line moved up into the deleted one,
-        // keeping its column.
         u64 line = Min(BufferLineFromOffset(buffer, range.min), BufferLineCount(buffer) - 1);
         return BufferOffsetFromColumn(buffer, line, column);
       }
@@ -137,14 +162,23 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
       VimYankRange(ed, view, buffer, range, linewise);
 
       if (linewise) {
-        // `cc` empties the lines but keeps one to type on, rather than
-        // removing them outright as `dd` would.
+        // `cc` empties the lines but keeps one to type on; leading whitespace
+        // is preserved so the cursor enters insert at the current indent level.
         RangeU64 without_newline = range;
         u64 last_line = BufferLineFromOffset(buffer, (range.max > range.min) ? range.max - 1
                                                                             : range.min);
         without_newline.max = BufferLineEnd(buffer, last_line);
-        BufferDelete(ed, buffer, without_newline, view->cursor, without_newline.min);
-        return without_newline.min;
+
+        u64 first_non_blank = without_newline.min;
+        while (first_non_blank < without_newline.max) {
+          u8 c = BufferByteAt(buffer, first_non_blank);
+          if (c != ' ' && c != '\t') break;
+          first_non_blank++;
+        }
+
+        RangeU64 to_delete = {first_non_blank, without_newline.max};
+        BufferDelete(ed, buffer, to_delete, view->cursor, first_non_blank);
+        return first_non_blank;
       }
 
       BufferDelete(ed, buffer, range, view->cursor, range.min);
@@ -166,21 +200,22 @@ u64 VimPasteRegister(Editor *ed, View *view, Buffer *buffer, Register reg, u64 p
                      bool after) {
   if (reg.text.size == 0 || BufferIsReadOnly(buffer)) return pos;
 
+  // One undo step for the whole paste, even when a separator needs inserting.
+  BufferBeginEditGroup(buffer);
+
   TempArena scratch = ScratchBegin();
 
-  // Repeat the register's contents `count` times before inserting, so 3p is a
-  // single undoable edit rather than three.
-  String8List parts = {};
-  for (u64 i = 0; i < count; i += 1) Str8ListPush(scratch.arena, &parts, reg.text);
-  String8 text = Str8ListJoin(scratch.arena, &parts, String8{nullptr, 0});
-  text = BufferFilteredText(scratch.arena, buffer, text);
-
-  // Linewise content has to end in a newline or it would run into the line it
-  // lands next to. `yy` on a final line with no newline of its own produces
-  // exactly that case.
-  if (reg.linewise && text.size > 0 && text.str[text.size - 1] != '\n') {
-    text = PushStr8Cat(scratch.arena, text, Str8Lit("\n"));
+  // Expand `count` copies now so the whole paste is one undoable edit.
+  // Linewise pieces each need a trailing newline to stay on separate lines.
+  String8 piece = RegisterBufferText(scratch.arena, buffer, reg);
+  if (piece.size == 0) {
+    ScratchEnd(scratch);
+    BufferEndEditGroup(buffer);
+    return pos;
   }
+  String8List parts = {};
+  for (u64 i = 0; i < count; i += 1) Str8ListPush(scratch.arena, &parts, piece);
+  String8 text = Str8ListJoin(scratch.arena, &parts, String8{nullptr, 0});
 
   u64 cursor = pos;
 
@@ -195,15 +230,34 @@ u64 VimPasteRegister(Editor *ed, View *view, Buffer *buffer, Register reg, u64 p
       return pos;
     }
 
-    // A final line with no newline of its own needs one adding first, or the
-    // pasted text would join onto it.
-    if (after && at > 0 && BufferByteAt(buffer, at - 1) != '\n') {
-      BufferInsert(ed, buffer, at, Str8Lit("\n"), pos, at + 1);
-      at += 1;
+    // A final line with no trailing newline needs a separator, or the pasted
+    // text would join onto it.
+    if (after) {
+      bool needs_sep = (at > 0 && BufferByteAt(buffer, at - 1) != '\n')
+                    || (at == 0 && BufferSize(buffer) == 0);
+      if (needs_sep) {
+        BufferInsert(ed, buffer, at, Str8Lit("\n"), pos, at + 1);
+        at += 1;
+      }
+    }
+
+    // Strip trailing '\n' when appending at end of buffer; the save layer adds
+    // one and paste-before keeps its own to represent the following blank line.
+    if (after && at == BufferSize(buffer) && text.size > 0 && text.str[text.size - 1] == '\n') {
+      text = Str8Chop(text, 1);
     }
 
     BufferInsert(ed, buffer, at, text, pos, at);
     cursor = at;
+
+    // Land on the first non-blank character of the newly pasted line.
+    u64 pasted_line = BufferLineFromOffset(buffer, cursor);
+    u64 line_end = BufferLineEnd(buffer, pasted_line);
+    while (cursor < line_end) {
+      u8 c = BufferByteAt(buffer, cursor);
+      if (c != ' ' && c != '\t') break;
+      cursor += 1;
+    }
   } else {
     // `p` pastes after the character under the cursor -- but on an empty line
     // there is no such character, and stepping forward would cross the newline
@@ -214,12 +268,29 @@ u64 VimPasteRegister(Editor *ed, View *view, Buffer *buffer, Register reg, u64 p
       ScratchEnd(scratch);
       return pos;
     }
-    // Characterwise paste leaves the cursor on the last pasted character.
     BufferInsert(ed, buffer, at, text, pos, at + text.size);
-    cursor = (text.size > 0) ? at + text.size - 1 : at;
+
+    // Cursor lands on the last codepoint for plain text; at the insertion
+    // point when the text contains a newline.
+    if (text.size == 0) {
+      cursor = at;
+    } else {
+      bool has_newline = false;
+      for (u64 k = 0; k < text.size; k += 1) {
+        if (text.str[k] == '\n') { has_newline = true; break; }
+      }
+      if (!has_newline) {
+        cursor = BufferPrevCodepoint(buffer, at + text.size);
+      } else if (after && text.str[text.size - 1] == '\n') {
+        cursor = at;
+      } else {
+        cursor = at;
+      }
+    }
   }
 
   ScratchEnd(scratch);
+  BufferEndEditGroup(buffer);
   return cursor;
 }
 
@@ -274,53 +345,99 @@ u64 VimReplaceVisual(Editor *ed, View *view, Buffer *buffer, Register replacemen
 u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool indent) {
   if (BufferEditBlocked(buffer, lines)) return view->cursor;
 
-  u64 column = BufferColumnFromOffset(buffer, view->cursor);
   u64 first = BufferLineFromOffset(buffer, lines.min);
   u64 last = BufferLineFromOffset(buffer, (lines.max > lines.min) ? lines.max - 1 : lines.min);
 
-  TempArena scratch = ScratchBegin();
-  String8 shift = PushStr8F(scratch.arena, "%*s", (int)kShiftWidth, "");
+  // Capture cursor codepoint-column before any edits.
+  u64 old_col = BufferColumnFromOffset(buffer, view->cursor);
 
-  // One undo step for the whole operation, however many lines it spans.
+  // <<: record cursor's end virtual-column before any edits to restore position after dedent.
+  u64 old_end_vcol = 0;
+  if (!indent) {
+    u64 cur_line = BufferLineFromOffset(buffer, view->cursor);
+    RangeU64 clr = BufferLineRange(buffer, cur_line);
+    u64 vcol = 0;
+    for (u64 p = clr.min; p < clr.max; p = BufferNextCodepoint(buffer, p)) {
+      u8 c = BufferByteAt(buffer, p);
+      vcol += (c == '\t') ? ((vcol / kTabStop + 1) * kTabStop - vcol) : 1;
+      if (p == view->cursor) { old_end_vcol = vcol; break; }
+    }
+    if (old_end_vcol == 0) old_end_vcol = vcol + 1;
+  }
+
+  // For >>: count leading-whitespace codepoints on the first line so we can
+  // compute min(old_col, old_first_nonblank) after the tab is prepended.
+  u64 old_first_nonblank = 0;
+  if (indent) {
+    RangeU64 fr = BufferLineRange(buffer, first);
+    for (u64 p = fr.min; p < fr.max; p++) {
+      u8 c = BufferByteAt(buffer, p);
+      if (c != ' ' && c != '\t') break;
+      old_first_nonblank++;
+    }
+  }
+
+  TempArena scratch = ScratchBegin();
   BufferBeginEditGroup(buffer);
 
-  // Work bottom-up so each edit cannot shift the offsets of lines not yet
-  // visited.
   for (u64 i = last + 1; i > first; i -= 1) {
     u64 line = i - 1;
     RangeU64 range = BufferLineRange(buffer, line);
 
     if (indent) {
-      if (RangeSize(range) == 0) continue;  // leave blank lines alone
-      BufferInsert(ed, buffer, range.min, shift, view->cursor, view->cursor);
+      if (RangeSize(range) == 0) continue;
+      BufferInsert(ed, buffer, range.min, Str8Lit("\t"), view->cursor, view->cursor);
     } else {
-      // Remove up to one shift width of leading whitespace.
-      u64 removed = 0;
-      u64 p = range.min;
-      while (removed < kShiftWidth && p < range.max) {
-        u8 c = BufferByteAt(buffer, p);
-        if (c == ' ') { p += 1; removed += 1; }
-        else if (c == '\t') { p += 1; removed = kShiftWidth; }
+      // Count visual columns of leading whitespace (tab stops at kTabStop).
+      u64 vcols = 0;
+      u64 ws_end = range.min;
+      while (ws_end < range.max) {
+        u8 c = BufferByteAt(buffer, ws_end);
+        if (c == '\t') { vcols = (vcols / kTabStop + 1) * kTabStop; ws_end++; }
+        else if (c == ' ') { vcols++; ws_end++; }
         else break;
       }
-      if (p > range.min) {
-        BufferDelete(ed, buffer, RangeU64{range.min, p}, view->cursor, view->cursor);
-      }
+      u64 new_vcols = vcols > kTabStop ? vcols - kTabStop : 0;
+      u64 new_tabs  = new_vcols / kTabStop;
+      u64 new_spc   = new_vcols % kTabStop;
+      u8 *prefix = PushArrayNoZero(scratch.arena, u8, new_tabs + new_spc + 1);
+      for (u64 j = 0; j < new_tabs; j++) prefix[j] = '\t';
+      for (u64 j = 0; j < new_spc;  j++) prefix[new_tabs + j] = ' ';
+      BufferReplace(ed, buffer, RangeU64{range.min, ws_end},
+                    String8{prefix, new_tabs + new_spc}, view->cursor, view->cursor);
     }
   }
 
   BufferEndEditGroup(buffer);
   ScratchEnd(scratch);
 
-  // Keep the column, matching neovim's 'nostartofline'.
-  return BufferOffsetFromColumn(buffer, first, column);
+  if (indent) {
+    // Cursor sits at min(old_col, old_first_nonblank) on the first line.
+    return BufferOffsetFromColumn(buffer, first, Min(old_col, old_first_nonblank));
+  }
+
+  // Land on the last codepoint whose end virtual-column fits within old_end_vcol.
+  {
+    RangeU64 fr = BufferLineRange(buffer, first);
+    u64 best = fr.min;
+    u64 vcol = 0;
+    for (u64 p = fr.min; p < fr.max; p = BufferNextCodepoint(buffer, p)) {
+      u8 c = BufferByteAt(buffer, p);
+      u64 w = (c == '\t') ? ((vcol / kTabStop + 1) * kTabStop - vcol) : 1;
+      if (vcol + w > old_end_vcol) break;
+      vcol += w;
+      best = p;
+    }
+    return best;
+  }
 }
 
 u64 VimJoinLines(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count) {
   BufferBeginEditGroup(buffer);
 
   u64 cursor = pos;
-  u64 joins = Max(count, (u64)1);
+  // Neovim: bare J or 1J == 2J (one join); NJ joins N lines (N-1 joins).
+  u64 joins = count <= 1 ? 1 : count - 1;
 
   for (u64 i = 0; i < joins; i += 1) {
     u64 line = BufferLineFromOffset(buffer, cursor);
@@ -329,8 +446,6 @@ u64 VimJoinLines(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count) {
     u64 end = BufferLineEnd(buffer, line);
     u64 next_start = BufferOffsetFromLine(buffer, line + 1);
 
-    // Swallow the newline plus the next line's leading whitespace, and put a
-    // single space in their place.
     u64 content = next_start;
     RangeU64 next_range = BufferLineRange(buffer, line + 1);
     while (content < next_range.max && CharIsSpace(BufferByteAt(buffer, content))) {
@@ -340,8 +455,9 @@ u64 VimJoinLines(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count) {
     RangeU64 replace = RangeU64{end, content};
     if (BufferEditBlocked(buffer, replace)) break;
 
-    // No separator is added when the line is empty or already ends in one.
-    bool need_space = (end > BufferOffsetFromLine(buffer, line)) && (content < next_range.max);
+    u64 line_start = BufferOffsetFromLine(buffer, line);
+    bool ends_in_space = end > line_start && CharIsSpace(BufferByteAt(buffer, end - 1));
+    bool need_space = end > line_start && content < next_range.max && !ends_in_space;
     String8 separator = need_space ? Str8Lit(" ") : String8{nullptr, 0};
 
     BufferReplace(ed, buffer, replace, separator, cursor, end);

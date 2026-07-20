@@ -172,6 +172,7 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved);
 // insert-mode session or a multi-part command undoes at once.
 void BufferBeginEditGroup(Buffer *buffer);
 void BufferEndEditGroup(Buffer *buffer);
+void BufferSetFinalNewline(Buffer *buffer, bool fn);
 
 // ---------------------------------------------------------------------------
 // Reading
