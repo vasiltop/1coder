@@ -135,7 +135,7 @@ void EdgeProbe(RectS32 rect, Dir2 dir, i32 *out_x, i32 *out_y) {
 Panel *PanelAllocLeaf(Arena *arena, View *view) {
   Panel *panel = PushStruct(arena, Panel);
   panel->view = view;
-  panel->size_pct = 1.0f;
+  panel->size_pct = 1.0;
   return panel;
 }
 
@@ -147,11 +147,11 @@ Panel *PanelSplit(Arena *arena, Panel *panel, Axis2 axis, View *new_view) {
   // and keeps the root stable.
   Panel *existing = PushStruct(arena, Panel);
   existing->view = panel->view;
-  existing->size_pct = 1.0f;
+  existing->size_pct = 1.0;
 
   Panel *created = PushStruct(arena, Panel);
   created->view = new_view;
-  created->size_pct = 1.0f;
+  created->size_pct = 1.0;
 
   panel->view = nullptr;
   panel->split_axis = axis;
@@ -212,10 +212,7 @@ void PanelLayout(Panel *root, RectS32 rect) {
 
   for (Panel *child = root->first_child; child; child = child->next) {
     cumulative += PanelChildWeight(child);
-    // Non-last child edges come from cumulative weights so shared boundaries are
-    // stable when the cumulative share to their right is preserved. The tiny
-    // bias only compensates for floating-point underflow at mathematically exact
-    // cell boundaries; it is far smaller than one cell.
+    // Cumulative edges keep later boundaries stable; the tiny bias cancels exact-boundary underflow.
     i32 next_offset =
         child->next ? ((horizontal ? rect.x0 : rect.y0) +
                        (i32)(((f64)extent * Min(cumulative / total, 1.0)) + kLayoutEdgeBias))
@@ -403,7 +400,7 @@ void PanelEqualize(Panel *root) {
   if (!root || PanelIsLeaf(root)) return;
 
   for (Panel *child = root->first_child; child; child = child->next) {
-    child->size_pct = 1.0f;
+    child->size_pct = 1.0;
     PanelEqualize(child);
   }
 }

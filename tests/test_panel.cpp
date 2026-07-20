@@ -44,7 +44,7 @@ Panel *MakeDirectChildren(Fixture *f, Axis2 axis, std::initializer_list<i32> wei
     child->parent = root;
     child->prev = prev;
     child->next = nullptr;
-    child->size_pct = (f32)weight;
+    child->size_pct = weight;
 
     if (prev) {
       prev->next = child;
@@ -709,6 +709,75 @@ TEST(panel_mouse_boundary_resize_repairs_after_minimum_after_relayout) {
 
   CHECK_EQ(RectWidth(left->rect), 2);
   CHECK_EQ(RectWidth(right->rect), 2);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_y_exact_rows_and_clamp) {
+  Fixture f = MakeFixture();
+
+  Panel *bottom = PanelSplit(f.arena, f.root, Axis2::Y, NextView(&f));
+  RectS32 rect = {0, 0, 8, 21};
+  PanelLayout(f.root, rect);
+  Panel *top = f.root->first_child;
+  CHECK_EQ(RectHeight(top->rect), 10);
+  CHECK_EQ(RectHeight(bottom->rect), 11);
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, top, bottom, Axis2::Y), 6);
+  PanelLayout(f.root, rect);
+  CHECK_EQ(RectHeight(top->rect), 16);
+  CHECK_EQ(RectHeight(bottom->rect), 5);
+
+  PanelResizeBoundary(PanelBoundaryAt(f.root, 2, 15, Axis2::Y), 100);
+  PanelLayout(f.root, rect);
+  CHECK_EQ(RectHeight(top->rect), 19);
+  CHECK_EQ(RectHeight(bottom->rect), 2);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_y_repairs_minimum_after_relayout) {
+  Fixture f = MakeFixture();
+
+  Panel *bottom = PanelSplit(f.arena, f.root, Axis2::Y, NextView(&f));
+  Panel *top = f.root->first_child;
+
+  PanelLayout(f.root, kScreen);
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, top, bottom, Axis2::Y), -10);
+  PanelLayout(f.root, kScreen);
+  CHECK_EQ(RectHeight(top->rect), 2);
+  CHECK_EQ(RectHeight(bottom->rect), 22);
+
+  RectS32 short_rect = {0, 0, 8, 4};
+  PanelLayout(f.root, short_rect);
+  CHECK_EQ(RectHeight(top->rect), 0);
+  CHECK_EQ(RectHeight(bottom->rect), 4);
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, top, bottom, Axis2::Y), 1);
+  PanelLayout(f.root, short_rect);
+  CHECK_EQ(RectHeight(top->rect), 2);
+  CHECK_EQ(RectHeight(bottom->rect), 2);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_y_keeps_unrelated_sizes_stable) {
+  Fixture f = MakeFixture();
+
+  Panel *a = MakeDirectChildren(&f, Axis2::Y, {1, 14, 7});
+  Panel *b = a->next;
+  Panel *c = b->next;
+  RectS32 rect = {0, 0, 8, 22};
+  PanelLayout(f.root, rect);
+  CHECK_EQ(RectHeight(a->rect), 1);
+  CHECK_EQ(RectHeight(b->rect), 14);
+  CHECK_EQ(RectHeight(c->rect), 7);
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, a, b, Axis2::Y), 1);
+  PanelLayout(f.root, rect);
+  CHECK_EQ(RectHeight(a->rect), 2);
+  CHECK_EQ(RectHeight(b->rect), 13);
+  CHECK_EQ(RectHeight(c->rect), 7);
 
   Destroy(&f);
 }
