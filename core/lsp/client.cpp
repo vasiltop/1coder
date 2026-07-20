@@ -31,7 +31,7 @@ struct LspClientImpl {
   Arena *arena;
   u64 runtime_pos;
   LspClientConfig config;
-  LspTransport transport;
+  LspTransport transport{};
   LspClientState state;
   LspServerCapabilities capabilities;
   LspPositionEncoding position_encoding;

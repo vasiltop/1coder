@@ -25,7 +25,7 @@ struct QueuedMessage {
 
 struct LspTransportImpl {
   Arena *arena;
-  OsProcess process;
+  OsProcess process{};
   LspFrameDecoder decoder;
   LspServerCommand command;
   LspWakeProc wake;
