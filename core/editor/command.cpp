@@ -1054,19 +1054,35 @@ static void Cmd_focus_right(CommandArgs *a) { EditorFocusDir(a->ed, Dir2::Right)
 static void Cmd_focus_up(CommandArgs *a) { EditorFocusDir(a->ed, Dir2::Up); }
 static void Cmd_focus_down(CommandArgs *a) { EditorFocusDir(a->ed, Dir2::Down); }
 
+static Panel *LeafWithView(Panel *root, View *view) {
+  if (!view) return nullptr;
+  for (Panel *leaf = PanelFirstLeaf(root); leaf; leaf = PanelNextLeaf(root, leaf)) {
+    if (leaf->view == view) return leaf;
+  }
+  return nullptr;
+}
+
 static void Cmd_only_window(CommandArgs *a) {
   Editor *ed = a->ed;
-  // Close everything except the focused panel, re-checking each time since the
-  // tree collapses as panels go.
-  while (PanelLeafCount(ed->root_panel) > 1) {
-    Panel *victim = PanelFirstLeaf(ed->root_panel);
-    if (victim == ed->focused_panel) victim = PanelNextLeaf(ed->root_panel, victim);
-    if (!victim || victim == ed->focused_panel) break;
+  // Track the view, not the panel pointer: PanelClose folds a sole remaining
+  // child into its parent, so the focused leaf pointer can become an orphan
+  // while its view moves up into a still-live panel.
+  View *keep_view = EditorFocusedView(ed);
 
-    Panel *keep = ed->focused_panel;
+  while (PanelLeafCount(ed->root_panel) > 1) {
+    Panel *keep = LeafWithView(ed->root_panel, keep_view);
+    if (!keep) break;
+
+    Panel *victim = PanelFirstLeaf(ed->root_panel);
+    if (victim == keep) victim = PanelNextLeaf(ed->root_panel, victim);
+    if (!victim || victim == keep) break;
+
     PanelClose(victim, &ed->root_panel);
-    ed->focused_panel = keep;
   }
+
+  Panel *focus = LeafWithView(ed->root_panel, keep_view);
+  if (!focus) focus = PanelFirstLeaf(ed->root_panel);
+  EditorFocusPanel(ed, focus);
   EditorLayout(ed);
 }
 
