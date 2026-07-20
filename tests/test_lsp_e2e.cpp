@@ -57,6 +57,12 @@ struct EditorScope {
   ~EditorScope() { EditorDestroy(&ed); }
 };
 
+struct ScenarioLayout {
+  String8 root;
+  String8 bin;
+  String8 record_path;
+};
+
 struct ScopedEnvVar {
   Arena *arena;
   const char *name;
@@ -177,28 +183,16 @@ Buffer *OpenAndShowFileBuffer(Editor *ed, String8 path) {
   return buffer;
 }
 
-View *FocusBuffer(Editor *ed, Buffer *buffer, u64 cursor) {
+void FocusBuffer(Editor *ed, Buffer *buffer, u64 cursor) {
   View *view = EditorFocusedView(ed);
   CHECK(view != nullptr);
   view->buffer = buffer->handle;
   ViewSetCursor(view, buffer, cursor);
-  return view;
 }
 
 bool BufferDidOpen(Editor *ed, Buffer *buffer) {
   EditorLspBufferInfo info = {};
   return EditorLspGetBufferInfo(ed, buffer, &info) && info.did_open_sent;
-}
-
-bool StatusContains(Editor *ed, const char *needle) {
-  if (ed == nullptr || ed->status_message.str == nullptr || needle == nullptr) return false;
-  String8 status = ed->status_message;
-  String8 text = Str8C(needle);
-  if (text.size == 0 || status.size < text.size) return false;
-  for (u64 i = 0; i + text.size <= status.size; i += 1) {
-    if (memcmp(status.str + i, text.str, (size_t)text.size) == 0) return true;
-  }
-  return false;
 }
 
 u64 RecordedMessageCount(String8 path) {
@@ -218,7 +212,7 @@ u64 RecordedMessageCount(String8 path) {
   return count;
 }
 
-u64 CountRecordedMethod(Arena *arena, String8 path, String8 method) {
+u64 RecordedMethodCount(Arena *arena, String8 path, String8 method) {
   TempArena scratch = ScratchBegin1(arena);
   FileContents contents = OsFileRead(scratch.arena, path);
   if (!contents.ok || contents.data.size == 0) {
@@ -286,6 +280,18 @@ std::string DescribeEditorState(Editor *ed, String8 record_path) {
   return state;
 }
 
+ScenarioLayout PrepareScenarioLayout(Arena *arena, String8 fixture_path, const char *record_name) {
+  ScenarioLayout layout = {};
+  layout.root = OsPathJoin(arena, fixture_path, Str8Lit("proj"));
+  layout.bin = OsPathJoin(arena, fixture_path, Str8Lit("bin"));
+  CHECK(OsMakeDirs(layout.root));
+  CHECK(OsMakeDirs(layout.bin));
+  CHECK(OsFileWrite(OsPathJoin(arena, layout.root, Str8Lit(".git")), String8{}));
+  (void)InstallClangdAlias(arena, layout.bin);
+  layout.record_path = OsPathJoin(arena, fixture_path, Str8C(record_name));
+  return layout;
+}
+
 template <typename Predicate, typename DebugState>
 void WaitUntilOrFail(const char *label, Predicate predicate, DebugState debug_state,
                      i32 timeout_ms = 2000) {
@@ -299,6 +305,13 @@ void WaitUntilOrFail(const char *label, Predicate predicate, DebugState debug_st
   TestFail(__FILE__, __LINE__, "%s timed out after %dms: %s", label, timeout_ms, state.c_str());
 }
 
+template <typename Predicate>
+void WaitForEditor(Editor *ed, String8 record_path, const char *label, Predicate predicate,
+                   i32 timeout_ms = 2000) {
+  WaitUntilOrFail(label, predicate, [&]() { return DescribeEditorState(ed, record_path); },
+                  timeout_ms);
+}
+
 EditorLspConfig RealRegistryConfig() {
   EditorLspConfig config = {};
   config.shutdown_timeout_ms = 60;
@@ -309,22 +322,14 @@ TEST(lsp_e2e_real_process_lifecycle_completion_hover_and_shutdown) {
   ArenaScope scope;
   ScopedFixtureDir fixture(scope.arena, "lifecycle");
   EditorScope editor(scope.arena);
-
-  String8 root = OsPathJoin(scope.arena, fixture.path, Str8Lit("proj"));
-  String8 bin = OsPathJoin(scope.arena, fixture.path, Str8Lit("bin"));
-  CHECK(OsMakeDirs(root));
-  CHECK(OsMakeDirs(bin));
-  CHECK(OsFileWrite(OsPathJoin(scope.arena, root, Str8Lit(".git")), String8{}));
-  (void)InstallClangdAlias(scope.arena, bin);
-
-  String8 record_path = OsPathJoin(scope.arena, fixture.path, Str8Lit("lifecycle.jsonl"));
-  String8 file_path = WriteTextFile(scope.arena, root, Str8Lit("main.cpp"), Str8Lit("std::\n"));
+  ScenarioLayout layout = PrepareScenarioLayout(scope.arena, fixture.path, "lifecycle.jsonl");
+  String8 file_path = WriteTextFile(scope.arena, layout.root, Str8Lit("main.cpp"), Str8Lit("std::\n"));
 
   ScopedWorkingDirectory cwd(scope.arena);
-  CHECK(cwd.Set(root));
-  ScopedEnvVar path(scope.arena, "PATH", PrependPath(scope.arena, bin));
+  CHECK(cwd.Set(layout.root));
+  ScopedEnvVar path(scope.arena, "PATH", PrependPath(scope.arena, layout.bin));
   ScopedEnvVar mode(scope.arena, kFakeLspModeEnv, Str8Lit("lifecycle"));
-  ScopedEnvVar record(scope.arena, kFakeLspRecordEnv, record_path);
+  ScopedEnvVar record(scope.arena, kFakeLspRecordEnv, layout.record_path);
 #if defined(_WIN32)
   ScopedEnvVar pathext(scope.arena, "PATHEXT", Str8Lit(".EXE"));
 #endif
@@ -335,16 +340,13 @@ TEST(lsp_e2e_real_process_lifecycle_completion_hover_and_shutdown) {
   Buffer *buffer = OpenAndShowFileBuffer(&editor.ed, file_path);
   FocusBuffer(&editor.ed, buffer, BufferSize(buffer) - 1);
 
-  WaitUntilOrFail(
-      "lifecycle diagnostics after didOpen",
-      [&]() {
-        (void)EditorTick(&editor.ed);
-        u64 diagnostic_count = 0;
-        const LspDiagnostic *diagnostics =
-            EditorLspUiDiagnosticsForBuffer(editor.ed.lsp_ui, buffer, &diagnostic_count);
-        return BufferDidOpen(&editor.ed, buffer) && diagnostics != nullptr && diagnostic_count == 1;
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
+  WaitForEditor(&editor.ed, layout.record_path, "lifecycle diagnostics after didOpen", [&]() {
+    (void)EditorTick(&editor.ed);
+    u64 diagnostic_count = 0;
+    const LspDiagnostic *diagnostics =
+        EditorLspUiDiagnosticsForBuffer(editor.ed.lsp_ui, buffer, &diagnostic_count);
+    return BufferDidOpen(&editor.ed, buffer) && diagnostics != nullptr && diagnostic_count == 1;
+  });
 
   u64 diagnostic_count = 0;
   const LspDiagnostic *diagnostics =
@@ -352,81 +354,66 @@ TEST(lsp_e2e_real_process_lifecycle_completion_hover_and_shutdown) {
   CHECK_EQ(diagnostic_count, (u64)1);
   CHECK(diagnostics != nullptr);
   CHECK_STR(diagnostics[0].message, Str8Lit("missing semicolon"));
-  CHECK_EQ(CountRecordedMethod(scope.arena, record_path, Str8Lit("textDocument/didOpen")), (u64)1);
+  CHECK_EQ(RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("textDocument/didOpen")),
+           (u64)1);
 
   EditorProcessSpec(&editor.ed, "A<C-Space>");
-  WaitUntilOrFail(
-      "completion popup",
-      [&]() {
-        (void)EditorTick(&editor.ed);
-        return EditorLspUiPopup(editor.ed.lsp_ui)->kind == EditorLspUiPopupKind::Completion;
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
+  WaitForEditor(&editor.ed, layout.record_path, "completion popup", [&]() {
+    (void)EditorTick(&editor.ed);
+    return EditorLspUiPopup(editor.ed.lsp_ui)->kind == EditorLspUiPopupKind::Completion;
+  });
 
   const EditorLspUiPopupView *popup = EditorLspUiPopup(editor.ed.lsp_ui);
   CHECK_EQ((u64)popup->kind, (u64)EditorLspUiPopupKind::Completion);
   CHECK_EQ(popup->completion.count, (u64)1);
   CHECK_STR(popup->completion.items[0].label, Str8Lit("vector"));
-  CHECK_EQ(CountRecordedMethod(scope.arena, record_path, Str8Lit("textDocument/completion")), (u64)1);
+  CHECK_EQ(RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("textDocument/completion")),
+           (u64)1);
 
   EditorProcessSpec(&editor.ed, "<CR>");
-  WaitUntilOrFail(
-      "completion apply",
-      [&]() {
-        (void)EditorTick(&editor.ed);
-        return EditorLspUiPopup(editor.ed.lsp_ui)->kind == EditorLspUiPopupKind::None &&
-               Str8Match(BufferTextAll(scope.arena, buffer), Str8Lit("std::vector\n"));
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
+  WaitForEditor(&editor.ed, layout.record_path, "completion apply", [&]() {
+    (void)EditorTick(&editor.ed);
+    return EditorLspUiPopup(editor.ed.lsp_ui)->kind == EditorLspUiPopupKind::None &&
+           Str8Match(BufferTextAll(scope.arena, buffer), Str8Lit("std::vector\n"));
+  });
   CHECK_STR(BufferTextAll(scope.arena, buffer), Str8Lit("std::vector\n"));
 
   EditorProcessSpec(&editor.ed, "<Esc><C-Space>");
-  WaitUntilOrFail(
-      "hover popup",
-      [&]() {
-        (void)EditorTick(&editor.ed);
-        return EditorLspUiPopup(editor.ed.lsp_ui)->kind == EditorLspUiPopupKind::Hover;
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
+  WaitForEditor(&editor.ed, layout.record_path, "hover popup", [&]() {
+    (void)EditorTick(&editor.ed);
+    return EditorLspUiPopup(editor.ed.lsp_ui)->kind == EditorLspUiPopupKind::Hover;
+  });
 
   popup = EditorLspUiPopup(editor.ed.lsp_ui);
   CHECK_EQ((u64)popup->kind, (u64)EditorLspUiPopupKind::Hover);
   CHECK_EQ(popup->text.line_count, (u64)1);
   CHECK_STR(popup->text.lines[0], Str8Lit("std::vector docs"));
-  CHECK_EQ(CountRecordedMethod(scope.arena, record_path, Str8Lit("textDocument/hover")), (u64)1);
+  CHECK_EQ(RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("textDocument/hover")),
+           (u64)1);
 
   EditorLspDisable(&editor.ed);
-  WaitUntilOrFail(
-      "shutdown and exit",
-      [&]() {
-        return CountRecordedMethod(scope.arena, record_path, Str8Lit("shutdown")) == 1 &&
-               CountRecordedMethod(scope.arena, record_path, Str8Lit("exit")) == 1;
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
+  WaitForEditor(&editor.ed, layout.record_path, "shutdown and exit", [&]() {
+    return RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("shutdown")) == 1 &&
+           RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("exit")) == 1;
+  });
 }
 
 TEST(lsp_e2e_real_process_navigation_formatting_and_rename_workspace_edit) {
   ArenaScope scope;
   ScopedFixtureDir fixture(scope.arena, "actions");
   EditorScope editor(scope.arena);
-
-  String8 root = OsPathJoin(scope.arena, fixture.path, Str8Lit("proj"));
-  String8 bin = OsPathJoin(scope.arena, fixture.path, Str8Lit("bin"));
-  CHECK(OsMakeDirs(root));
-  CHECK(OsMakeDirs(bin));
-  CHECK(OsFileWrite(OsPathJoin(scope.arena, root, Str8Lit(".git")), String8{}));
-  (void)InstallClangdAlias(scope.arena, bin);
-
-  String8 record_path = OsPathJoin(scope.arena, fixture.path, Str8Lit("actions.jsonl"));
-  String8 main_path = WriteTextFile(scope.arena, root, Str8Lit("main.cpp"), Str8Lit("helper();\n"));
+  ScenarioLayout layout = PrepareScenarioLayout(scope.arena, fixture.path, "actions.jsonl");
+  String8 main_path =
+      WriteTextFile(scope.arena, layout.root, Str8Lit("main.cpp"), Str8Lit("helper();\n"));
   String8 target_path =
-      WriteTextFile(scope.arena, root, Str8Lit("target.cpp"), Str8Lit("void helper(){}\nint spacing=0;\n"));
+      WriteTextFile(scope.arena, layout.root, Str8Lit("target.cpp"),
+                    Str8Lit("void helper(){}\nint spacing=0;\n"));
 
   ScopedWorkingDirectory cwd(scope.arena);
-  CHECK(cwd.Set(root));
-  ScopedEnvVar path(scope.arena, "PATH", PrependPath(scope.arena, bin));
+  CHECK(cwd.Set(layout.root));
+  ScopedEnvVar path(scope.arena, "PATH", PrependPath(scope.arena, layout.bin));
   ScopedEnvVar mode(scope.arena, kFakeLspModeEnv, Str8Lit("actions"));
-  ScopedEnvVar record(scope.arena, kFakeLspRecordEnv, record_path);
+  ScopedEnvVar record(scope.arena, kFakeLspRecordEnv, layout.record_path);
 #if defined(_WIN32)
   ScopedEnvVar pathext(scope.arena, "PATHEXT", Str8Lit(".EXE"));
 #endif
@@ -437,83 +424,70 @@ TEST(lsp_e2e_real_process_navigation_formatting_and_rename_workspace_edit) {
   Buffer *main_buffer = OpenAndShowFileBuffer(&editor.ed, main_path);
   FocusBuffer(&editor.ed, main_buffer, 0);
 
-  WaitUntilOrFail(
-      "main didOpen",
-      [&]() {
-        (void)EditorTick(&editor.ed);
-        return BufferDidOpen(&editor.ed, main_buffer);
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
+  WaitForEditor(&editor.ed, layout.record_path, "main didOpen", [&]() {
+    (void)EditorTick(&editor.ed);
+    return BufferDidOpen(&editor.ed, main_buffer);
+  });
 
   EditorProcessSpec(&editor.ed, "gd");
-  WaitUntilOrFail(
-      "definition navigation",
-      [&]() {
-        (void)EditorTick(&editor.ed);
-        Buffer *focused = EditorFocusedBuffer(&editor.ed);
-        View *view = EditorFocusedView(&editor.ed);
-        return focused != nullptr && view != nullptr && Str8Match(focused->path, target_path) &&
-               BufferDidOpen(&editor.ed, focused) && ViewCursorLine(view, focused) == 0 &&
-               ViewCursorColumn(view, focused) == 5;
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
-  CHECK_EQ(CountRecordedMethod(scope.arena, record_path, Str8Lit("textDocument/definition")), (u64)1);
+  WaitForEditor(&editor.ed, layout.record_path, "definition navigation", [&]() {
+    (void)EditorTick(&editor.ed);
+    Buffer *focused = EditorFocusedBuffer(&editor.ed);
+    View *view = EditorFocusedView(&editor.ed);
+    return focused != nullptr && view != nullptr && Str8Match(focused->path, target_path) &&
+           BufferDidOpen(&editor.ed, focused) && ViewCursorLine(view, focused) == 0 &&
+           ViewCursorColumn(view, focused) == 5;
+  });
+  CHECK_EQ(RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("textDocument/definition")),
+           (u64)1);
 
   Buffer *target_buffer = EditorFocusedBuffer(&editor.ed);
   CHECK(target_buffer != nullptr);
   CHECK_STR(target_buffer->path, target_path);
 
   EditorProcessSpec(&editor.ed, "<leader>cf");
-  WaitUntilOrFail(
-      "formatting result",
-      [&]() {
-        (void)EditorTick(&editor.ed);
-        return Str8Match(BufferTextAll(scope.arena, target_buffer),
-                         Str8Lit("void helper(){}\nint spacing = 0;\n"));
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
+  WaitForEditor(&editor.ed, layout.record_path, "formatting result", [&]() {
+    (void)EditorTick(&editor.ed);
+    return Str8Match(BufferTextAll(scope.arena, target_buffer),
+                     Str8Lit("void helper(){}\nint spacing = 0;\n"));
+  });
   CHECK(BufferIsDirty(target_buffer));
-  CHECK_EQ(CountRecordedMethod(scope.arena, record_path, Str8Lit("textDocument/formatting")), (u64)1);
+  CHECK_EQ(RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("textDocument/formatting")),
+           (u64)1);
 
   EditorProcessSpec(&editor.ed, "<leader>rn");
-  WaitUntilOrFail(
-      "rename prompt",
-      [&]() {
-        (void)EditorTick(&editor.ed);
-        if (!editor.ed.command_line_active) return false;
-        Buffer *command = BufferFromHandle(&editor.ed.buffers, editor.ed.command_buffer);
-        return command != nullptr && Str8Match(BufferTextAll(scope.arena, command), Str8Lit("helper"));
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
+  WaitForEditor(&editor.ed, layout.record_path, "rename prompt", [&]() {
+    (void)EditorTick(&editor.ed);
+    if (!editor.ed.command_line_active) return false;
+    Buffer *command = BufferFromHandle(&editor.ed.buffers, editor.ed.command_buffer);
+    return command != nullptr && Str8Match(BufferTextAll(scope.arena, command), Str8Lit("helper"));
+  });
   Buffer *command = BufferFromHandle(&editor.ed.buffers, editor.ed.command_buffer);
   CHECK(command != nullptr);
   CHECK_STR(BufferTextAll(scope.arena, command), Str8Lit("helper"));
-  CHECK_EQ(CountRecordedMethod(scope.arena, record_path, Str8Lit("textDocument/prepareRename")), (u64)1);
+  CHECK_EQ(
+      RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("textDocument/prepareRename")),
+      (u64)1);
 
   EditorProcessSpec(&editor.ed, "<C-w>renamed<CR>");
-  WaitUntilOrFail(
-      "rename workspace edit",
-      [&]() {
-        (void)EditorTick(&editor.ed);
-        return !editor.ed.command_line_active &&
-               Str8Match(BufferTextAll(scope.arena, main_buffer), Str8Lit("renamed();\n")) &&
-               Str8Match(BufferTextAll(scope.arena, target_buffer),
-                         Str8Lit("void renamed(){}\nint spacing = 0;\n"));
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
+  WaitForEditor(&editor.ed, layout.record_path, "rename workspace edit", [&]() {
+    (void)EditorTick(&editor.ed);
+    return !editor.ed.command_line_active &&
+           Str8Match(BufferTextAll(scope.arena, main_buffer), Str8Lit("renamed();\n")) &&
+           Str8Match(BufferTextAll(scope.arena, target_buffer),
+                     Str8Lit("void renamed(){}\nint spacing = 0;\n"));
+  });
 
   CHECK(BufferIsDirty(main_buffer));
   CHECK(BufferIsDirty(target_buffer));
-  CHECK_EQ(CountRecordedMethod(scope.arena, record_path, Str8Lit("textDocument/rename")), (u64)1);
+  CHECK_EQ(RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("textDocument/rename")),
+           (u64)1);
 
   EditorLspDisable(&editor.ed);
-  WaitUntilOrFail(
-      "actions shutdown and exit",
-      [&]() {
-        return CountRecordedMethod(scope.arena, record_path, Str8Lit("shutdown")) == 1 &&
-               CountRecordedMethod(scope.arena, record_path, Str8Lit("exit")) == 1;
-      },
-      [&]() { return DescribeEditorState(&editor.ed, record_path); });
+  WaitForEditor(&editor.ed, layout.record_path, "actions shutdown and exit", [&]() {
+    return RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("shutdown")) == 1 &&
+           RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("exit")) == 1;
+  });
 }
 
 }  // namespace

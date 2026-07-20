@@ -559,11 +559,6 @@ std::string EnvValue(const char *name) {
   return value ? value : "";
 }
 
-bool JsonGetRequestId(const JsonValue *root, u64 *out) {
-  return root != nullptr && out != nullptr &&
-         JsonGetU64(JsonObjectGet(root, Str8Lit("id")), out);
-}
-
 std::string JsonTextDocumentUri(const JsonValue *root) {
   if (root == nullptr) return {};
   const JsonValue *params = JsonObjectGet(root, Str8Lit("params"));
@@ -584,6 +579,13 @@ bool SendJsonFrame(Arena *arena, String8 json) {
   return WriteBytes(stdout, framed);
 }
 
+int E2eReturn(FILE *record, LspFrameDecoder *decoder, Arena *arena, int code) {
+  if (record) fclose(record);
+  if (decoder) LspFrameDecoderDestroy(decoder);
+  if (arena) ArenaRelease(arena);
+  return code;
+}
+
 int E2eMode(String8 scenario) {
   std::string record_path = EnvValue("ONECODER_FAKE_LSP_RECORD_PATH");
   FILE *record = record_path.empty() ? nullptr : OpenRecordFile(Str8C(record_path.c_str()));
@@ -593,10 +595,7 @@ int E2eMode(String8 scenario) {
   }
 
   Arena *arena = ArenaAlloc(MB(8));
-  if (arena == nullptr) {
-    if (record) fclose(record);
-    return 2;
-  }
+  if (arena == nullptr) return E2eReturn(record, nullptr, arena, 2);
 
   LspFrameDecoder decoder = {};
   LspFrameDecoderInit(&decoder);
@@ -605,10 +604,7 @@ int E2eMode(String8 scenario) {
   for (;;) {
     i64 got = ReadStdin(buffer, sizeof(buffer));
     if (got > 0 && !LspFrameDecoderFeed(&decoder, Str8(buffer, (u64)got))) {
-      if (record) fclose(record);
-      LspFrameDecoderDestroy(&decoder);
-      ArenaRelease(arena);
-      return 3;
+      return E2eReturn(record, &decoder, arena, 3);
     }
 
     while (LspFrameDecoderQueuedCount(&decoder) > 0) {
@@ -618,35 +614,27 @@ int E2eMode(String8 scenario) {
 
       JsonParseResult parsed = JsonParse(arena, json);
       if (parsed.root == nullptr || parsed.root->kind != JsonKind::Object) {
-        if (record) fclose(record);
-        LspFrameDecoderDestroy(&decoder);
-        ArenaRelease(arena);
-        return 4;
+        return E2eReturn(record, &decoder, arena, 4);
       }
 
       String8 method = {};
       if (!JsonGetString(JsonObjectGet(parsed.root, Str8Lit("method")), &method)) {
-        if (record) fclose(record);
-        LspFrameDecoderDestroy(&decoder);
-        ArenaRelease(arena);
-        return 4;
+        return E2eReturn(record, &decoder, arena, 4);
       }
 
       u64 id = 0;
-      bool has_id = JsonGetRequestId(parsed.root, &id);
+      bool has_id = JsonGetU64(JsonObjectGet(parsed.root, Str8Lit("id")), &id);
       bool crash_mode = Str8Match(scenario, Str8Lit("crash"));
       if (crash_mode && !Str8Match(method, Str8Lit("initialize")) &&
           !Str8Match(method, Str8Lit("initialized")) &&
           !Str8Match(method, Str8Lit("textDocument/didOpen")) &&
           !Str8Match(method, Str8Lit("shutdown")) && !Str8Match(method, Str8Lit("exit"))) {
-        if (record) fclose(record);
-        LspFrameDecoderDestroy(&decoder);
-        ArenaRelease(arena);
-        return 97;
+        return E2eReturn(record, &decoder, arena, 97);
       }
 
+      String8 response = {};
       if (Str8Match(method, Str8Lit("initialize"))) {
-        String8 response = PushStr8F(
+        response = PushStr8F(
             arena,
             "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"capabilities\":{"
             "\"positionEncoding\":\"utf-8\","
@@ -657,21 +645,10 @@ int E2eMode(String8 scenario) {
             "\"documentFormattingProvider\":true,"
             "\"renameProvider\":{\"prepareProvider\":true}}}}",
             (unsigned long long)id);
-        if (!SendJsonFrame(arena, response)) {
-          if (record) fclose(record);
-          LspFrameDecoderDestroy(&decoder);
-          ArenaRelease(arena);
-          return 1;
-        }
-        continue;
-      }
-
-      if (Str8Match(method, Str8Lit("initialized"))) continue;
-
-      if (Str8Match(method, Str8Lit("textDocument/didOpen"))) {
+      } else if (Str8Match(method, Str8Lit("textDocument/didOpen"))) {
         if (Str8Match(scenario, Str8Lit("lifecycle"))) {
           std::string uri = JsonTextDocumentUri(parsed.root);
-          String8 diagnostics = PushStr8F(
+          response = PushStr8F(
               arena,
               "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
               "\"params\":{\"uri\":\"%s\",\"version\":1,\"diagnostics\":["
@@ -679,102 +656,48 @@ int E2eMode(String8 scenario) {
               "\"end\":{\"line\":0,\"character\":5}},\"severity\":1,"
               "\"message\":\"missing semicolon\"}]}}",
               uri.c_str());
-          if (!SendJsonFrame(arena, diagnostics)) {
-            if (record) fclose(record);
-            LspFrameDecoderDestroy(&decoder);
-            ArenaRelease(arena);
-            return 1;
-          }
         }
-        continue;
-      }
-
-      if (Str8Match(method, Str8Lit("textDocument/completion")) && has_id) {
-        String8 response = PushStr8F(
+      } else if (Str8Match(method, Str8Lit("textDocument/completion")) && has_id) {
+        response = PushStr8F(
             arena,
             "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":[{\"label\":\"vector\","
             "\"insertText\":\"vector\"}]}",
             (unsigned long long)id);
-        if (!SendJsonFrame(arena, response)) {
-          if (record) fclose(record);
-          LspFrameDecoderDestroy(&decoder);
-          ArenaRelease(arena);
-          return 1;
-        }
-        continue;
-      }
-
-      if (Str8Match(method, Str8Lit("textDocument/hover")) && has_id) {
-        String8 response = PushStr8F(
+      } else if (Str8Match(method, Str8Lit("textDocument/hover")) && has_id) {
+        response = PushStr8F(
             arena,
             "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"contents\":\"std::vector docs\"}}",
             (unsigned long long)id);
-        if (!SendJsonFrame(arena, response)) {
-          if (record) fclose(record);
-          LspFrameDecoderDestroy(&decoder);
-          ArenaRelease(arena);
-          return 1;
-        }
-        continue;
-      }
-
-      if (Str8Match(method, Str8Lit("textDocument/definition")) && has_id) {
+      } else if (Str8Match(method, Str8Lit("textDocument/definition")) && has_id) {
         std::string source_uri = JsonTextDocumentUri(parsed.root);
         std::string target_uri = UriSibling(source_uri, "target.cpp");
-        String8 response = PushStr8F(
+        response = PushStr8F(
             arena,
             "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":[{\"uri\":\"%s\","
             "\"range\":{\"start\":{\"line\":0,\"character\":5},"
             "\"end\":{\"line\":0,\"character\":11}}}]}",
             (unsigned long long)id, target_uri.c_str());
-        if (!SendJsonFrame(arena, response)) {
-          if (record) fclose(record);
-          LspFrameDecoderDestroy(&decoder);
-          ArenaRelease(arena);
-          return 1;
-        }
-        continue;
-      }
-
-      if (Str8Match(method, Str8Lit("textDocument/formatting")) && has_id) {
-        String8 response = PushStr8F(
+      } else if (Str8Match(method, Str8Lit("textDocument/formatting")) && has_id) {
+        response = PushStr8F(
             arena,
             "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":[{\"range\":{\"start\":{\"line\":1,"
             "\"character\":0},\"end\":{\"line\":1,\"character\":14}},"
             "\"newText\":\"int spacing = 0;\"}]}",
             (unsigned long long)id);
-        if (!SendJsonFrame(arena, response)) {
-          if (record) fclose(record);
-          LspFrameDecoderDestroy(&decoder);
-          ArenaRelease(arena);
-          return 1;
-        }
-        continue;
-      }
-
-      if (Str8Match(method, Str8Lit("textDocument/prepareRename")) && has_id) {
-        String8 response = PushStr8F(
+      } else if (Str8Match(method, Str8Lit("textDocument/prepareRename")) && has_id) {
+        response = PushStr8F(
             arena,
             "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"range\":{\"start\":{\"line\":0,"
             "\"character\":5},\"end\":{\"line\":0,\"character\":11}},"
             "\"placeholder\":\"helper\"}}",
             (unsigned long long)id);
-        if (!SendJsonFrame(arena, response)) {
-          if (record) fclose(record);
-          LspFrameDecoderDestroy(&decoder);
-          ArenaRelease(arena);
-          return 1;
-        }
-        continue;
-      }
-
-      if (Str8Match(method, Str8Lit("textDocument/rename")) && has_id) {
+      } else if (Str8Match(method, Str8Lit("textDocument/rename")) && has_id) {
         std::string current_uri = JsonTextDocumentUri(parsed.root);
         std::string main_uri = UriSibling(current_uri, "main.cpp");
         std::string new_name = {};
         const JsonValue *params = JsonObjectGet(parsed.root, Str8Lit("params"));
         (void)GetStringField(params, Str8Lit("newName"), &new_name);
-        String8 response = PushStr8F(
+        response = PushStr8F(
             arena,
             "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"changes\":{\"%s\":["
             "{\"range\":{\"start\":{\"line\":0,\"character\":5},\"end\":{\"line\":0,"
@@ -783,63 +706,30 @@ int E2eMode(String8 scenario) {
             "\"newText\":\"%s\"}]}}}",
             (unsigned long long)id, current_uri.c_str(), new_name.c_str(), main_uri.c_str(),
             new_name.c_str());
-        if (!SendJsonFrame(arena, response)) {
-          if (record) fclose(record);
-          LspFrameDecoderDestroy(&decoder);
-          ArenaRelease(arena);
-          return 1;
-        }
-        continue;
-      }
-
-      if (Str8Match(method, Str8Lit("shutdown")) && has_id) {
-        String8 response = PushStr8F(arena, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":null}",
-                                     (unsigned long long)id);
-        if (!SendJsonFrame(arena, response)) {
-          if (record) fclose(record);
-          LspFrameDecoderDestroy(&decoder);
-          ArenaRelease(arena);
-          return 1;
-        }
-        continue;
-      }
-
-      if (Str8Match(method, Str8Lit("exit"))) {
-        if (record) fclose(record);
-        LspFrameDecoderDestroy(&decoder);
-        ArenaRelease(arena);
-        return 0;
-      }
-
-      if (has_id) {
-        String8 response = PushStr8F(
+      } else if (Str8Match(method, Str8Lit("shutdown")) && has_id) {
+        response = PushStr8F(arena, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":null}",
+                             (unsigned long long)id);
+      } else if (Str8Match(method, Str8Lit("exit"))) {
+        return E2eReturn(record, &decoder, arena, 0);
+      } else if (!Str8Match(method, Str8Lit("initialized")) && has_id) {
+        response = PushStr8F(
             arena,
             "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"error\":{\"code\":-32601,\"message\":"
             "\"method not supported\"}}",
             (unsigned long long)id);
-        if (!SendJsonFrame(arena, response)) {
-          if (record) fclose(record);
-          LspFrameDecoderDestroy(&decoder);
-          ArenaRelease(arena);
-          return 1;
-        }
+      }
+
+      if (response.size > 0 && !SendJsonFrame(arena, response)) {
+        return E2eReturn(record, &decoder, arena, 1);
       }
     }
 
-    if (got < 0) {
-      if (record) fclose(record);
-      LspFrameDecoderDestroy(&decoder);
-      ArenaRelease(arena);
-      return 1;
-    }
+    if (got < 0) return E2eReturn(record, &decoder, arena, 1);
     if (got == 0) break;
   }
 
   int result = LspFrameDecoderFinish(&decoder) ? 0 : 3;
-  if (record) fclose(record);
-  LspFrameDecoderDestroy(&decoder);
-  ArenaRelease(arena);
-  return result;
+  return E2eReturn(record, &decoder, arena, result);
 }
 
 }  // namespace
