@@ -145,6 +145,15 @@ void OperatorOnLines(CommandArgs *a, OperatorKind op) {
 
   u64 line = a->has_range ? Min(a->line_first, BufferLineCount(buffer) - 1)
                           : ViewCursorLine(view, buffer);
+
+  // Neovim: doubled operators with count >= 2 are a no-op when the cursor is
+  // on the last buffer line (e.g. 2>> or 2dd on a one-line buffer).
+  if (!a->has_range && a->count >= 2 && line + 1 >= BufferLineCount(buffer)) {
+    view->vim.pending_operator = OperatorKind::None;
+    view->vim.mode = VimMode::Normal;
+    return;
+  }
+
   u64 last = a->has_range ? Min(a->line_last, BufferLineCount(buffer) - 1)
                           : Min(line + a->count - 1, BufferLineCount(buffer) - 1);
 

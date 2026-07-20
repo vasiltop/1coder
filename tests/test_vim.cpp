@@ -634,15 +634,15 @@ TEST(vim_delete_yanks_into_register) {
 TEST(vim_indent_and_dedent) {
   Fixture f = MakeFixture("one\ntwo");
 
-  // One shift width, which matches 'shiftwidth' from the nvim config.
+  // Clean Neovim defaults: noexpandtab, tabstop=8, shiftwidth=8 → inserts \t.
   Type(&f, ">>");
-  CHECK_STR(TextOf(&f), Str8Lit("  one\ntwo"));
+  CHECK_STR(TextOf(&f), Str8Lit("\tone\ntwo"));
   Type(&f, "<<");
   CHECK_STR(TextOf(&f), Str8Lit("one\ntwo"));
 
   // An operator with a linewise motion indents the whole span.
   Type(&f, ">j");
-  CHECK_STR(TextOf(&f), Str8Lit("  one\n  two"));
+  CHECK_STR(TextOf(&f), Str8Lit("\tone\n\ttwo"));
 
   Destroy(&f);
 }
@@ -1997,4 +1997,152 @@ TEST(vim_yyp_undo_restores_single_line) {
   CHECK_STR(TextOf(&f), Str8Lit("alpha beta gamma"));
 
   Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Neovim parity: indentation bytes and cursor (clean -u NONE defaults)
+// ---------------------------------------------------------------------------
+
+TEST(vim_indent_tab_bytes) {
+  // >> inserts exactly one tab (0x09); << removes it.
+  Fixture f = MakeFixture("one\ntwo\nthree");
+  Type(&f, ">>");
+  CHECK_STR(TextOf(&f), Str8Lit("\tone\ntwo\nthree"));
+
+  Type(&f, "<<");
+  CHECK_STR(TextOf(&f), Str8Lit("one\ntwo\nthree"));
+
+  // Mixed leading whitespace: tab+spaces dedent by one tabstop (8 vis cols).
+  Fixture g = MakeFixture("\t   mixed");
+  Type(&g, "<<");
+  CHECK_STR(TextOf(&g), Str8Lit("   mixed"));
+
+  Fixture h = MakeFixture("\t\tmixed");
+  Type(&h, "<<");
+  CHECK_STR(TextOf(&h), Str8Lit("\tmixed"));
+
+  Destroy(&f);
+  Destroy(&g);
+  Destroy(&h);
+}
+
+TEST(vim_indent_cursor_placement) {
+  // After >> the cursor sits at min(old_codepoint_col, old_first_nonblank).
+  // Cursor in content area moves to start of new indent.
+  Fixture f = MakeFixture("one\ntwo");
+  Type(&f, "ll");  // cursor at 'e' (col 2)
+  Type(&f, ">>");
+  CHECK_EQ(CursorColumn(&f), 0);  // lands on the tab
+
+  // After << the cursor goes to the last char when it was beyond new indent.
+  Fixture g = MakeFixture("\tone\ntwo");
+  Type(&g, "<<");
+  CHECK_EQ(CursorColumn(&g), 2);  // 'e' in "one" (last char, col 2)
+
+  // Cursor in the new indent after << stays put.
+  Fixture h = MakeFixture("\t\tone\ntwo");
+  // cursor starts at col 0 (first tab)
+  Type(&h, "<<");
+  CHECK_EQ(CursorColumn(&h), 0);  // stays in remaining tab
+
+  Destroy(&f);
+  Destroy(&g);
+  Destroy(&h);
+}
+
+TEST(vim_indent_overcount_noop) {
+  // 2>> on the last line of the buffer is a no-op (Neovim parity).
+  Fixture f = MakeFixture("one");
+  Type(&f, "2>>");
+  CHECK_STR(TextOf(&f), Str8Lit("one"));
+
+  // 2>> on the last line of a multi-line buffer is also a no-op.
+  Fixture g = MakeFixture("one\ntwo");
+  Type(&g, "j2>>");  // move to last line, then 2>>
+  CHECK_STR(TextOf(&g), Str8Lit("one\ntwo"));
+
+  // 2>> NOT on the last line works normally (indents 2 lines).
+  Fixture h = MakeFixture("one\ntwo\nthree");
+  Type(&h, "2>>");
+  CHECK_STR(TextOf(&h), Str8Lit("\tone\n\ttwo\nthree"));
+
+  // 2dd on the last line is also a no-op.
+  Fixture d = MakeFixture("one");
+  Type(&d, "2dd");
+  CHECK_STR(TextOf(&d), Str8Lit("one"));
+
+  Destroy(&f);
+  Destroy(&g);
+  Destroy(&h);
+  Destroy(&d);
+}
+
+// ---------------------------------------------------------------------------
+// Neovim parity: J count and whitespace
+// ---------------------------------------------------------------------------
+
+TEST(vim_join_count) {
+  // Bare J or 1J == 2J: one join (two lines become one).
+  Fixture f = MakeFixture("one\ntwo\nthree");
+  Type(&f, "J");
+  CHECK_STR(TextOf(&f), Str8Lit("one two\nthree"));
+  Destroy(&f);
+
+  Fixture f2 = MakeFixture("one\ntwo\nthree");
+  Type(&f2, "2J");
+  CHECK_STR(TextOf(&f2), Str8Lit("one two\nthree"));
+  Destroy(&f2);
+
+  // 3J joins three lines (two joins).
+  Fixture g = MakeFixture("one\ntwo\nthree");
+  Type(&g, "3J");
+  CHECK_STR(TextOf(&g), Str8Lit("one two three"));
+  Destroy(&g);
+}
+
+TEST(vim_join_trailing_whitespace) {
+  // If the current line ends with whitespace, no separator is added.
+  Fixture f = MakeFixture("one \ntwo\nthree");
+  Type(&f, "J");
+  CHECK_STR(TextOf(&f), Str8Lit("one two\nthree"));
+
+  // Trailing tab: also no separator.
+  Fixture g = MakeFixture("one\t\ntwo\nthree");
+  Type(&g, "J");
+  CHECK_STR(TextOf(&g), Str8Lit("one\ttwo\nthree"));
+
+  // Blank next line: no separator, cursor at end of current.
+  Fixture h = MakeFixture("one\n\nthree");
+  Type(&h, "J");
+  CHECK_STR(TextOf(&h), Str8Lit("one\nthree"));
+  CHECK_EQ(CursorColumn(&h), 2);  // 'e' in "one"
+
+  // J on last line: no-op.
+  Fixture last = MakeFixture("one");
+  Type(&last, "J");
+  CHECK_STR(TextOf(&last), Str8Lit("one"));
+
+  Destroy(&f);
+  Destroy(&g);
+  Destroy(&h);
+  Destroy(&last);
+}
+
+TEST(vim_indent_join_undo) {
+  // >> on two lines is one undo step.
+  Fixture f = MakeFixture("one\ntwo");
+  Type(&f, ">j");
+  CHECK_STR(TextOf(&f), Str8Lit("\tone\n\ttwo"));
+  Type(&f, "u");
+  CHECK_STR(TextOf(&f), Str8Lit("one\ntwo"));
+
+  // 3J (two joins) is one undo step.
+  Fixture g = MakeFixture("one\ntwo\nthree");
+  Type(&g, "3J");
+  CHECK_STR(TextOf(&g), Str8Lit("one two three"));
+  Type(&g, "u");
+  CHECK_STR(TextOf(&g), Str8Lit("one\ntwo\nthree"));
+
+  Destroy(&f);
+  Destroy(&g);
 }
