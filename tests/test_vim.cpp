@@ -1258,6 +1258,111 @@ TEST(vim_zoom_adjusts_font_size) {
 }
 
 // ---------------------------------------------------------------------------
+// Line numbers
+// ---------------------------------------------------------------------------
+
+TEST(line_numbers_relative_labels_count_from_the_cursor) {
+  Fixture f = MakeFixture("one\ntwo\nthree\nfour\nfive");
+  View *view = ViewOf(&f);
+  Buffer *buffer = BufferOf(&f);
+
+  Type(&f, "2j");
+  CHECK_EQ(CursorLine(&f), 2);
+
+  // Zero on the cursor's own line, distances either side of it.
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 2), 0);
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 1), 1);
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 0), 2);
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 3), 1);
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 4), 2);
+
+  // They follow the cursor rather than being computed once.
+  Type(&f, "j");
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 2), 1);
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 3), 0);
+
+  Destroy(&f);
+}
+
+TEST(line_numbers_absolute_labels_are_one_based) {
+  Fixture f = MakeFixture("one\ntwo\nthree");
+  f.ed.line_number_mode = LineNumberMode::Absolute;
+
+  View *view = ViewOf(&f);
+  Buffer *buffer = BufferOf(&f);
+
+  Type(&f, "j");
+  // The cursor makes no difference here, unlike the relative case above.
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 0), 1);
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 1), 2);
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 2), 3);
+
+  Destroy(&f);
+}
+
+TEST(line_numbers_gutter_width_follows_the_line_count) {
+  Fixture f = MakeFixture("a\nb\nc");
+  Panel *panel = f.ed.focused_panel;
+
+  // A short buffer still gets the minimum, so the text does not sit flush
+  // against the edge.
+  CHECK_EQ(EditorGutterWidth(&f.ed, panel), kLineNumberMinDigits + 1);
+
+  // A buffer past the minimum widens by a column per digit.
+  const u64 count = 1000;
+  u8 *data = PushArrayNoZero(f.arena, u8, count * 2);
+  for (u64 i = 0; i < count; i += 1) {
+    data[i * 2] = 'x';
+    data[i * 2 + 1] = '\n';
+  }
+  BufferSetText(&f.ed, BufferOf(&f), String8{data, count * 2 - 1});
+  CHECK_EQ(BufferLineCount(BufferOf(&f)), count);
+  CHECK_EQ(EditorGutterWidth(&f.ed, panel), 5);  // 4 digits + the blank column
+
+  f.ed.line_number_mode = LineNumberMode::Off;
+  CHECK_EQ(EditorGutterWidth(&f.ed, panel), 0);
+
+  Destroy(&f);
+}
+
+TEST(line_numbers_narrow_the_text_area) {
+  Fixture f = MakeFixture("a\nb\nc");
+  Panel *panel = f.ed.focused_panel;
+
+  i32 panel_width = RectWidth(panel->rect);
+  i32 gutter = EditorGutterWidth(&f.ed, panel);
+  CHECK(gutter > 0);
+
+  // The gutter comes off the text rect, not off the panel: horizontal scrolling
+  // reads this width, so a gutter applied only in the renderer would scroll the
+  // cursor off the right edge.
+  CHECK_EQ(EditorPanelTextWidth(&f.ed, panel), panel_width - gutter);
+  CHECK_EQ(RectWidth(panel->rect), panel_width);
+
+  f.ed.line_number_mode = LineNumberMode::Off;
+  CHECK_EQ(EditorPanelTextWidth(&f.ed, panel), panel_width);
+
+  Destroy(&f);
+}
+
+TEST(line_numbers_commands_switch_the_mode) {
+  Fixture f = MakeFixture("a\nb");
+
+  CHECK(f.ed.line_number_mode == kLineNumberModeDefault);
+
+  CHECK(CommandExecLine(&f.ed, Str8Lit("number")));
+  CHECK(f.ed.line_number_mode == LineNumberMode::Absolute);
+
+  CHECK(CommandExecLine(&f.ed, Str8Lit("nonumber")));
+  CHECK(f.ed.line_number_mode == LineNumberMode::Off);
+
+  CHECK(CommandExecLine(&f.ed, Str8Lit("relativenumber")));
+  CHECK(f.ed.line_number_mode == LineNumberMode::Relative);
+
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
 // Windows, buffers and the command line
 // ---------------------------------------------------------------------------
 

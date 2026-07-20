@@ -193,6 +193,10 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(explorer_parent,       "explorer",              "Open the containing directory",   CommandArg::Path, CmdNone)        \
   X(explorer_open,         "explorer-open",         "Open the entry under the cursor", CommandArg::None, CmdHidden)      \
   X(explorer_apply,        "explorer-apply",        "Apply the pending listing edits", CommandArg::None, CmdHidden)      \
+  /* ---- display ---- */                                                                                                \
+  X(line_numbers_absolute, "number",                "Show absolute line numbers",      CommandArg::None, CmdNone)        \
+  X(line_numbers_relative, "relativenumber",        "Show relative line numbers",      CommandArg::None, CmdNone)        \
+  X(line_numbers_off,      "nonumber",              "Hide line numbers",               CommandArg::None, CmdNone)        \
   /* ---- meta ---- */                                                                                                   \
   X(list_commands,         "commands",              "List every command",              CommandArg::None, CmdNone)        \
   X(list_buffers,          "buffers",               "List open buffers",               CommandArg::None, CmdNone)        \

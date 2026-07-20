@@ -28,6 +28,29 @@ constexpr u64 kMaxVisibleSearchMatches = 512;
   return text_rect.x0 + (f32)relative * ctx->cell_width;
 }
 
+// Draws one line's number in the gutter, right-aligned against the blank column
+// that separates it from the text. What the number *is* -- absolute or a
+// distance from the cursor -- is core's answer, not the renderer's.
+void DrawLineNumber(RenderContext *ctx, const Editor *ed, const View *view, const Buffer *buffer,
+                    u64 line, f32 gutter_x, f32 baseline_y, i32 gutter, bool is_cursor_line) {
+  TempArena scratch = ScratchBegin();
+
+  u64 label = EditorLineNumberLabel(ed, view, buffer, line);
+  String8 text = PushStr8F(scratch.arena, "%llu", (unsigned long long)label);
+
+  // The last gutter column is deliberately left empty, so the digits end one
+  // cell short of the text.
+  f32 right_edge = gutter_x + (f32)(gutter - 1) * ctx->cell_width;
+  f32 x = right_edge - (f32)Utf8Length(text) * ctx->cell_width;
+  // A number too wide for the gutter would run into the text; clamp instead.
+  if (x < gutter_x) x = gutter_x;
+
+  DrawText(ctx->draw, text, x, baseline_y,
+           is_cursor_line ? ctx->theme.line_number_current : ctx->theme.line_number);
+
+  ScratchEnd(scratch);
+}
+
 // Draws one line, a cell per codepoint, coloured by its syntax token.
 // Everything left of the horizontal scroll is skipped outright and everything
 // past the right edge stops the loop, so a very long line costs no more to draw
@@ -224,14 +247,22 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
 
   // Derived from the panel rather than converted separately, so the stretch
   // above carries through and the status line stays exactly one cell tall.
-  RectF32 text_rect = panel_rect;
-  text_rect.y1 = panel_rect.y1 - ctx->cell_height;
+  RectF32 content_rect = panel_rect;
+  content_rect.y1 = panel_rect.y1 - ctx->cell_height;
+
+  // The gutter is taken off the left in pixels here and in cells in
+  // EditorPanelTextRect. Both have to move together: `columns` comes from the
+  // cell rect, so narrowing only one of them would shrink the column count
+  // while glyphs still started at the panel edge, quietly clipping the right.
+  i32 gutter = EditorGutterWidth(ed, panel);
+  RectF32 text_rect = content_rect;
+  text_rect.x0 = content_rect.x0 + (f32)gutter * ctx->cell_width;
 
   i32 columns = RectWidth(text_cells);
   i32 rows = RectHeight(text_cells);
   if (columns <= 0 || rows <= 0) return;
 
-  DrawPushClip(ctx->draw, text_rect);
+  DrawPushClip(ctx->draw, content_rect);
 
   // The frame goes down before the text, which keeps drawing where it always
   // does. Centring the summary inside the frame would mean offsetting the text
@@ -262,9 +293,16 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
   for (u64 line = visible.min; line < visible.max; line += 1) {
     f32 top = text_rect.y0 + (f32)(line - visible.min) * ctx->cell_height;
 
+    // The wash starts at the gutter, not the text, so the current line reads as
+    // one band -- which is what vim's 'cursorline' does.
     if (focused && line == cursor_line) {
-      DrawRect(ctx->draw, RectF32{text_rect.x0, top, text_rect.x1, top + ctx->cell_height},
+      DrawRect(ctx->draw, RectF32{content_rect.x0, top, text_rect.x1, top + ctx->cell_height},
                ctx->theme.current_line);
+    }
+
+    if (gutter > 0) {
+      DrawLineNumber(ctx, ed, view, buffer, line, content_rect.x0,
+                     top + ctx->atlas->ascent, gutter, line == cursor_line);
     }
     // Matches go under the selection, so a selected match still reads as
     // selected.

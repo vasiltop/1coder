@@ -31,6 +31,7 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   ed->font_size = kFontSizeDefault;
   ed->command_line_prompt = ':';
   ed->search_forward = true;
+  ed->line_number_mode = kLineNumberModeDefault;
 
   // Start on an empty scratch buffer so there is always something focused.
   BufferHandle scratch = BufferOpen(&ed->buffers, BufferKind::Scratch, Str8Lit("[scratch]"));
@@ -97,18 +98,47 @@ View *EditorInputView(Editor *ed) {
 
 Buffer *EditorInputBuffer(Editor *ed) { return EditorBufferForView(ed, EditorInputView(ed)); }
 
-RectS32 EditorPanelTextRect(const Editor *ed, const Panel *panel) {
-  // Each panel reserves its bottom row for its own status line.
+i32 EditorGutterWidth(Editor *ed, const Panel *panel) {
+  if (!ed || !panel || ed->line_number_mode == LineNumberMode::Off) return 0;
+
+  Buffer *buffer = EditorBufferForView(ed, panel->view);
+  if (!buffer) return 0;
+
+  // Numbering a picture says nothing, and the placeholder wants the full width.
+  if (ImageBufferInfo(buffer)) return 0;
+
+  // Relative numbers never exceed the distance to the furthest line, but sizing
+  // on the line count keeps the gutter still as the cursor moves. A gutter that
+  // breathed would reflow the text on every j.
+  u64 largest = BufferLineCount(buffer);
+  i32 digits = 1;
+  for (u64 n = largest; n >= 10; n /= 10) digits += 1;
+
+  return Max(digits, kLineNumberMinDigits) + 1;  // +1 blank column before the text
+}
+
+u64 EditorLineNumberLabel(const Editor *ed, const View *view, const Buffer *buffer, u64 line) {
+  if (ed && ed->line_number_mode == LineNumberMode::Relative) {
+    u64 cursor_line = ViewCursorLine(view, buffer);
+    return (line > cursor_line) ? line - cursor_line : cursor_line - line;
+  }
+  return line + 1;  // buffer lines are 0-based; the display is not
+}
+
+RectS32 EditorPanelTextRect(Editor *ed, const Panel *panel) {
+  // Each panel reserves its bottom row for its own status line, and its left
+  // columns for the gutter.
   RectS32 rect = panel->rect;
   rect.y1 = Max(rect.y1 - 1, rect.y0);
+  rect.x0 = Min(rect.x0 + EditorGutterWidth(ed, panel), rect.x1);
   return rect;
 }
 
-i32 EditorPanelTextWidth(const Editor *ed, const Panel *panel) {
+i32 EditorPanelTextWidth(Editor *ed, const Panel *panel) {
   return RectWidth(EditorPanelTextRect(ed, panel));
 }
 
-i32 EditorPanelTextHeight(const Editor *ed, const Panel *panel) {
+i32 EditorPanelTextHeight(Editor *ed, const Panel *panel) {
   return RectHeight(EditorPanelTextRect(ed, panel));
 }
 

@@ -1,6 +1,23 @@
-# Fonts and colours
+# Fonts, colours and the gutter
 
 Fonts are chosen at runtime. Colours are compiled in.
+
+## Line numbers
+
+The gutter shows each line's distance from the cursor, with `0` on the cursor's
+own line — vim's `relativenumber`. `:number` switches to absolute numbers,
+`:relativenumber` back, and `:nonumber` hides the gutter entirely.
+
+To change what it starts as, edit one constant in `core/editor/editor.h`:
+
+```cpp
+inline constexpr LineNumberMode kLineNumberModeDefault = LineNumberMode::Relative;
+```
+
+The gutter sizes itself to the buffer's line count with a three-digit floor
+(`kLineNumberMinDigits`), so it grows for a long file but never jitters as the
+cursor moves. Each split counts from its own cursor, since the numbers are a
+property of the view rather than the buffer.
 
 ## Fonts
 

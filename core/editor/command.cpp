@@ -738,6 +738,24 @@ static void Cmd_zoom_out(CommandArgs *a) {
 static void Cmd_zoom_reset(CommandArgs *a) { EditorSetFontSize(a->ed, kFontSizeDefault); }
 
 // ---------------------------------------------------------------------------
+// Line numbers
+// ---------------------------------------------------------------------------
+//
+// The gutter width follows from the mode, and the text rect follows from the
+// gutter, so nothing here has to touch the layout -- the next frame reads the
+// new mode and both agree.
+
+static void Cmd_line_numbers_absolute(CommandArgs *a) {
+  a->ed->line_number_mode = LineNumberMode::Absolute;
+}
+static void Cmd_line_numbers_relative(CommandArgs *a) {
+  a->ed->line_number_mode = LineNumberMode::Relative;
+}
+static void Cmd_line_numbers_off(CommandArgs *a) {
+  a->ed->line_number_mode = LineNumberMode::Off;
+}
+
+// ---------------------------------------------------------------------------
 // Scrolling
 // ---------------------------------------------------------------------------
 

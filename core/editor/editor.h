@@ -14,6 +14,20 @@
 
 inline constexpr u64 kMaxRecordedChords = 128;
 
+// What the gutter counts. Relative shows each line's distance from the cursor,
+// with 0 on the cursor's own line, which is what makes a jump count something
+// you read rather than work out.
+//
+// There is no config file, so this is a source-level setting: change
+// kLineNumberModeDefault and rebuild. :number, :relativenumber and :nonumber
+// switch it while running.
+enum class LineNumberMode : u8 { Off, Absolute, Relative };
+
+inline constexpr LineNumberMode kLineNumberModeDefault = LineNumberMode::Relative;
+// A floor rather than a fixed size, as vim's 'numberwidth' is: the gutter grows
+// for a buffer with more lines than this many digits.
+inline constexpr i32 kLineNumberMinDigits = 3;
+
 // The system clipboard, reached through function pointers so that core stays
 // free of any platform dependency. The app installs SDL's implementation; a
 // test can install a fake one and exercise "+y and "+p with no window.
@@ -138,6 +152,10 @@ struct Editor {
   bool search_forward;
   bool search_highlight;  // matches are painted until :noh
 
+  // Which numbers the gutter shows. Editor-wide rather than per-view: with no
+  // :set there would be no way to give one window a different answer.
+  LineNumberMode line_number_mode;
+
   // Where the cursor sat when the search prompt opened. Incremental search
   // moves the cursor as the pattern is typed, so cancelling has to put it back.
   View *search_origin_view;
@@ -164,10 +182,22 @@ void EditorSetScreen(Editor *ed, RectS32 screen);
 [[nodiscard]] Buffer *EditorFocusedBuffer(Editor *ed);
 [[nodiscard]] Buffer *EditorBufferForView(Editor *ed, View *view);
 
-// A panel's rect includes its status line; text is drawn in this sub-rect.
-[[nodiscard]] RectS32 EditorPanelTextRect(const Editor *ed, const Panel *panel);
-[[nodiscard]] i32 EditorPanelTextWidth(const Editor *ed, const Panel *panel);
-[[nodiscard]] i32 EditorPanelTextHeight(const Editor *ed, const Panel *panel);
+// A panel's rect includes its status line and its gutter; text is drawn in this
+// sub-rect. Subtracting the gutter here rather than in the renderer is what
+// keeps horizontal scrolling honest -- ViewScrollToCursor is fed this width.
+[[nodiscard]] RectS32 EditorPanelTextRect(Editor *ed, const Panel *panel);
+[[nodiscard]] i32 EditorPanelTextWidth(Editor *ed, const Panel *panel);
+[[nodiscard]] i32 EditorPanelTextHeight(Editor *ed, const Panel *panel);
+
+// Columns the gutter occupies in this panel, 0 when line numbers are off. Wide
+// enough for the buffer's largest line number, floored at kLineNumberMinDigits,
+// plus one blank column separating the numbers from the text.
+[[nodiscard]] i32 EditorGutterWidth(Editor *ed, const Panel *panel);
+
+// The number `line` displays: its distance from the cursor when relative (0 on
+// the cursor's own line), otherwise the 1-based line number.
+[[nodiscard]] u64 EditorLineNumberLabel(const Editor *ed, const View *view,
+                                        const Buffer *buffer, u64 line);
 
 // Brings the focused view's cursor into sight. Called after anything that moves
 // the cursor or changes the text.

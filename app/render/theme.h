@@ -17,6 +17,11 @@ struct Theme {
   Vec4F32 search_match;     // every `/` match while the highlight is on
   Vec4F32 current_line;     // a faint wash, not a hard highlight
 
+  // The gutter. Dim enough to stay out of the way of the text, with the
+  // cursor's own line brought back up so the count reads from a fixed point.
+  Vec4F32 line_number;
+  Vec4F32 line_number_current;
+
   Vec4F32 status_background;
   Vec4F32 status_text;
   Vec4F32 status_background_inactive;

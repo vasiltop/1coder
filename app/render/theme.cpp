@@ -32,6 +32,9 @@ Theme ThemeDefault() {
   // against the background without being as loud as the focused blue.
   theme.selection = Rgb(kUnfocused);
   theme.current_line = Rgb(0xFFFFFF, 0.03f);
+
+  theme.line_number = Rgb(kText, 0.35f);
+  theme.line_number_current = Rgb(kText, 0.9f);
   // Search matches use the focused-window blue so they stand apart from a
   // visual selection: with both on screen it must be obvious which is which.
   theme.search_match = Rgb(kFocused);
