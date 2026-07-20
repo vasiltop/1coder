@@ -24,6 +24,7 @@ void TruncateToPos(UndoStack *undo) {
   if (undo->pos >= undo->count) return;
   ArenaPopTo(undo->text_arena, undo->records[undo->pos].text_arena_pos);
   undo->count = undo->pos;
+  if (undo->group_start_count > undo->count) undo->group_start_count = undo->count;
 }
 
 }  // namespace
@@ -48,6 +49,7 @@ void UndoClear(UndoStack *undo) {
   TruncateToPos(undo);
   undo->group_open = false;
   undo->next_group = 1;
+  undo->group_start_count = 0;
 }
 
 void UndoBeginGroup(UndoStack *undo) {
@@ -55,12 +57,13 @@ void UndoBeginGroup(UndoStack *undo) {
   undo->group_open = true;
   undo->open_group = undo->next_group;
   undo->next_group += 1;
+  undo->group_start_count = undo->count;
 }
 
 void UndoEndGroup(UndoStack *undo) { undo->group_open = false; }
 
 void UndoPush(UndoStack *undo, RangeU64 range, String8 old_text, String8 new_text,
-              u64 cursor_before, u64 cursor_after) {
+              u64 cursor_before, u64 cursor_after, bool fn_before, bool fn_after) {
   // Editing after an undo abandons the redo branch.
   TruncateToPos(undo);
 
@@ -74,6 +77,8 @@ void UndoPush(UndoStack *undo, RangeU64 range, String8 old_text, String8 new_tex
   rec->new_text = PushStr8Copy(undo->text_arena, new_text);
   rec->cursor_before = cursor_before;
   rec->cursor_after = cursor_after;
+  rec->fn_before = fn_before;
+  rec->fn_after = fn_after;
   rec->text_arena_pos = text_pos;
 
   if (undo->group_open) {
@@ -99,6 +104,7 @@ UndoStep UndoStepUndo(UndoStack *undo) {
   step.records = &undo->records[first];
   step.count = undo->pos - first;
   step.cursor = undo->records[first].cursor_before;
+  step.final_newline = undo->records[first].fn_before;
 
   undo->pos = first;
   // A group cannot stay open across an undo, or the next edit would join it.
@@ -117,6 +123,7 @@ UndoStep UndoStepRedo(UndoStack *undo) {
   step.records = &undo->records[undo->pos];
   step.count = last - undo->pos;
   step.cursor = undo->records[last - 1].cursor_after;
+  step.final_newline = undo->records[last - 1].fn_after;
 
   undo->pos = last;
   undo->group_open = false;

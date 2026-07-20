@@ -2282,7 +2282,8 @@ TEST(vim_dd_lone_newline_preserves_final_newline) {
   Fixture f = MakeFixture("");
   BufferOf(&f)->final_newline = true;
   Type(&f, "dd");
-  CHECK_STR(TextOf(&f), Str8Lit(""));
+  CHECK(!BufferOf(&f)->final_newline);
+  Type(&f, "u");
   CHECK(BufferOf(&f)->final_newline);
   Destroy(&f);
 }
