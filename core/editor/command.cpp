@@ -1,6 +1,7 @@
 #include "editor/command.h"
 
 #include "buffers/buf_explorer.h"
+#include "buffers/buf_git.h"
 #include "editor/filetype.h"
 #include "editor/lsp.h"
 #include "editor/lsp_actions.h"
@@ -1919,6 +1920,126 @@ static void Cmd_recompile(CommandArgs *a) {
   BufferHandle handle = CompileBufferRun(a->ed, a->ed->last_compile_command);
   if (handle.index == 0) return;
   ShowCompileBuffer(a->ed, a->view, handle);
+}
+
+// ---------------------------------------------------------------------------
+// Git
+// ---------------------------------------------------------------------------
+
+static void ShowGitBuffer(Editor *ed, View *origin, BufferHandle handle) {
+  ShowCompileBuffer(ed, origin, handle);
+}
+
+static void Cmd_git(CommandArgs *a) {
+  BufferHandle handle = GitBufferOpenStatus(a->ed);
+  if (handle.index == 0) return;
+  ShowGitBuffer(a->ed, a->view, handle);
+}
+
+static void Cmd_git_refresh(CommandArgs *a) {
+  if (a->buffer && a->buffer->kind == BufferKind::Git) {
+    GitBufferReload(a->ed, a->buffer);
+    return;
+  }
+  BufferHandle handle = GitBufferOpenStatus(a->ed);
+  if (handle.index == 0) return;
+  ShowGitBuffer(a->ed, a->view, handle);
+}
+
+static void Cmd_git_stage(CommandArgs *a) {
+  (void)GitBufferStageUnderCursor(a->ed, a->buffer, a->view);
+}
+
+static void Cmd_git_unstage(CommandArgs *a) {
+  (void)GitBufferUnstageUnderCursor(a->ed, a->buffer, a->view);
+}
+
+static void Cmd_git_discard(CommandArgs *a) {
+  (void)GitBufferDiscardUnderCursor(a->ed, a->buffer, a->view);
+}
+
+static void Cmd_git_discard_apply(CommandArgs *a) { GitBufferApplyDiscard(a->ed, a->buffer); }
+
+static void Cmd_git_toggle(CommandArgs *a) {
+  (void)GitBufferToggleExpand(a->ed, a->buffer, a->view);
+}
+
+static void Cmd_git_diff(CommandArgs *a) {
+  (void)GitBufferDiffUnderCursor(a->ed, a->buffer, a->view);
+}
+
+static void Cmd_git_open(CommandArgs *a) {
+  (void)GitBufferOpenUnderCursor(a->ed, a->buffer, a->view);
+}
+
+static void Cmd_git_log(CommandArgs *a) {
+  BufferHandle handle = GitBufferOpenLog(a->ed);
+  if (handle.index == 0) return;
+  ShowGitBuffer(a->ed, a->view, handle);
+}
+
+static void PromptGitCommit(Editor *ed) {
+  CommandLineOpenWith(ed, Str8Lit("git-commit "));
+}
+
+static void Cmd_git_commit(CommandArgs *a) {
+  String8 message = Str8SkipChopWhitespace(a->text);
+  if (message.size == 0) {
+    // Prefer buffer-local `c`, which opens the prompt; `:git-commit` with no
+    // message does the same.
+    PromptGitCommit(a->ed);
+    return;
+  }
+  (void)GitBufferCommit(a->ed, a->buffer, message);
+}
+
+static void Cmd_git_pull(CommandArgs *a) {
+  Buffer *buffer = a->buffer;
+  if (!buffer || buffer->kind != BufferKind::Git) {
+    BufferHandle handle = GitBufferOpenStatus(a->ed);
+    buffer = BufferFromHandle(&a->ed->buffers, handle);
+    if (!buffer) return;
+  }
+
+  GitFlags flags = GitBufferFlags(buffer);
+  String8 text = Str8SkipChopWhitespace(a->text);
+  if (Str8FindFirst(text, Str8Lit("--rebase")) < text.size) flags.rebase = true;
+  if (Str8FindFirst(text, Str8Lit("--autostash")) < text.size) flags.autostash = true;
+  if (Str8FindFirst(text, Str8Lit("--ff-only")) < text.size) flags.ff_only = true;
+
+  GitFlags saved = GitBufferFlags(buffer);
+  GitBufferSetFlags(buffer, flags);
+  (void)GitBufferPull(a->ed, buffer);
+  GitBufferSetFlags(buffer, saved);
+}
+
+static void Cmd_git_push(CommandArgs *a) {
+  Buffer *buffer = a->buffer;
+  if (!buffer || buffer->kind != BufferKind::Git) {
+    BufferHandle handle = GitBufferOpenStatus(a->ed);
+    buffer = BufferFromHandle(&a->ed->buffers, handle);
+    if (!buffer) return;
+  }
+
+  GitFlags flags = GitBufferFlags(buffer);
+  String8 text = Str8SkipChopWhitespace(a->text);
+  if (Str8FindFirst(text, Str8Lit("-u")) < text.size ||
+      Str8FindFirst(text, Str8Lit("--set-upstream")) < text.size) {
+    flags.set_upstream = true;
+  }
+  GitFlags saved = GitBufferFlags(buffer);
+  GitBufferSetFlags(buffer, flags);
+  (void)GitBufferPush(a->ed, buffer);
+  GitBufferSetFlags(buffer, saved);
+}
+
+static void Cmd_git_arg_rebase(CommandArgs *a) { (void)GitBufferToggleFlag(a->ed, a->buffer, 'r'); }
+static void Cmd_git_arg_autostash(CommandArgs *a) {
+  (void)GitBufferToggleFlag(a->ed, a->buffer, 'a');
+}
+static void Cmd_git_arg_ff_only(CommandArgs *a) { (void)GitBufferToggleFlag(a->ed, a->buffer, 'f'); }
+static void Cmd_git_arg_set_upstream(CommandArgs *a) {
+  (void)GitBufferToggleFlag(a->ed, a->buffer, 'U');
 }
 
 // ---------------------------------------------------------------------------

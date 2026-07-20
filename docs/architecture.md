@@ -51,9 +51,9 @@ Two things make that work:
 
 **Everything is a buffer.** Files, the command window, the file explorer, and
 the `:commands` / `:buffers` / `:bindings` listings are all `Buffer`s differing
-only in their kind, their hooks, and a `void *user_data` payload. A git client
-would be a new file in `core/buffers/` providing a `BufferHooks` table — no core
-changes.
+only in their kind, their hooks, and a `void *user_data` payload. The git client
+is a `BufferKind::Git` buffer in `core/buffers/buf_git.cpp` providing a
+`BufferHooks` table — the same seam any new kind uses.
 
 **Vim bindings work in every buffer**, including the command window. A buffer
 claims the few keys it needs through a buffer-local keymap, and that map layers

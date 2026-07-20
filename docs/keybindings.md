@@ -89,6 +89,12 @@ grid resizes through the same path a window resize takes.
 `<leader>pb` fuzzy-picks an open buffer, and `<leader>e` opens the file explorer
 for the current file's directory. See [search](search.md) and [explorer](explorer.md).
 
+## Git
+
+`<leader>gs` or `:git` opens a Magit-style status buffer. In that buffer `s`/`u`
+stage and unstage, `Tab` expands hunks, `F`/`P` pull and push, and `r` toggles
+`--rebase` for the next pull (shown on the `Args:` line). See [git](git.md).
+
 ## Language server protocol
 
 `gi` jumps to implementation, `gd` to definition, `gD` to declaration, and `gt`
