@@ -296,6 +296,7 @@ void EditorSetFontSize(Editor *ed, f32 size);
 
 // The single entry point for key input. The platform layer calls it once per
 // press; tests call it to replay a sequence.
+void EditorCancelPendingInput(Editor *ed);
 void EditorProcessChord(Editor *ed, KeyChord chord);
 [[nodiscard]] MouseHit EditorMouseHitTest(Editor *ed, const MouseEvent &event);
 void EditorProcessMouse(Editor *ed, const MouseEvent &event);

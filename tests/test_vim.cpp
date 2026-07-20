@@ -771,6 +771,107 @@ TEST(vim_visual_escape_leaves_text_alone) {
   Destroy(&f);
 }
 
+TEST(vim_visual_escape_restores_temporary_mouse_insert_mode) {
+  Fixture insert = MakeFixture("hello");
+  View *view = ViewOf(&insert);
+  Buffer *buffer = BufferOf(&insert);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Insert;
+  ViewSetCursor(view, buffer, 2);
+
+  Type(&insert, "<Esc>");
+  CHECK_EQ((u32)ModeOf(&insert), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&insert), Str8Lit("hello"));
+  Destroy(&insert);
+
+  Fixture replace = MakeFixture("hello");
+  view = ViewOf(&replace);
+  buffer = BufferOf(&replace);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 2);
+
+  Type(&replace, "<Esc>");
+  CHECK_EQ((u32)ModeOf(&replace), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  Destroy(&replace);
+}
+
+TEST(vim_visual_operators_restore_temporary_mouse_modes) {
+  Fixture yank = MakeFixture("alpha beta");
+  View *view = ViewOf(&yank);
+  Buffer *buffer = BufferOf(&yank);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 4);
+
+  Type(&yank, "y");
+  CHECK_EQ((u32)ModeOf(&yank), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&yank), Str8Lit("alpha beta"));
+  Destroy(&yank);
+
+  Fixture del = MakeFixture("alpha beta");
+  view = ViewOf(&del);
+  buffer = BufferOf(&del);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 4);
+
+  Type(&del, "d");
+  CHECK_EQ((u32)ModeOf(&del), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&del), Str8Lit(" beta"));
+  Destroy(&del);
+
+  Fixture indent = MakeFixture("one\ntwo");
+  view = ViewOf(&indent);
+  buffer = BufferOf(&indent);
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Insert;
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+
+  Type(&indent, ">");
+  CHECK_EQ((u32)ModeOf(&indent), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&indent), Str8Lit("  one\n  two"));
+  Destroy(&indent);
+
+  Fixture dedent = MakeFixture("  one\n  two");
+  view = ViewOf(&dedent);
+  buffer = BufferOf(&dedent);
+  view->vim.mode = VimMode::VisualLine;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, BufferOffsetFromLine(buffer, 1));
+
+  Type(&dedent, "<");
+  CHECK_EQ((u32)ModeOf(&dedent), (u32)VimMode::Replace);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&dedent), Str8Lit("one\ntwo"));
+  Destroy(&dedent);
+
+  Fixture change = MakeFixture("alpha beta");
+  view = ViewOf(&change);
+  buffer = BufferOf(&change);
+  view->vim.mode = VimMode::Visual;
+  view->vim.visual_anchor = 0;
+  view->vim.mouse_visual_return_mode = VimMode::Replace;
+  ViewSetCursor(view, buffer, 4);
+
+  Type(&change, "c");
+  CHECK_EQ((u32)ModeOf(&change), (u32)VimMode::Insert);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+  CHECK_STR(TextOf(&change), Str8Lit(" beta"));
+  Destroy(&change);
+}
+
 // ---------------------------------------------------------------------------
 // Undo and repeat
 // ---------------------------------------------------------------------------

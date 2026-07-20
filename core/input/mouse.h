@@ -70,6 +70,7 @@ struct MouseHit {
   Panel *panel;
   View *view;
   Buffer *buffer;
+  BufferHandle buffer_handle;
   PanelBoundary boundary;
   u64 offset;
   bool has_offset;
@@ -80,6 +81,7 @@ struct MouseCapture {
   Panel *panel;
   View *view;
   Buffer *buffer;
+  BufferHandle buffer_handle;
   PanelBoundary boundary;
   MouseButton button;
 };
