@@ -22,10 +22,12 @@ namespace {
 // naming the block that was overrun. It is very slow, so it stays opt-in.
 void ConfigureCrtDiagnostics() {
 #if defined(_MSC_VER)
-  for (int report : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
-    _CrtSetReportMode(report, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(report, _CRTDBG_FILE_STDERR);
-  }
+  _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+  _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+  _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
   if (getenv("EDITOR_TESTS_HEAPCHECK") != nullptr) {
     _CrtSetDbgFlag(_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG) | _CRTDBG_ALLOC_MEM_DF |
                    _CRTDBG_CHECK_ALWAYS_DF);
