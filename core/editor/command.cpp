@@ -2,10 +2,15 @@
 
 #include "buffers/buf_explorer.h"
 #include "editor/filetype.h"
+#include "editor/lsp.h"
+#include "editor/lsp_actions.h"
+#include "editor/lsp_ui.h"
 #include "os/os_file.h"
 #include "vim/vim_motions.h"
 #include "vim/vim_operators.h"
 #include "vim/vim_search.h"
+
+#include <new>
 
 // Every command body lives here. The X-macro list in command_id.h generates the
 // enum and the table; a missing body is a link error rather than a silent gap.
@@ -30,6 +35,64 @@ void LeaveInsertMode(Editor *ed, View *view, Buffer *buffer) {
   // Vim steps left when leaving insert, since the cursor was sitting one past
   // the last typed character.
   ViewSetCursor(view, buffer, BufferPrevCodepoint(buffer, view->cursor));
+}
+
+void ClearCommandLineExtraState(Editor *ed) {
+  if (ed == nullptr || ed->command_line_arena == nullptr) return;
+  ArenaClear(ed->command_line_arena);
+  ed->command_line_purpose = {};
+  ed->command_line_rename_active = false;
+  ed->command_line_rename_target = BufferHandleZero();
+}
+
+void SetCommandLinePurpose(Editor *ed, String8 purpose) {
+  if (ed == nullptr || ed->command_line_arena == nullptr) return;
+  ArenaClear(ed->command_line_arena);
+  ed->command_line_purpose = purpose.size > 0 ? PushStr8Copy(ed->command_line_arena, purpose) : String8{};
+}
+
+Buffer *CurrentLspFileBuffer(CommandArgs *a) {
+  Buffer *buffer = a ? a->buffer : nullptr;
+  if (a == nullptr || buffer == nullptr || buffer->kind != BufferKind::File || buffer->path.size == 0) {
+    if (a != nullptr && a->ed != nullptr) EditorSetStatus(a->ed, Str8Lit("LSP: file not open"));
+    return nullptr;
+  }
+  return buffer;
+}
+
+struct RenamePromptContext {
+  Editor *ed;
+  BufferHandle buffer;
+};
+
+void OpenRenamePrompt(void *user_data, const EditorLspRenamePrepareResult *result) {
+  RenamePromptContext *context = (RenamePromptContext *)user_data;
+  if (context == nullptr) return;
+
+  Editor *ed = context->ed;
+  BufferHandle target = context->buffer;
+  delete context;
+
+  if (ed == nullptr || result == nullptr || result->status != EditorLspRenamePrepareStatus::Ready) return;
+  if (BufferFromHandle(&ed->buffers, target) == nullptr) return;
+  if (ed->command_line_active) {
+    EditorSetStatus(ed, Str8Lit("LSP: rename prompt busy"));
+    return;
+  }
+
+  Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
+  if (buffer == nullptr || ed->command_view == nullptr) return;
+
+  String8 prefill = result->placeholder.size > 0 ? result->placeholder : result->prompt;
+  BufferSetText(ed, buffer, prefill);
+  ViewInit(ed->command_view, ed->command_buffer);
+  ed->command_view->vim.mode = VimMode::Insert;
+  ViewSetCursor(ed->command_view, buffer, BufferSize(buffer));
+  ed->command_line_active = true;
+  ed->command_line_prompt = ':';
+  SetCommandLinePurpose(ed, Str8Lit("rename"));
+  ed->command_line_rename_active = true;
+  ed->command_line_rename_target = target;
 }
 
 void LeaveVisualMode(View *view, Buffer *buffer, VimMode fallback) {
@@ -1022,6 +1085,7 @@ static void Cmd_write_file(CommandArgs *a) {
     EditorSetStatus(a->ed, Str8Lit("write: failed"));
     return;
   }
+  EditorLspOnBufferSaved(a->ed, buffer);
   EditorSetStatusF(a->ed, "\"%.*s\" written", (int)buffer->path.size, (char *)buffer->path.str);
 }
 
@@ -1152,6 +1216,7 @@ void SearchPromptOpen(Editor *ed, bool forward) {
   View *view = EditorFocusedView(ed);
   if (!buffer || !ed->command_view || !view) return;
 
+  ClearCommandLineExtraState(ed);
   ed->search_origin_view = view;
   ed->search_origin = view->cursor;
   ed->search_origin_scroll = view->scroll_line;
@@ -1249,6 +1314,75 @@ static void Cmd_search_word_backward(CommandArgs *a) {
 static void Cmd_search_clear(CommandArgs *a) { a->ed->search_highlight = false; }
 
 // ---------------------------------------------------------------------------
+// Language server
+// ---------------------------------------------------------------------------
+
+static void Cmd_lsp_format(CommandArgs *a) {
+  Buffer *buffer = CurrentLspFileBuffer(a);
+  if (!buffer) return;
+  (void)EditorLspRequestFormatting(a->ed, buffer);
+}
+
+static void Cmd_lsp_implementation(CommandArgs *a) {
+  Buffer *buffer = CurrentLspFileBuffer(a);
+  if (!buffer) return;
+  (void)EditorLspRequestNavigation(a->ed, buffer, EditorLspNavigationKind::Implementation);
+}
+
+static void Cmd_lsp_definition(CommandArgs *a) {
+  Buffer *buffer = CurrentLspFileBuffer(a);
+  if (!buffer) return;
+  (void)EditorLspRequestNavigation(a->ed, buffer, EditorLspNavigationKind::Definition);
+}
+
+static void Cmd_lsp_declaration(CommandArgs *a) {
+  Buffer *buffer = CurrentLspFileBuffer(a);
+  if (!buffer) return;
+  (void)EditorLspRequestNavigation(a->ed, buffer, EditorLspNavigationKind::Declaration);
+}
+
+static void Cmd_lsp_type_definition(CommandArgs *a) {
+  Buffer *buffer = CurrentLspFileBuffer(a);
+  if (!buffer) return;
+  (void)EditorLspRequestNavigation(a->ed, buffer, EditorLspNavigationKind::TypeDefinition);
+}
+
+static void Cmd_lsp_rename(CommandArgs *a) {
+  Buffer *buffer = CurrentLspFileBuffer(a);
+  if (!buffer) return;
+
+  RenamePromptContext *context = new (std::nothrow) RenamePromptContext{a->ed, buffer->handle};
+  if (context == nullptr) {
+    EditorSetStatus(a->ed, Str8Lit("LSP: out of memory"));
+    return;
+  }
+  (void)EditorLspPrepareRename(a->ed, buffer, OpenRenamePrompt, context);
+}
+
+static void Cmd_lsp_completion(CommandArgs *a) {
+  Buffer *buffer = CurrentLspFileBuffer(a);
+  if (!buffer) return;
+  (void)EditorLspUiRequestCompletion(a->ed->lsp_ui, a->ed, buffer, a->view->cursor);
+}
+
+static void Cmd_lsp_hover(CommandArgs *a) {
+  Buffer *buffer = CurrentLspFileBuffer(a);
+  if (!buffer) return;
+  (void)EditorLspUiRequestHover(a->ed->lsp_ui, a->ed, buffer, a->view->cursor);
+}
+
+static void Cmd_lsp_diagnostic_float(CommandArgs *a) {
+  Buffer *buffer = CurrentLspFileBuffer(a);
+  if (!buffer) return;
+
+  String8 status = {};
+  if (!EditorLspUiBuildDiagnosticPopup(a->ed->lsp_ui, buffer, a->view->cursor, &status) &&
+      status.size > 0) {
+    EditorSetStatusF(a->ed, "LSP: %.*s", (int)status.size, (char *)status.str);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Command line
 // ---------------------------------------------------------------------------
 
@@ -1261,6 +1395,7 @@ void CommandLineClose(Editor *ed) {
   ed->command_line_active = false;
   ed->command_line_prompt = ':';
   ed->search_origin_view = nullptr;
+  ClearCommandLineExtraState(ed);
 
   Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
   if (buffer) BufferSetText(ed, buffer, String8{nullptr, 0});
@@ -1291,16 +1426,18 @@ namespace {
 // it. This is how a keybinding asks for something it cannot supply itself: a
 // binding carries no argument text, so `<leader>pg` cannot grep for anything
 // until the pattern has been typed.
-void CommandLineOpenWith(Editor *ed, String8 prefill) {
+void CommandLineOpenWith(Editor *ed, String8 prefill, String8 purpose = {}) {
   Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
   if (!buffer || !ed->command_view) return;
 
+  ClearCommandLineExtraState(ed);
   BufferSetText(ed, buffer, prefill);
   ViewInit(ed->command_view, ed->command_buffer);
   ed->command_view->vim.mode = VimMode::Insert;
   ViewSetCursor(ed->command_view, buffer, BufferSize(buffer));
   ed->command_line_active = true;
   ed->command_line_prompt = ':';
+  SetCommandLinePurpose(ed, purpose);
 }
 
 }  // namespace
@@ -1310,6 +1447,7 @@ static void Cmd_command_line_open(CommandArgs *a) {
   Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
   if (!buffer || !ed->command_view) return;
 
+  ClearCommandLineExtraState(ed);
   BufferSetText(ed, buffer, String8{nullptr, 0});
   ViewInit(ed->command_view, ed->command_buffer);
 
@@ -1330,6 +1468,8 @@ static void Cmd_command_line_submit(CommandArgs *a) {
   String8 line = PushStr8Copy(scratch.arena, BufferTextAll(scratch.arena, buffer));
   u8 prompt = ed->command_line_prompt;
   View *origin = ed->search_origin_view;
+  bool rename = ed->command_line_rename_active;
+  BufferHandle rename_target = ed->command_line_rename_target;
 
   if (prompt == '/' || prompt == '?') {
     bool forward = (prompt == '/');
@@ -1346,6 +1486,27 @@ static void Cmd_command_line_submit(CommandArgs *a) {
       EditorSearchMove(ed, origin, forward, 1);
       EditorScrollFocusedToCursor(ed);
     }
+    ScratchEnd(scratch);
+    return;
+  }
+
+  if (rename) {
+    String8 trimmed = Str8SkipChopWhitespace(line);
+    CommandLineDismiss(ed);
+    if (trimmed.size == 0) {
+      EditorSetStatus(ed, Str8Lit("LSP: rename needs a name"));
+      ScratchEnd(scratch);
+      return;
+    }
+
+    Buffer *target = BufferFromHandle(&ed->buffers, rename_target);
+    if (target == nullptr) {
+      EditorSetStatus(ed, Str8Lit("LSP: rename target closed"));
+      ScratchEnd(scratch);
+      return;
+    }
+
+    (void)EditorLspSubmitRename(ed, target, line);
     ScratchEnd(scratch);
     return;
   }
@@ -1455,6 +1616,7 @@ void ShowListing(Editor *ed, String8 name, String8 text) {
 BufferHandle GrepBufferOpen(Editor *ed, String8 pattern);
 BufferHandle FinderBufferOpen(Editor *ed);
 BufferHandle LiveGrepBufferOpen(Editor *ed);
+BufferHandle BuffersBufferOpen(Editor *ed);
 
 // Opens a picker whose first line is the query, ready to type into. Shared by
 // the file finder and the live search, which differ only in what they do with
@@ -1631,23 +1793,7 @@ static void Cmd_list_commands(CommandArgs *a) {
   ScratchEnd(scratch);
 }
 
-static void Cmd_list_buffers(CommandArgs *a) {
-  TempArena scratch = ScratchBegin();
-  String8List lines = {};
-
-  for (BufferHandle h = BufferFirst(&a->ed->buffers); h.index != 0;
-       h = BufferNext(&a->ed->buffers, h)) {
-    Buffer *b = BufferFromHandle(&a->ed->buffers, h);
-    if (!b) continue;
-    Str8ListPush(scratch.arena, &lines,
-                 PushStr8F(scratch.arena, "%3llu %s %-24.*s %.*s", (unsigned long long)h.index,
-                           BufferIsDirty(b) ? "+" : " ", (int)b->name.size, (char *)b->name.str,
-                           (int)b->path.size, (char *)b->path.str));
-  }
-
-  ShowListing(a->ed, Str8Lit("[buffers]"), Str8ListJoin(scratch.arena, &lines, Str8Lit("\n")));
-  ScratchEnd(scratch);
-}
+static void Cmd_list_buffers(CommandArgs *a) { OpenQueryPicker(a, BuffersBufferOpen(a->ed)); }
 
 static void Cmd_list_bindings(CommandArgs *a) {
   TempArena scratch = ScratchBegin();

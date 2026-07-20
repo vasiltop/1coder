@@ -6,13 +6,14 @@ The load-bearing decision is the line between `core/` and `app/`:
                     ┌─ tests/    links core only, no SDL, no display
 core (static lib) ──┤
   base/     arena allocator, String8, UTF-8, ranges, cell rects
-  os/       file and directory access
+  os/       file and directory access, process pipes
   text/     gap buffer, line index, undo stack, syntax tokens
   input/    Key / KeyChord types, binding parser, keymap trie
   command/  command identity: the COMMAND_LIST table, name <-> id
   editor/   buffers, views, panels, dispatch, command line parsing
   search/   project walk, grep, fuzzy matching
   vim/      modes, motions, operators, default bindings
+  lsp/      language server protocol client, diagnostics, completion
   buffers/  per-kind buffer implementations
                     └─ app (executable)
   platform/ SDL window, event pump, SDL_Keycode -> Key
@@ -75,6 +76,13 @@ the normal map, and `d` again in the operator-pending map.
 
 **One dispatch path.** Keybindings and the command window both resolve to a
 `CommandId` and run the same body, so `:1d` and `dd` cannot drift apart.
+
+**Language server protocol is non-blocking.** LSP server startup and message
+handling happen on a background thread, and the editor wakes the main thread
+to redraw as results arrive. The `core/lsp` module has no window-system
+dependencies, so LSP features are testable in the test binary. Process pipes
+live in `core/os/`, and the editor thread drains incoming messages during its
+event loop, keeping frame times predictable.
 
 ## The os layer
 

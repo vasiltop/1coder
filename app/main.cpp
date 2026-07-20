@@ -12,6 +12,7 @@
 #include "editor/command.h"
 #include "editor/editor.h"
 #include "editor/filetype.h"
+#include "editor/lsp.h"
 #include "platform/platform_sdl.h"
 #include "render/draw.h"
 #include "render/glyph_atlas.h"
@@ -55,6 +56,7 @@ struct App {
 
   String8 font_path;
   String8 font_face;
+  u32 lsp_wake_event;
 };
 
 // ---------------------------------------------------------------------------
@@ -79,6 +81,15 @@ void ClipboardWrite(String8 text) {
   TempArena scratch = ScratchBegin();
   SDL_SetClipboardText(PushCStr(scratch.arena, text));
   ScratchEnd(scratch);
+}
+
+void LspWake(void *user_data) {
+  App *app = (App *)user_data;
+  if (app == nullptr || app->lsp_wake_event == 0) return;
+
+  SDL_Event event = {};
+  event.type = app->lsp_wake_event;
+  (void)SDL_PushEvent(&event);
 }
 
 // Feeds a text-input event to the editor, one codepoint at a time. SDL has
@@ -249,11 +260,16 @@ int main(int argc, char **argv) {
 
   DrawInit(&app->draw, arena, app->renderer, &app->atlas);
   RenderContextInit(&app->render, &app->draw, &app->atlas);
+  app->lsp_wake_event = SDL_RegisterEvents(1);
 
   // ---- editor ----
   i32 width = 0, height = 0;
   SDL_GetWindowSizeInPixels(app->window, &width, &height);
   EditorInit(&app->editor, arena, RenderScreenCells(&app->render, width, height));
+  EditorLspConfig lsp = {};
+  lsp.wake = LspWake;
+  lsp.wake_user_data = app;
+  EditorLspEnable(&app->editor, &lsp);
 
   app->editor.font_size = font_size;
   app->editor.clipboard.read = ClipboardRead;
@@ -384,6 +400,8 @@ int main(int argc, char **argv) {
     } while (!app->editor.quit && SDL_PollEvent(&event));
 
     if (app->editor.quit) break;
+
+    (void)EditorTick(&app->editor);
 
     // Zoom asks for a new font size; rebuilding the atlas is the app's job.
     if (app->editor.font_size_changed) {

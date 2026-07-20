@@ -1,5 +1,9 @@
 #include "editor/buffer_registry.h"
 
+#include "editor/editor.h"
+#include "editor/lsp.h"
+#include "editor/lsp_ui.h"
+
 void BufferRegistryInit(BufferRegistry *reg, Arena *arena, u64 capacity) {
   reg->arena = arena;
   reg->capacity = capacity;
@@ -58,6 +62,8 @@ void BufferClose(BufferRegistry *reg, Editor *ed, BufferHandle handle) {
   Buffer *buffer = BufferFromHandle(reg, handle);
   if (!buffer) return;
 
+  EditorLspOnBufferClosed(ed, handle);
+  if (ed != nullptr) EditorLspUiOnBufferClosed(ed->lsp_ui, buffer);
   if (buffer->hooks.on_close) buffer->hooks.on_close(ed, buffer);
 
   BufferSlot *slot = &reg->slots[handle.index];

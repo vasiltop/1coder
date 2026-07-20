@@ -8,6 +8,7 @@ the editor properly, or for changing it.
 ## Using it
 
 - [Keybindings](keybindings.md) — the complete key reference
+- [Language server protocol](lsp.md) — auto-detected servers, navigation, completion
 - [The command window](commands.md) — `:` syntax, and how to add a command
 - [Search](search.md) — live grep, file finder, buffer list
 - [The file explorer](explorer.md) — directories as editable text

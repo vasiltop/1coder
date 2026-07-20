@@ -80,8 +80,16 @@ grid resizes through the same path a window resize takes.
 ## Search and files
 
 `<leader>pg` searches the project as you type, `<leader>pf` fuzzy-finds a file,
-`<leader>pb` lists buffers, and `<leader>e` opens the file explorer for the
-current file's directory. See [search](search.md) and [explorer](explorer.md).
+`<leader>pb` fuzzy-picks an open buffer, and `<leader>e` opens the file explorer
+for the current file's directory. See [search](search.md) and [explorer](explorer.md).
+
+## Language server protocol
+
+`gi` jumps to definition, `gd` to type definition, `gD` to implementation, `gt`
+shows type info. `<leader>cf` formats, `<leader>rn` renames, `<leader>d` lists
+diagnostics. In normal mode `<C-Space>` hovers; in insert mode it completes
+(cycle with Up/Down or Ctrl-N/Ctrl-P, accept with Enter, dismiss with Esc).
+See [language server protocol](lsp.md).
 
 ## The command window
 

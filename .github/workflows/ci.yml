@@ -11,6 +11,13 @@ defaults:
     # git-bash on the Windows runner, so one set of scripting covers all three.
     shell: bash
 
+env:
+  # MSBuild's node-reuse pool (used by the Visual Studio generator under -j)
+  # leaves worker processes alive past the build, which has raced the
+  # freshly-linked test binary's first run on the Windows runner. No-op on
+  # Linux/macOS, which build with make instead of MSBuild.
+  MSBUILDDISABLENODEREUSE: "1"
+
 jobs:
   ci:
     strategy:
@@ -19,6 +26,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-14, windows-latest]
     runs-on: ${{ matrix.os }}
+    # The suite runs in about a minute; anything approaching this is a deadlock
+    # in a test, and a hung runner otherwise sits for the six hour default.
+    timeout-minutes: 15
     steps:
       # No submodules, so SDL is absent and CMake skips the editor target by
       # design. The tests link core only and are what this workflow is for.
@@ -44,4 +54,37 @@ jobs:
           esac
 
       - name: CI
+        if: runner.os != 'Windows'
         run: just ci
+
+      # TEMPORARY: Windows alternates between dying at command_line_resolves_names
+      # (msys reports 127 for everything, so the real status is unknown) and
+      # deadlocking. A deadlock inside `just ci` gets the job cancelled on
+      # timeout, and cancellation skips failure() steps, so the diagnostics
+      # never run. Drive the steps directly instead, each individually bounded,
+      # so one run yields the real exit status whichever way it goes.
+      # Restore the plain `just ci` for all platforms once Windows is green.
+      - name: CI (Windows, instrumented)
+        if: runner.os == 'Windows'
+        env:
+          EDITOR_TESTS_TRACE: 1
+        run: |
+          just build
+          # Two prior attempts at this reported nothing. `cmd.exe /c` fails
+          # because msys rewrites the /c switch into a Windows path (//c is the
+          # escape), and the PowerShell one left $args unbound. Both are shell
+          # quoting problems that cannot be tested anywhere but here, so put the
+          # command in a batch file where no shell gets to rewrite it.
+          printf '@echo off\r\nbuild\\editor_tests.exe %%*\r\necho EXIT=%%ERRORLEVEL%%\r\n' > diag.bat
+          cat diag.bat
+          echo "=== control: a test that passes ==="
+          cmd.exe //c diag.bat buffer_save_empty_file
+          echo "=== the suspect, in isolation ==="
+          echo "  (exit -1073740940 / 0xC0000374 is STATUS_HEAP_CORRUPTION)"
+          cmd.exe //c diag.bat command_line_resolves_names
+          echo "=== the suspect, with the debug CRT validating the heap on every alloc ==="
+          EDITOR_TESTS_HEAPCHECK=1 cmd.exe //c diag.bat command_line_resolves_names
+          echo "=== full suite ==="
+          cmd.exe //c diag.bat > full.log 2>&1 || true
+          tail -6 full.log
+          grep -q "0 failed" full.log || { echo "SUITE DID NOT PASS"; exit 1; }

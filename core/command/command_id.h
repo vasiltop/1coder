@@ -195,13 +195,23 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(explorer_parent,       "explorer",              "Open the containing directory",   CommandArg::Path, CmdNone)        \
   X(explorer_open,         "explorer-open",         "Open the entry under the cursor", CommandArg::None, CmdHidden)      \
   X(explorer_apply,        "explorer-apply",        "Apply the pending listing edits", CommandArg::None, CmdHidden)      \
+  /* ---- language server ---- */                                                                                         \
+  X(lsp_format,            "format",                "Format the current file",         CommandArg::None, CmdNone)        \
+  X(lsp_implementation,    "implementation",        "Jump to implementation",          CommandArg::None, CmdNone)        \
+  X(lsp_definition,        "definition",            "Jump to definition",              CommandArg::None, CmdNone)        \
+  X(lsp_declaration,       "declaration",           "Jump to declaration",             CommandArg::None, CmdNone)        \
+  X(lsp_type_definition,   "type-definition",       "Jump to type definition",         CommandArg::None, CmdNone)        \
+  X(lsp_rename,            "rename",                "Rename symbol under cursor",      CommandArg::None, CmdNone)        \
+  X(lsp_completion,        "completion",            "Request manual completion",       CommandArg::None, CmdNone)        \
+  X(lsp_hover,             "hover",                 "Show hover information",          CommandArg::None, CmdNone)        \
+  X(lsp_diagnostic_float,  "diagnostic-float",      "Show diagnostics at cursor",      CommandArg::None, CmdNone)        \
   /* ---- display ---- */                                                                                                \
   X(line_numbers_absolute, "number",                "Show absolute line numbers",      CommandArg::None, CmdNone)        \
   X(line_numbers_relative, "relativenumber",        "Show relative line numbers",      CommandArg::None, CmdNone)        \
   X(line_numbers_off,      "nonumber",              "Hide line numbers",               CommandArg::None, CmdNone)        \
   /* ---- meta ---- */                                                                                                   \
   X(list_commands,         "commands",              "List every command",              CommandArg::None, CmdNone)        \
-  X(list_buffers,          "buffers",               "List open buffers",               CommandArg::None, CmdNone)        \
+  X(list_buffers,          "buffers",               "Pick an open buffer",             CommandArg::None, CmdNone)        \
   X(list_bindings,         "bindings",              "List key bindings",               CommandArg::None, CmdNone)        \
   /* ---- command window ---- */                                                                                         \
   X(command_line_open,     "command-line-open",     "Open the command window",         CommandArg::None, CmdHidden)      \
