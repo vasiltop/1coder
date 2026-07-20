@@ -428,9 +428,12 @@ void HandleRightPanelPress(Editor *ed, MouseHit hit) {
     ed->mouse.selection_anchor.has_offset = true;
     UpdateSelectionFromHit(ed, view, buffer, hit);
   } else {
-    ed->mouse.selection_anchor.offset = view->cursor;
+    u64 cursor = ViewClampCursorToMode(view, buffer, hit.offset);
+    ViewSetCursor(view, buffer, cursor);
+    ed->mouse.pointer_anchor.offset = cursor;
+    ed->mouse.pointer_anchor.has_offset = true;
+    ed->mouse.selection_anchor.offset = cursor;
     ed->mouse.selection_anchor.has_offset = true;
-    ApplyCharacterSelection(view, buffer, view->cursor, hit.offset, view->vim.mode);
   }
   ScrollViewToOwnCursor(ed, hit.panel, view, buffer);
 }

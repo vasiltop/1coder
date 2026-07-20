@@ -553,24 +553,70 @@ TEST(mouse_drag_capture_stays_with_the_owning_view_across_focus_changes) {
   Destroy(&f);
 }
 
-TEST(mouse_click_right_selects_from_cursor_and_moves_the_nearest_endpoint) {
-  Fixture fresh = MakeFixture("abcdef");
-  View *view = EditorFocusedView(&fresh.ed);
-  Buffer *buffer = EditorFocusedBuffer(&fresh.ed);
-  RectS32 text = EditorPanelTextRect(&fresh.ed, fresh.ed.focused_panel);
+TEST(mouse_click_right_places_cursor_without_selection_and_drag_starts_selection) {
+  auto check_plain_click = [](VimMode start_mode) {
+    Fixture f = MakeFixture("abcdef");
+    View *view = EditorFocusedView(&f.ed);
+    Buffer *buffer = EditorFocusedBuffer(&f.ed);
+    RectS32 text = EditorPanelTextRect(&f.ed, f.ed.focused_panel);
 
-  SendMouse(&fresh, MouseAction::Press, MouseButton::Right, (f32)text.x0 + 3.2f,
+    view->vim.mode = start_mode;
+    SendMouse(&f, MouseAction::Press, MouseButton::Right, (f32)text.x0 + 3.2f,
+              (f32)text.y0 + 0.2f);
+    CHECK_EQ((u32)view->vim.mode, (u32)start_mode);
+    CHECK_EQ(view->cursor, BufferOffsetFromColumn(buffer, 0, 3));
+    CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Normal);
+    CHECK_EQ(Selection(view, buffer).min, view->cursor);
+    CHECK_EQ(Selection(view, buffer).max, view->cursor);
+
+    SendMouse(&f, MouseAction::Release, MouseButton::Right, (f32)text.x0 + 3.2f,
+              (f32)text.y0 + 0.2f);
+    CHECK_EQ((u32)view->vim.mode, (u32)start_mode);
+    CHECK_EQ(view->cursor, BufferOffsetFromColumn(buffer, 0, 3));
+    Destroy(&f);
+  };
+
+  check_plain_click(VimMode::Normal);
+  check_plain_click(VimMode::Insert);
+  check_plain_click(VimMode::Replace);
+
+  Fixture drag = MakeFixture("abcdef");
+  View *view = EditorFocusedView(&drag.ed);
+  Buffer *buffer = EditorFocusedBuffer(&drag.ed);
+  RectS32 text = EditorPanelTextRect(&drag.ed, drag.ed.focused_panel);
+
+  SendMouse(&drag, MouseAction::Press, MouseButton::Right, (f32)text.x0 + 1.2f,
+            (f32)text.y0 + 0.2f);
+  SendMouse(&drag, MouseAction::Drag, MouseButton::Right, (f32)text.x0 + 4.2f,
             (f32)text.y0 + 0.2f);
   CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Visual);
-  CHECK_EQ(view->vim.visual_anchor, 0);
-  CHECK_EQ(Selection(view, buffer).min, 0);
-  CHECK_EQ(Selection(view, buffer).max, 4);
-  Destroy(&fresh);
+  CHECK_EQ(view->vim.visual_anchor, BufferOffsetFromColumn(buffer, 0, 1));
+  CHECK_EQ(Selection(view, buffer).min, 1);
+  CHECK_EQ(Selection(view, buffer).max, 5);
+  Destroy(&drag);
 
+  Fixture temporary = MakeFixture("abcdef");
+  view = EditorFocusedView(&temporary.ed);
+  buffer = EditorFocusedBuffer(&temporary.ed);
+  text = EditorPanelTextRect(&temporary.ed, temporary.ed.focused_panel);
+  view->vim.mode = VimMode::Insert;
+
+  SendMouse(&temporary, MouseAction::Press, MouseButton::Right, (f32)text.x0 + 1.2f,
+            (f32)text.y0 + 0.2f);
+  SendMouse(&temporary, MouseAction::Drag, MouseButton::Right, (f32)text.x0 + 4.2f,
+            (f32)text.y0 + 0.2f);
+  CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Visual);
+  CHECK_EQ((u32)view->vim.mouse_visual_return_mode, (u32)VimMode::Insert);
+  CHECK_EQ(Selection(view, buffer).min, 1);
+  CHECK_EQ(Selection(view, buffer).max, 5);
+  Destroy(&temporary);
+}
+
+TEST(mouse_click_right_moves_the_nearest_endpoint_of_visual_selection) {
   Fixture extend = MakeFixture("abcdef");
-  view = EditorFocusedView(&extend.ed);
-  buffer = EditorFocusedBuffer(&extend.ed);
-  text = EditorPanelTextRect(&extend.ed, extend.ed.focused_panel);
+  View *view = EditorFocusedView(&extend.ed);
+  Buffer *buffer = EditorFocusedBuffer(&extend.ed);
+  RectS32 text = EditorPanelTextRect(&extend.ed, extend.ed.focused_panel);
   view->vim.mode = VimMode::Visual;
   view->vim.visual_anchor = 0;
   ViewSetCursor(view, buffer, 4);
