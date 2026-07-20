@@ -1,5 +1,6 @@
 #include "editor/command.h"
 #include "editor/editor.h"
+#include "editor/filetype.h"
 #include "os/os_file.h"
 #include "search/search.h"
 
@@ -189,7 +190,7 @@ void FinderSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
 
   if (relative.size > 0) {
     String8 path = OsPathJoin(scratch.arena, payload->root, relative);
-    BufferHandle handle = EditorOpenFile(ed, path);
+    BufferHandle handle = FiletypeOpen(ed, path);
     if (handle.index != 0) {
       EditorPushJump(ed, view);
       EditorShowBuffer(ed, handle);

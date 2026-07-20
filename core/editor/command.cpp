@@ -768,7 +768,7 @@ static void SplitAndMaybeOpen(CommandArgs *a, Axis2 axis) {
   if (!EditorSplit(a->ed, axis)) return;
   if (a->arg.size == 0) return;
 
-  BufferHandle handle = EditorOpenFile(a->ed, a->arg);
+  BufferHandle handle = FiletypeOpen(a->ed, a->arg);
   if (handle.index != 0) EditorShowBuffer(a->ed, handle);
 }
 
@@ -823,7 +823,7 @@ static void Cmd_edit_file(CommandArgs *a) {
     return;
   }
 
-  BufferHandle handle = EditorOpenFile(a->ed, a->arg);
+  BufferHandle handle = FiletypeOpen(a->ed, a->arg);
   if (handle.index == 0) {
     EditorSetStatusF(a->ed, "Cannot open %.*s", (int)a->arg.size, (char *)a->arg.str);
     return;

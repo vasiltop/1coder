@@ -4,6 +4,7 @@
 #include "base/base_string.h"
 #include "editor/command.h"
 #include "editor/editor.h"
+#include "editor/filetype.h"
 #include "platform/platform_sdl.h"
 #include "render/draw.h"
 #include "render/glyph_atlas.h"
@@ -214,7 +215,7 @@ int main(int argc, char **argv) {
 
   // Files named on the command line, each in its own split after the first.
   for (int i = 0; i < file_argc; i += 1) {
-    BufferHandle handle = EditorOpenFile(&app->editor, Str8C(file_argv[i]));
+    BufferHandle handle = FiletypeOpen(&app->editor, Str8C(file_argv[i]));
     if (handle.index == 0) continue;
     if (i > 0) (void)EditorSplit(&app->editor, Axis2::X);
     EditorShowBuffer(&app->editor, handle);

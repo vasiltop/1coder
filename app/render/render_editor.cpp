@@ -233,8 +233,10 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
 
   DrawPushClip(ctx->draw, text_rect);
 
-  // An image draws its frame behind the summary text, which then reads as a
-  // caption inside it.
+  // The frame goes down before the text, which keeps drawing where it always
+  // does. Centring the summary inside the frame would mean offsetting the text
+  // origin, and the cursor and selection rects are all derived from text_rect
+  // -- they would drift away from the glyphs.
   const ImageInfo *image = ImageBufferInfo(buffer);
   if (image) DrawImagePlaceholder(ctx, image, text_rect);
 
