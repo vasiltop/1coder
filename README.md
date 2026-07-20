@@ -3,8 +3,8 @@
 A modal text editor with vim keybindings. One binary, no config files, no plugin
 manager, no scripting language.
 
-![1coder editing its own source, with a live grep for "ViewScroll" narrowing in a
-vertical split alongside](docs/screenshot.png)
+![1coder editing its own source, with a live grep for "test" narrowing in a
+vertical split alongside](docs/screenshot-live-grep.png)
 
 ## Install
 
