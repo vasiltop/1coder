@@ -1,5 +1,7 @@
 #include "editor/command.h"
 
+#include "buffers/buf_explorer.h"
+#include "editor/filetype.h"
 #include "os/os_file.h"
 #include "vim/vim_motions.h"
 #include "vim/vim_operators.h"
@@ -852,6 +854,11 @@ static void Cmd_write_file(CommandArgs *a) {
   Buffer *buffer = a->buffer;
   String8 path = a->arg;
 
+  // A buffer may write itself in whatever way its kind means -- the explorer
+  // turns an edited listing into filesystem operations rather than writing the
+  // listing over its directory.
+  if (buffer->hooks.on_write && buffer->hooks.on_write(a->ed, buffer, a->view)) return;
+
   if (BufferIsReadOnly(buffer) && !a->bang) {
     EditorSetStatus(a->ed, Str8Lit("Buffer is read-only (add ! to override)"));
     return;
@@ -1359,6 +1366,82 @@ static void Cmd_result_open(CommandArgs *a) {
   buffer->hooks.on_submit(a->ed, buffer, a->view, text);
   ScratchEnd(scratch);
 }
+
+// ---------------------------------------------------------------------------
+// Explorer
+// ---------------------------------------------------------------------------
+
+// `-`. The signature oil behaviour: from a file it opens the containing
+// directory with the cursor on that file, so `-` and <CR> are inverses.
+static void Cmd_explorer_parent(CommandArgs *a) {
+  TempArena scratch = ScratchBegin();
+
+  String8 dir = {};
+  String8 focus = {};
+
+  if (a->arg.size > 0) {
+    dir = PushStr8Copy(scratch.arena, a->arg);
+  } else {
+    String8 current = ExplorerBufferDir(a->buffer);
+    if (current.size == 0) current = a->buffer->path;
+
+    if (current.size > 0) {
+      dir = PushStr8Copy(scratch.arena, Str8PathDir(current));
+      focus = PushStr8Copy(scratch.arena, Str8PathBase(current));
+    } else {
+      // A scratch or unnamed buffer has no location of its own to be relative
+      // to, so the project root is the only sensible answer.
+      dir = PushStr8Copy(scratch.arena, a->ed->cwd);
+    }
+  }
+
+  // Str8PathDir of "/" is "/", so at the filesystem root this would reopen the
+  // buffer already showing. Bail rather than pushing a jump that goes nowhere.
+  if (dir.size == 0 || Str8Match(dir, ExplorerBufferDir(a->buffer))) {
+    ScratchEnd(scratch);
+    return;
+  }
+
+  BufferHandle handle = ExplorerBufferOpen(a->ed, dir);
+  if (handle.index == 0) {
+    EditorSetStatusF(a->ed, "Cannot open %.*s", (int)dir.size, (char *)dir.str);
+    ScratchEnd(scratch);
+    return;
+  }
+
+  ShowBufferRecordingJump(a->ed, a->view, handle);
+
+  View *view = EditorFocusedView(a->ed);
+  Buffer *opened = EditorBufferForView(a->ed, view);
+  if (view && opened) ExplorerBufferFocusName(a->ed, opened, view, focus);
+
+  ScratchEnd(scratch);
+}
+
+// <CR> in an explorer. What opening a path means is the filetype registry's
+// job, so a directory, a text file and an image all arrive here the same way.
+static void Cmd_explorer_open(CommandArgs *a) {
+  TempArena scratch = ScratchBegin();
+  String8 path = ExplorerEntryUnderCursor(scratch.arena, a->buffer, a->view);
+
+  if (path.size == 0) {
+    EditorSetStatus(a->ed, Str8Lit("Not written yet -- :w to create it"));
+    ScratchEnd(scratch);
+    return;
+  }
+
+  BufferHandle handle = FiletypeOpen(a->ed, path);
+  if (handle.index == 0) {
+    EditorSetStatusF(a->ed, "Cannot open %.*s", (int)path.size, (char *)path.str);
+    ScratchEnd(scratch);
+    return;
+  }
+
+  ShowBufferRecordingJump(a->ed, a->view, handle);
+  ScratchEnd(scratch);
+}
+
+static void Cmd_explorer_apply(CommandArgs *a) { ExplorerApplyPending(a->ed, a->buffer); }
 
 static void Cmd_list_commands(CommandArgs *a) {
   TempArena scratch = ScratchBegin();

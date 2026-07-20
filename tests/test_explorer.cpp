@@ -1,4 +1,6 @@
+#include "buffers/buf_explorer.h"
 #include "buffers/explorer_ops.h"
+#include "editor/editor.h"
 #include "os/os_file.h"
 #include "test.h"
 #include "test_tempdir.h"
@@ -350,4 +352,211 @@ TEST(explorer_apply_deletes_directories_recursively) {
   CHECK(!OsDirExists(TempPath(&dir, "build")));
 
   Destroy(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// The explorer as a buffer: navigation, editing, jumps
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct EditorFixture {
+  Arena *arena;
+  Editor ed;
+  TempDir dir;
+};
+
+// A small tree to navigate: two files at the top and a subdirectory holding
+// one more.
+EditorFixture MakeEditorFixture(const char *tag) {
+  EditorFixture f = {};
+  f.arena = ArenaAlloc(MB(64));
+  f.dir = MakeTempDir(tag);
+  EditorInit(&f.ed, f.arena, RectS32{0, 0, 80, 25});
+
+  CHECK(OsMakeDir(TempPath(&f.dir, "sub")));
+  CHECK(OsFileWrite(TempPath(&f.dir, "sub/deep.txt"), Str8Lit("deep\n")));
+  CHECK(OsFileWrite(TempPath(&f.dir, "alpha.txt"), Str8Lit("alpha\n")));
+  CHECK(OsFileWrite(TempPath(&f.dir, "beta.txt"), Str8Lit("beta\n")));
+
+  return f;
+}
+
+void Destroy(EditorFixture *f) {
+  EditorDestroy(&f->ed);
+  Destroy(&f->dir);
+  ArenaRelease(f->arena);
+}
+
+Buffer *FocusedBuffer(EditorFixture *f) { return EditorFocusedBuffer(&f->ed); }
+
+// The name on the cursor line, with any id and marker stripped.
+String8 CursorEntryName(EditorFixture *f) {
+  Buffer *buffer = FocusedBuffer(f);
+  View *view = EditorFocusedView(&f->ed);
+  String8 line = BufferLineText(f->arena, buffer, ViewCursorLine(view, buffer));
+  return ExplorerParseLine(line, BufferLineCount(buffer) + 1).name;
+}
+
+void Keys(EditorFixture *f, const char *spec) { EditorProcessSpec(&f->ed, Str8C(spec)); }
+
+}  // namespace
+
+TEST(explorer_dash_from_a_file_opens_its_directory) {
+  EditorFixture f = MakeEditorFixture("explorer_dash");
+
+  BufferHandle file = EditorOpenFile(&f.ed, TempPath(&f.dir, "beta.txt"));
+  CHECK(file.index != 0);
+  EditorShowBuffer(&f.ed, file);
+  CHECK_EQ((u32)FocusedBuffer(&f)->kind, (u32)BufferKind::File);
+
+  Keys(&f, "-");
+
+  // The listing for the containing directory, with the cursor sitting on the
+  // file we came from -- the whole point of oil's `-`.
+  Buffer *buffer = FocusedBuffer(&f);
+  CHECK_EQ((u32)buffer->kind, (u32)BufferKind::Explorer);
+  CHECK_STR(ExplorerBufferDir(buffer), OsPathAbsolute(f.arena, f.dir.path));
+  CHECK_STR(CursorEntryName(&f), Str8Lit("beta.txt"));
+
+  Destroy(&f);
+}
+
+TEST(explorer_enter_opens_files_and_directories) {
+  EditorFixture f = MakeEditorFixture("explorer_enter");
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // Listing order is directories first, then names: sub/, alpha.txt, beta.txt.
+  CHECK_STR(CursorEntryName(&f), Str8Lit("sub/"));
+
+  Keys(&f, "<CR>");
+  CHECK_EQ((u32)FocusedBuffer(&f)->kind, (u32)BufferKind::Explorer);
+  CHECK_STR(ExplorerBufferDir(FocusedBuffer(&f)),
+            OsPathAbsolute(f.arena, TempPath(&f.dir, "sub")));
+  CHECK_STR(CursorEntryName(&f), Str8Lit("deep.txt"));
+
+  Keys(&f, "<CR>");
+  Buffer *opened = FocusedBuffer(&f);
+  CHECK_EQ((u32)opened->kind, (u32)BufferKind::File);
+  CHECK_STR(BufferTextAll(f.arena, opened), Str8Lit("deep"));
+
+  Destroy(&f);
+}
+
+TEST(explorer_dash_climbs_and_lands_on_the_child) {
+  EditorFixture f = MakeEditorFixture("explorer_climb");
+
+  BufferHandle sub = ExplorerBufferOpen(&f.ed, TempPath(&f.dir, "sub"));
+  EditorShowBuffer(&f.ed, sub);
+
+  Keys(&f, "-");
+
+  // Going up lands on the directory just left, so `-` and <CR> are inverses.
+  CHECK_STR(ExplorerBufferDir(FocusedBuffer(&f)), OsPathAbsolute(f.arena, f.dir.path));
+  CHECK_STR(CursorEntryName(&f), Str8Lit("sub/"));
+
+  Destroy(&f);
+}
+
+TEST(explorer_dash_at_the_root_does_nothing) {
+  EditorFixture f = MakeEditorFixture("explorer_root");
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, Str8Lit("/"));
+  CHECK(root.index != 0);
+  EditorShowBuffer(&f.ed, root);
+
+  // The parent of "/" is "/", so this must not push a jump or churn the buffer.
+  Keys(&f, "-");
+  CHECK_STR(ExplorerBufferDir(FocusedBuffer(&f)), Str8Lit("/"));
+
+  Destroy(&f);
+}
+
+TEST(explorer_shares_one_buffer_per_directory) {
+  EditorFixture f = MakeEditorFixture("explorer_dedupe");
+
+  BufferHandle a = ExplorerBufferOpen(&f.ed, f.dir.path);
+  BufferHandle b = ExplorerBufferOpen(&f.ed, f.dir.path);
+  CHECK(BufferHandleEqual(a, b));
+
+  // A trailing separator names the same directory and must not fork a buffer,
+  // or the two copies would diff against different snapshots.
+  BufferHandle c = ExplorerBufferOpen(&f.ed, PushStr8Cat(f.arena, f.dir.path, Str8Lit("/")));
+  CHECK(BufferHandleEqual(a, c));
+
+  // :e on a directory is the same door.
+  BufferHandle d = EditorOpenFile(&f.ed, f.dir.path);
+  CHECK(BufferHandleEqual(a, d));
+
+  Destroy(&f);
+}
+
+TEST(explorer_keeps_every_vim_binding) {
+  EditorFixture f = MakeEditorFixture("explorer_vim");
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // A buffer-local map layers above the mode map rather than replacing it, so
+  // motions still work in a buffer that has claimed <CR> and `-`.
+  Keys(&f, "j");
+  CHECK_STR(CursorEntryName(&f), Str8Lit("alpha.txt"));
+  Keys(&f, "G");
+  CHECK_STR(CursorEntryName(&f), Str8Lit("beta.txt"));
+  Keys(&f, "gg");
+  CHECK_STR(CursorEntryName(&f), Str8Lit("sub/"));
+
+  // And so does editing, which is what makes a rename `cw`.
+  Keys(&f, "jA_edited<Esc>");
+  CHECK(BufferIsDirty(FocusedBuffer(&f)));
+  CHECK_STR(CursorEntryName(&f), Str8Lit("alpha.txt_edited"));
+
+  Destroy(&f);
+}
+
+TEST(explorer_navigation_records_jumps) {
+  EditorFixture f = MakeEditorFixture("explorer_jumps");
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // root -> sub/ -> deep.txt
+  Keys(&f, "<CR><CR>");
+  CHECK_EQ((u32)FocusedBuffer(&f)->kind, (u32)BufferKind::File);
+  CHECK_STR(FocusedBuffer(&f)->name, Str8Lit("deep.txt"));
+
+  // <C-o> walks back through everywhere visited, directories included.
+  Keys(&f, "<C-o>");
+  CHECK_STR(ExplorerBufferDir(FocusedBuffer(&f)),
+            OsPathAbsolute(f.arena, TempPath(&f.dir, "sub")));
+
+  Keys(&f, "<C-o>");
+  CHECK_STR(ExplorerBufferDir(FocusedBuffer(&f)), OsPathAbsolute(f.arena, f.dir.path));
+
+  // And <C-i> forward again.
+  Keys(&f, "<C-i>");
+  CHECK_STR(ExplorerBufferDir(FocusedBuffer(&f)),
+            OsPathAbsolute(f.arena, TempPath(&f.dir, "sub")));
+
+  Destroy(&f);
+}
+
+TEST(explorer_enter_on_an_unwritten_line_does_not_open) {
+  EditorFixture f = MakeEditorFixture("explorer_unwritten");
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, f.dir.path);
+  EditorShowBuffer(&f.ed, root);
+
+  // A typed line names nothing on disk yet, so Enter must not conjure a buffer
+  // for a path the user has not agreed to create.
+  Keys(&f, "Gohello.txt<Esc>");
+  CHECK_STR(CursorEntryName(&f), Str8Lit("hello.txt"));
+
+  Keys(&f, "<CR>");
+  CHECK_EQ((u32)FocusedBuffer(&f)->kind, (u32)BufferKind::Explorer);
+  CHECK(!OsFileExists(TempPath(&f.dir, "hello.txt")));
+
+  Destroy(&f);
 }

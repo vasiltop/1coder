@@ -146,7 +146,32 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
     return;
   }
 
-  // 2. `i` or `a` was pressed after an operator, so this chord names the object
+  // 2. A buffer asked a yes/no question and owns this keystroke. Only `y`
+  //    proceeds, so a mistyped answer is always the harmless one.
+  if (input->awaiting_confirm) {
+    input->awaiting_confirm = false;
+
+    CommandId command = input->confirm_command;
+    BufferHandle target = input->confirm_buffer;
+    input->confirm_command = CommandId::None;
+    input->confirm_buffer = BufferHandleZero();
+
+    bool yes = KeyChordIsChar(chord) && (chord.codepoint == 'y' || chord.codepoint == 'Y');
+    // The question was asked about one specific buffer. If focus moved while it
+    // was pending, the `y` was meant for something else, and running a
+    // destructive plan against a buffer the user is no longer looking at is the
+    // worst available outcome.
+    if (yes && BufferHandleEqual(view->buffer, target)) {
+      CommandExec(ed, command, String8{nullptr, 0}, chord);
+    } else {
+      EditorSetStatus(ed, Str8Lit("cancelled"));
+    }
+
+    if (was_recording_macro && input->recording_macro) RecordMacroChord(input, chord);
+    return;
+  }
+
+  // 3. `i` or `a` was pressed after an operator, so this chord names the object
   //    -- `w`, `"`, `(` -- rather than running a command of its own.
   if (input->awaiting_text_object) {
     input->awaiting_text_object = false;
@@ -157,7 +182,7 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
     return;
   }
 
-  // 3. `"` was pressed, so this chord names a register rather than running a
+  // 4. `"` was pressed, so this chord names a register rather than running a
   //    command. It stays on the view until the operation that uses it finishes.
   if (input->awaiting_register) {
     input->awaiting_register = false;
@@ -175,7 +200,7 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
     return;
   }
 
-  // 4. A command waiting on a target character takes this chord as its
+  // 5. A command waiting on a target character takes this chord as its
   //    argument, whatever it happens to be bound to.
   if (input->awaiting_char_command != CommandId::None) {
     CommandId id = input->awaiting_char_command;

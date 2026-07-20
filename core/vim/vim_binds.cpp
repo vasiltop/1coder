@@ -131,6 +131,10 @@ void EditorInstallDefaultBindings(Editor *ed) {
   KeymapBind(normal, "<C-y>", CommandId::scroll_line_up);
   KeymapBind(normal, "zz", CommandId::center_line);
 
+  // `-` opens the containing directory, so `-` and <CR> navigate the
+  // filesystem as inverses of each other from anywhere in the editor.
+  KeymapBind(normal, "-", CommandId::explorer_parent);
+
   KeymapBind(normal, ":", CommandId::command_line_open);
   KeymapBind(normal, "<Esc>", CommandId::normal_mode);
 

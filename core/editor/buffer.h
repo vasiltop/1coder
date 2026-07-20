@@ -66,6 +66,10 @@ struct BufferHooks {
   void (*on_submit)(Editor *ed, Buffer *buffer, View *view, String8 line);
   // Text changed. Where a syntax provider marks its tree dirty.
   void (*on_edit)(Editor *ed, Buffer *buffer, RangeU64 old_range, u64 new_len);
+  // `:w` on this buffer. Returning true means the buffer wrote itself and no
+  // text should go to disk -- how the explorer turns an edited listing into
+  // filesystem operations instead of writing the listing over a directory.
+  bool (*on_write)(Editor *ed, Buffer *buffer, View *view);
   void (*on_close)(Editor *ed, Buffer *buffer);
   // Bindings that apply only while this buffer is focused. These layer *above*
   // whichever vim mode map is active rather than replacing it, so a buffer can

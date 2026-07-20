@@ -2,6 +2,7 @@
 
 #include "base/base_arena.h"
 #include "editor/buffer_registry.h"
+#include "editor/filetype.h"
 #include "editor/panel.h"
 #include "editor/view.h"
 #include "input/keymap.h"
@@ -42,6 +43,13 @@ struct InputState {
   // `i`/`a` wait for the character naming the object -- `iw`, `a"`, `i(`.
   bool awaiting_text_object;
   bool text_object_inner;
+
+  // A buffer asked a yes/no question on the command line and owns the next
+  // keystroke. Only `y` proceeds; every other key cancels, so a mistyped
+  // confirmation can never be the destructive answer.
+  bool awaiting_confirm;
+  CommandId confirm_command;
+  BufferHandle confirm_buffer;
 
   // Macro recording. Chords are stored as a binding spec in a register, so a
   // macro is just text: it can be pasted, edited and yanked back like any
@@ -89,6 +97,9 @@ struct Editor {
   Keymap *operator_pending_map;
 
   InputState input;
+
+  // What <CR> on a path opens. Populated in EditorInit.
+  FiletypeRegistry filetypes;
 
   // Yank and delete registers, indexed by ASCII name. Slot 0 is the unnamed
   // register that a bare p pastes from; '+' and '*' are routed to the system
@@ -188,6 +199,31 @@ void EditorJumpTo(Editor *ed, View *view, JumpEntry entry);
 // Walk the per-view jump list `count` steps. Returns false when nothing moved.
 [[nodiscard]] bool EditorJumpOlder(Editor *ed, View *view, u64 count);
 [[nodiscard]] bool EditorJumpNewer(Editor *ed, View *view, u64 count);
+
+// ---------------------------------------------------------------------------
+// Confirmation
+// ---------------------------------------------------------------------------
+
+// Hands the next keystroke to a yes/no question. `y` runs `command` with
+// `buffer` focused; anything else cancels. The caller sets the status message
+// asking the question -- this only arranges for the answer.
+void EditorAwaitConfirm(Editor *ed, CommandId command, BufferHandle buffer);
+
+// ---------------------------------------------------------------------------
+// Reacting to files moving underneath us
+// ---------------------------------------------------------------------------
+
+// After a rename on disk, points every open buffer at or under `old_path` to
+// the matching location under `new_path`. Text is untouched, so unsaved edits
+// survive a rename rather than being written back to a path that is gone.
+// Matching on the directory prefix too is what makes renaming a folder carry
+// the buffers inside it.
+void EditorRetargetBufferPaths(Editor *ed, String8 old_path, String8 new_path);
+
+// After a delete, marks any buffer at or under `path` dirty and leaves its text
+// alone, so the content is still recoverable with `:w`. Closing the buffer
+// would be the one outcome that loses work with no way back.
+void EditorOrphanBufferPaths(Editor *ed, String8 path);
 
 void EditorSetStatus(Editor *ed, String8 message);
 void EditorSetStatusF(Editor *ed, const char *fmt, ...) PrintfFormat(2, 3);

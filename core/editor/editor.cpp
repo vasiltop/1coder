@@ -1,5 +1,6 @@
 #include "editor/editor.h"
 
+#include "buffers/buf_explorer.h"
 #include "editor/command.h"
 #include "os/os_file.h"
 
@@ -167,6 +168,10 @@ void EditorFocusDir(Editor *ed, Dir2 dir) {
 }
 
 BufferHandle EditorOpenFile(Editor *ed, String8 path) {
+  // A directory is not a file to read but a listing to browse, so `:e src/` and
+  // a directory on the command line both land in the explorer.
+  if (OsDirExists(path)) return ExplorerBufferOpen(ed, path);
+
   TempArena scratch = ScratchBegin1(ed->arena);
   String8 absolute = OsPathAbsolute(scratch.arena, path);
 
@@ -267,6 +272,56 @@ bool EditorJumpNewer(Editor *ed, View *view, u64 count) {
     moved = true;
   }
   return moved;
+}
+
+void EditorAwaitConfirm(Editor *ed, CommandId command, BufferHandle buffer) {
+  ed->input.awaiting_confirm = true;
+  ed->input.confirm_command = command;
+  ed->input.confirm_buffer = buffer;
+}
+
+namespace {
+
+// True when `path` is `prefix` itself or something inside it. Comparing the
+// separator explicitly stops "/src" from matching "/srcfoo".
+bool PathIsUnder(String8 path, String8 prefix) {
+  if (Str8Match(path, prefix)) return true;
+  if (path.size <= prefix.size) return false;
+  if (!Str8StartsWith(path, prefix)) return false;
+  return path.str[prefix.size] == '/';
+}
+
+}  // namespace
+
+void EditorRetargetBufferPaths(Editor *ed, String8 old_path, String8 new_path) {
+  for (BufferHandle h = BufferFirst(&ed->buffers); h.index != 0;
+       h = BufferNext(&ed->buffers, h)) {
+    Buffer *buffer = BufferFromHandle(&ed->buffers, h);
+    if (!buffer || buffer->path.size == 0) continue;
+    if (!PathIsUnder(buffer->path, old_path)) continue;
+
+    TempArena scratch = ScratchBegin1(buffer->arena);
+    String8 tail = Str8Skip(buffer->path, old_path.size);
+    String8 moved = PushStr8Cat(scratch.arena, new_path, tail);
+
+    buffer->path = PushStr8Copy(buffer->arena, moved);
+    buffer->name = PushStr8Copy(buffer->arena, Str8PathBase(moved));
+    ScratchEnd(scratch);
+  }
+}
+
+void EditorOrphanBufferPaths(Editor *ed, String8 path) {
+  for (BufferHandle h = BufferFirst(&ed->buffers); h.index != 0;
+       h = BufferNext(&ed->buffers, h)) {
+    Buffer *buffer = BufferFromHandle(&ed->buffers, h);
+    if (!buffer || buffer->path.size == 0) continue;
+    if (buffer->kind != BufferKind::File) continue;
+    if (!PathIsUnder(buffer->path, path)) continue;
+
+    // The file is gone but the text is not. Marking it dirty is what tells the
+    // user, and `:w` puts it back.
+    buffer->flags |= BufferFlags::Dirty;
+  }
 }
 
 void EditorSetStatus(Editor *ed, String8 message) {

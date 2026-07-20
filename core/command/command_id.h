@@ -189,6 +189,10 @@ inline constexpr CommandFlags CmdHidden = CommandFlags::Hidden;
   X(find_file,             "find",                  "Fuzzy-find a file",               CommandArg::Text, CmdNone)        \
   X(live_grep,             "live-grep",             "Search the project as you type",  CommandArg::Text, CmdNone)        \
   X(result_open,           "result-open",           "Open the result under the cursor", CommandArg::None, CmdHidden)     \
+  /* ---- explorer ---- */                                                                                               \
+  X(explorer_parent,       "explorer",              "Open the containing directory",   CommandArg::Path, CmdNone)        \
+  X(explorer_open,         "explorer-open",         "Open the entry under the cursor", CommandArg::None, CmdHidden)      \
+  X(explorer_apply,        "explorer-apply",        "Apply the pending listing edits", CommandArg::None, CmdHidden)      \
   /* ---- meta ---- */                                                                                                   \
   X(list_commands,         "commands",              "List every command",              CommandArg::None, CmdNone)        \
   X(list_buffers,          "buffers",               "List open buffers",               CommandArg::None, CmdNone)        \
