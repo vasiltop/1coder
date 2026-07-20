@@ -55,3 +55,18 @@ jobs:
 
       - name: CI
         run: just ci
+
+      # TEMPORARY: the Windows job exits 127 the instant it launches the freshly
+      # built editor_tests.exe, which git-bash also reports when the loader
+      # cannot start an image that does exist. Capture what is actually on disk
+      # and what the loader wants before guessing at another fix. Remove once
+      # the Windows failure is understood.
+      - name: Diagnose Windows launch failure
+        if: failure() && runner.os == 'Windows'
+        run: |
+          echo "--- build dir ---"
+          ls -la build/ || true
+          echo "--- direct invocation ---"
+          ./build/editor_tests.exe || echo "exit=$?"
+          echo "--- loader dependencies ---"
+          ldd build/editor_tests.exe || true
