@@ -1,4 +1,5 @@
 #include "render/render_editor.h"
+#include "render/render_metrics.h"
 
 #include "buffers/buf_image.h"
 #include "vim/vim_search.h"
@@ -406,10 +407,8 @@ void RenderContextInit(RenderContext *ctx, DrawList *draw, GlyphAtlas *atlas) {
   // Rounded to whole pixels. A fractional cell height puts every row on a
   // different subpixel offset, which softens the text and leaves an awkward
   // remainder at the bottom of the window.
-  ctx->cell_width = (f32)(i32)(atlas->advance + 0.5f);
-  ctx->cell_height = (f32)(i32)(atlas->line_height + 0.5f);
-  if (ctx->cell_width < 1.0f) ctx->cell_width = 1.0f;
-  if (ctx->cell_height < 1.0f) ctx->cell_height = 1.0f;
+  ctx->cell_width = RenderCellMetric(atlas->advance);
+  ctx->cell_height = RenderCellMetric(atlas->line_height);
 }
 
 RectS32 RenderScreenCells(const RenderContext *ctx, i32 pixel_width, i32 pixel_height) {
