@@ -172,7 +172,7 @@ MouseEvent MouseEventFromSDLEvent(const SDL_Event *event, const SDLMouseTranslat
       if (!PopulateMousePosition(&result, event->button.x, event->button.y, context)) return MouseEvent{};
       result.action = event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ? MouseAction::Press
                                                                  : MouseAction::Release;
-      result.modifiers = KeyModFromSDLMod(SDL_GetModState());
+      result.modifiers = context.modifiers;
       result.click_count = event->button.clicks;
       return result;
 
@@ -181,7 +181,7 @@ MouseEvent MouseEventFromSDLEvent(const SDL_Event *event, const SDLMouseTranslat
       if (result.button == MouseButton::None) return MouseEvent{};
       if (!PopulateMousePosition(&result, event->motion.x, event->motion.y, context)) return MouseEvent{};
       result.action = MouseAction::Drag;
-      result.modifiers = KeyModFromSDLMod(SDL_GetModState());
+      result.modifiers = context.modifiers;
       return result;
 
     case SDL_EVENT_MOUSE_WHEEL: {
@@ -189,7 +189,7 @@ MouseEvent MouseEventFromSDLEvent(const SDL_Event *event, const SDLMouseTranslat
         return MouseEvent{};
       }
       result.action = MouseAction::Wheel;
-      result.modifiers = KeyModFromSDLMod(SDL_GetModState());
+      result.modifiers = context.modifiers;
       result.wheel_x = event->wheel.x;
       result.wheel_y = event->wheel.y;
       if (event->wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {

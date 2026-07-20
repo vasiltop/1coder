@@ -25,6 +25,7 @@ struct SDLMouseTranslateContext {
   SDL_Renderer *renderer;
   f32 cell_width;
   f32 cell_height;
+  KeyMod modifiers;
   MouseButton captured_button;
 };
 

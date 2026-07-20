@@ -121,13 +121,18 @@ bool RebuildFont(App *app) {
   return ed && ed->mouse.capture.kind != MouseCaptureKind::None;
 }
 
-[[nodiscard]] SDLMouseTranslateContext MouseTranslateContextFromApp(const App *app) {
+[[nodiscard]] KeyMod CurrentModifierSnapshot() {
+  return KeyModFromSDLMod(SDL_GetModState());
+}
+
+[[nodiscard]] SDLMouseTranslateContext MouseTranslateContextFromApp(const App *app, KeyMod modifiers) {
   SDLMouseTranslateContext context = {};
   if (!app) return context;
   context.window = app->window;
   context.renderer = app->renderer;
   context.cell_width = app->render.cell_width;
   context.cell_height = app->render.cell_height;
+  context.modifiers = modifiers;
   context.captured_button =
       HasMouseCapture(&app->editor) ? app->editor.mouse.capture.button : MouseButton::None;
   return context;
@@ -315,6 +320,7 @@ int main(int argc, char **argv) {
   }
 
   SDL_StartTextInput(app->window);
+  KeyMod mouse_modifiers = CurrentModifierSnapshot();
 
   // ---- main loop ----
   while (!app->editor.quit) {
@@ -339,15 +345,25 @@ int main(int argc, char **argv) {
         case SDL_EVENT_WINDOW_MOUSE_LEAVE:
           break;
 
+        case SDL_EVENT_WINDOW_FOCUS_GAINED:
+          mouse_modifiers = CurrentModifierSnapshot();
+          break;
+
         case SDL_EVENT_WINDOW_FOCUS_LOST:
-          ProcessMouseEvent(app, MouseEventFromSDLEvent(&event, MouseTranslateContextFromApp(app)));
+          ProcessMouseEvent(app, MouseEventFromSDLEvent(&event, MouseTranslateContextFromApp(app, mouse_modifiers)));
+          mouse_modifiers = KeyMod::None;
           break;
 
         case SDL_EVENT_KEY_DOWN: {
+          mouse_modifiers = KeyModFromSDLMod(event.key.mod);
           KeyChord chord = KeyChordFromSDLKeyEvent(&event.key);
           if (KeyChordValid(chord)) EditorProcessChord(&app->editor, chord);
           break;
         }
+
+        case SDL_EVENT_KEY_UP:
+          mouse_modifiers = KeyModFromSDLMod(event.key.mod);
+          break;
 
         case SDL_EVENT_TEXT_INPUT:
           HandleTextInput(&app->editor, event.text.text);
@@ -357,7 +373,7 @@ int main(int argc, char **argv) {
         case SDL_EVENT_MOUSE_BUTTON_UP:
         case SDL_EVENT_MOUSE_MOTION:
         case SDL_EVENT_MOUSE_WHEEL:
-          ProcessMouseEvent(app, MouseEventFromSDLEvent(&event, MouseTranslateContextFromApp(app)));
+          ProcessMouseEvent(app, MouseEventFromSDLEvent(&event, MouseTranslateContextFromApp(app, mouse_modifiers)));
           break;
 
         default:
