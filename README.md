@@ -5,8 +5,8 @@ manager, no scripting language.
 
 ## Install
 
-Download from the [latest release](https://github.com/vasiltop/1code/releases/latest):
-Unpack it and put `1code` somewhere on your `PATH`.
+Download from the [latest release](https://github.com/vasiltop/1coder/releases/latest):
+Unpack it and put `1coder` somewhere on your `PATH`.
 
 ## Configuring it
 
@@ -14,7 +14,7 @@ There are no config files, and there is no plugin system. Fonts come from the
 environment:
 
 ```sh
-EDITOR_FONT_SIZE=16 1code file.c
+EDITOR_FONT_SIZE=16 1coder file.c
 ```
 
 Everything else — colours, keybindings, defaults — is a source change and a
