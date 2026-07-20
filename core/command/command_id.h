@@ -194,6 +194,7 @@ inline constexpr CommandFlags CmdSingle = CommandFlags::Single;
   X(write_quit,            "write-quit",            "Write and close the window",      CommandArg::Path, CmdBang|CmdSingle)          \
   X(quit,                  "quit",                  "Close the focused window",        CommandArg::None, CmdBang|CmdSingle)          \
   X(quit_all,              "quit-all",              "Exit the editor",                 CommandArg::None, CmdBang|CmdSingle)          \
+  X(set_cwd,               "set-cwd",               "Set the working directory",       CommandArg::Path, CmdSingle)                  \
   /* ---- search ---- */                                                                                                             \
   X(grep,                  "grep",                  "Search the project",              CommandArg::Text, CmdArg|CmdSingle)           \
   X(find_file,             "find",                  "Fuzzy-find a file",               CommandArg::Text, CmdSingle)                  \

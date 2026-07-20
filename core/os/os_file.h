@@ -92,6 +92,8 @@ struct FileList {
 [[nodiscard]] bool OsDirDeleteRecursive(String8 path);
 
 [[nodiscard]] String8 OsGetCwd(Arena *arena);
+// Changes the process working directory. False if `path` cannot be entered.
+[[nodiscard]] bool OsSetCwd(String8 path);
 // Joins with a separator, avoiding a doubled or missing slash.
 [[nodiscard]] String8 OsPathJoin(Arena *arena, String8 a, String8 b);
 // Resolves symlinks and "..", returning the input unchanged if that fails.

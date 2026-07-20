@@ -407,6 +407,13 @@ String8 OsGetCwd(Arena *arena) {
   return PushStr8Copy(arena, Str8C(buffer));
 }
 
+bool OsSetCwd(String8 path) {
+  TempArena scratch = ScratchBegin();
+  bool ok = chdir(PushCStr(scratch.arena, path)) == 0;
+  ScratchEnd(scratch);
+  return ok;
+}
+
 String8 OsPathAbsolute(Arena *arena, String8 path) {
   TempArena scratch = ScratchBegin1(arena);
   const char *cpath = PushCStr(scratch.arena, path);
@@ -738,6 +745,13 @@ String8 OsGetCwd(Arena *arena) {
 
   ScratchEnd(scratch);
   return result;
+}
+
+bool OsSetCwd(String8 path) {
+  TempArena scratch = ScratchBegin();
+  bool ok = SetCurrentDirectoryW(PushWide(scratch.arena, path)) != 0;
+  ScratchEnd(scratch);
+  return ok;
 }
 
 String8 OsPathAbsolute(Arena *arena, String8 path) {
