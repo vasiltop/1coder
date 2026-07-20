@@ -22,6 +22,30 @@ any operator (`ciw`, `da(`) and in visual mode (`vi{`).
 horizontally (as `:vsplit` and `:split` do). The built-in `<C-w>` forms —
 `<C-w>v` `<C-w>s` `<C-w>hjkl` `<C-w>c` `<C-w>o` — work too.
 
+## Mouse
+
+Mouse support is always on for the supported editor surfaces; there is no
+config toggle.
+
+- **Buffer text:** left click focuses the pane and places the cursor; drag makes
+  a charwise selection; double click selects the word or matching-bracket
+  range; triple click selects the line; right click extends the nearest
+  selection edge, or places the cursor if nothing is selected.
+- **Panel gutter:** click goes to column 0 of that line; drag starts a
+  charwise selection from line start.
+- **Command line:** click places the command-line cursor; drag selects there;
+  middle click pastes into the command line.
+- **Middle click:** pastes clipboard text in Normal, Visual, Insert, and
+  Replace; in Visual it replaces the selection.
+- **Wheel:** scrolls the pane under the pointer without changing focus;
+  vertical wheel scrolls vertically, horizontal wheel scrolls horizontally, and
+  `Shift`+vertical wheel pages instead of line-scrolling.
+- **Splits and status lines:** drag a vertical split edge to resize left/right
+  panes; drag an eligible panel status-line boundary to resize top/bottom
+  panes; clicking a status line focuses that pane.
+
+Tag/search modifier gestures and `Alt`-right block selection are not supported.
+
 ## Registers
 
 Registers work as in vim: `"a` picks one for the next yank, delete or paste,
