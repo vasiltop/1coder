@@ -83,14 +83,18 @@ constexpr const char *kEchoCommand = "echo compile-token-42";
 
 TEST(compile_runs_shell_command_into_buffer) {
   Fixture f = MakeFixture();
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 1);
 
   CommandExecLine(&f.ed, PushStr8F(f.arena, "compile %s", kEchoCommand));
   CHECK(WaitForCompileIdle(&f));
 
+  // First open splits so the source stays visible, as Emacs does.
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
   Buffer *buffer = CompileBuffer(&f);
   CHECK(buffer != nullptr);
   CHECK_EQ((u32)buffer->kind, (u32)BufferKind::Compile);
   CHECK(BufferIsReadOnly(buffer));
+  CHECK(EditorFocusedBuffer(&f.ed) == buffer);
 
   CHECK(OutputContains(buffer, Str8C(kEchoToken)));
   CHECK(OutputContains(buffer, Str8Lit("Compilation finished with exit code 0")));
@@ -130,9 +134,12 @@ TEST(recompile_and_leader_rc_rerun_last_command) {
 
   CommandExecLine(&f.ed, PushStr8F(f.arena, "compile %s", kEchoCommand));
   CHECK(WaitForCompileIdle(&f));
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
 
   CommandExecLine(&f.ed, Str8Lit("recompile"));
   CHECK(WaitForCompileIdle(&f));
+  // Already visible -- reuse that window instead of splitting again.
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
 
   Buffer *buffer = CompileBuffer(&f);
   CHECK(buffer != nullptr);
@@ -142,8 +149,28 @@ TEST(recompile_and_leader_rc_rerun_last_command) {
 
   EditorProcessSpec(&f.ed, "<leader>rc");
   CHECK(WaitForCompileIdle(&f));
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
 
   CHECK(OutputContains(CompileBuffer(&f), Str8C(kEchoToken)));
+
+  Destroy(&f);
+}
+
+TEST(compile_reuses_visible_window_from_other_pane) {
+  Fixture f = MakeFixture();
+
+  CommandExecLine(&f.ed, PushStr8F(f.arena, "compile %s", kEchoCommand));
+  CHECK(WaitForCompileIdle(&f));
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
+
+  // Move focus to the other pane (the original scratch), then recompile.
+  EditorFocusDir(&f.ed, Dir2::Up);
+  CHECK(EditorFocusedBuffer(&f.ed) != CompileBuffer(&f));
+
+  CommandExecLine(&f.ed, Str8Lit("recompile"));
+  CHECK(WaitForCompileIdle(&f));
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
+  CHECK(EditorFocusedBuffer(&f.ed) == CompileBuffer(&f));
 
   Destroy(&f);
 }

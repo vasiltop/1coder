@@ -1608,6 +1608,31 @@ static void PromptCompile(Editor *ed) {
   ScratchEnd(scratch);
 }
 
+// Shows the compile buffer the way Emacs does: if some window already displays
+// it, focus that window; otherwise open it in a new stacked split (Emacs'
+// split-window-vertically -- Axis2::Y here).
+static void ShowCompileBuffer(Editor *ed, View *origin, BufferHandle handle) {
+  if (!ed || handle.index == 0) return;
+
+  Panel *first = PanelFirstLeaf(ed->root_panel);
+  for (Panel *leaf = first; leaf;) {
+    if (leaf->view && BufferHandleEqual(leaf->view->buffer, handle)) {
+      EditorPushJump(ed, origin);
+      EditorFocusPanel(ed, leaf);
+      return;
+    }
+    leaf = PanelNextLeaf(ed->root_panel, leaf);
+    if (leaf == first) break;
+  }
+
+  EditorPushJump(ed, origin);
+  if (!EditorSplit(ed, Axis2::Y)) {
+    EditorShowBuffer(ed, handle);
+    return;
+  }
+  EditorShowBuffer(ed, handle);
+}
+
 static void Cmd_compile(CommandArgs *a) {
   String8 command = Str8SkipChopWhitespace(a->text);
   if (command.size == 0) {
@@ -1617,7 +1642,7 @@ static void Cmd_compile(CommandArgs *a) {
 
   BufferHandle handle = CompileBufferRun(a->ed, command);
   if (handle.index == 0) return;
-  ShowBufferRecordingJump(a->ed, a->view, handle);
+  ShowCompileBuffer(a->ed, a->view, handle);
 }
 
 static void Cmd_recompile(CommandArgs *a) {
@@ -1628,7 +1653,7 @@ static void Cmd_recompile(CommandArgs *a) {
 
   BufferHandle handle = CompileBufferRun(a->ed, a->ed->last_compile_command);
   if (handle.index == 0) return;
-  ShowBufferRecordingJump(a->ed, a->view, handle);
+  ShowCompileBuffer(a->ed, a->view, handle);
 }
 
 // ---------------------------------------------------------------------------
