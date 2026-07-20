@@ -70,28 +70,20 @@ jobs:
           EDITOR_TESTS_TRACE: 1
         run: |
           just build
-          # The previous cmd.exe attempt never actually ran: msys passes the
-          # quoting through literally, so cmd got the quotes as part of the
-          # command and printed a bare prompt. Start-Process reports the real
-          # Windows status, which msys otherwise collapses to 127.
-          status() {
-            powershell -NoProfile -Command \
-              '$p = Start-Process -FilePath "build\editor_tests.exe" -ArgumentList $args[0] -Wait -PassThru -NoNewWindow -RedirectStandardOutput out.txt -RedirectStandardError err.txt; Write-Host ("EXIT=" + $p.ExitCode + " (0x" + ("{0:X8}" -f $p.ExitCode) + ")")' \
-              "$1"
-            echo "  stderr tail:"; tail -3 err.txt || true
-          }
+          # Two prior attempts at this reported nothing. `cmd.exe /c` fails
+          # because msys rewrites the /c switch into a Windows path (//c is the
+          # escape), and the PowerShell one left $args unbound. Both are shell
+          # quoting problems that cannot be tested anywhere but here, so put the
+          # command in a batch file where no shell gets to rewrite it.
+          printf '@echo off\r\nbuild\\editor_tests.exe %%*\r\necho EXIT=%%ERRORLEVEL%%\r\n' > diag.bat
+          cat diag.bat
           echo "=== control: a test that passes ==="
-          status buffer_save_empty_file
+          cmd.exe //c diag.bat buffer_save_empty_file
           echo "=== the suspect, in isolation ==="
-          status command_line_resolves_names
-          echo "=== the suspect, repeated, to show whether it is intermittent ==="
-          for i in 1 2 3 4 5; do status command_line_resolves_names; done
+          cmd.exe //c diag.bat command_line_resolves_names
+          echo "=== repeated, to show whether the death is intermittent ==="
+          for i in 1 2 3 4 5; do cmd.exe //c diag.bat command_line_resolves_names | tail -2; done
           echo "=== full suite ==="
-          status ""
-          echo "--- trace tail ---"
-          tail -5 err.txt || true
-          # Fail the job on a bad full-suite status. The previous revision ended
-          # every command with `|| echo`, which reported success while the suite
-          # was still dying -- a green that meant nothing.
-          grep -q "^0 " out.txt 2>/dev/null || true
-          tail -1 out.txt | grep -q "0 failed" || { echo "SUITE DID NOT PASS"; exit 1; }
+          cmd.exe //c diag.bat > full.log 2>&1 || true
+          tail -6 full.log
+          grep -q "0 failed" full.log || { echo "SUITE DID NOT PASS"; exit 1; }
