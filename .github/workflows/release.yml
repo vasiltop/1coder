@@ -3,9 +3,18 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release'
+        required: true
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -14,6 +23,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install build dependencies
         run: |
@@ -58,11 +68,43 @@ jobs:
 
       - name: Package binary
         run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          name="1code-${tag}-linux-x86_64"
           strip -s build-release/editor
-          cp build-release/editor editor-linux-x86_64
+          install -Dm755 build-release/editor "${name}/1code"
+          cp README.md "${name}/"
+          tar -czf "${name}.tar.gz" "${name}"
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          echo "asset=${name}.tar.gz" >> "$GITHUB_ENV"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: editor-linux-x86_64
-          generate_release_notes: true
+      # gh is preinstalled on the runner and uses GITHUB_TOKEN, so there is no
+      # third-party action in the path. GitHub's asset upload backend returns
+      # sporadic 5xx ("Error creating policy"), hence the retries.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Recreate rather than reuse: a failed run can leave behind a draft
+          # release with missing or half-uploaded assets.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes --cleanup-tag=false
+          fi
+
+          for attempt in 1 2 3 4 5; do
+            if gh release create "$TAG" \
+                 --title "$TAG" \
+                 --generate-notes \
+                 "$asset" "$asset.sha256"; then
+              exit 0
+            fi
+            echo "release attempt $attempt failed, retrying in $((attempt * 15))s" >&2
+            gh release delete "$TAG" --yes --cleanup-tag=false || true
+            sleep $((attempt * 15))
+          done
+
+          echo "release failed after 5 attempts" >&2
+          exit 1
