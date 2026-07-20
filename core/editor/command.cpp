@@ -1233,6 +1233,7 @@ static void Cmd_set_cwd(CommandArgs *a) {
   }
 
   a->ed->cwd = PushStr8Copy(a->ed->arena, absolute);
+  EditorLspOnCwdChanged(a->ed);
   EditorSetStatusF(a->ed, "cwd: %.*s", (int)a->ed->cwd.size, (char *)a->ed->cwd.str);
   ScratchEnd(scratch);
 }

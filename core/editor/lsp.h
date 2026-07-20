@@ -37,6 +37,7 @@ void EditorLspDisable(Editor *ed);
 [[nodiscard]] bool EditorLspTick(Editor *ed);
 
 void EditorLspOnFileBufferOpened(Editor *ed, Buffer *buffer);
+void EditorLspOnCwdChanged(Editor *ed);
 void EditorLspBeforeBufferEdit(Editor *ed, Buffer *buffer, RangeU64 old_range, String8 new_text,
                                i64 next_version);
 void EditorLspAfterBufferReset(Editor *ed, Buffer *buffer);

@@ -649,6 +649,112 @@ TEST(lsp_editor_missing_server_is_nonfatal) {
   CHECK_EQ(resolve.call_count, (u64)1);
 }
 
+TEST(lsp_editor_cwd_change_retries_missing_server) {
+  ArenaScope scope;
+  ScopedFixtureDir fixture(scope.arena, "cwd_retry");
+  EditorScope editor(scope.arena);
+
+  String8 root = OsPathJoin(scope.arena, fixture.path, Str8Lit("proj"));
+  CHECK(OsMakeDirs(root));
+  CHECK(OsFileWrite(OsPathJoin(scope.arena, root, Str8Lit(".git")), String8{}));
+
+  String8 record = OsPathJoin(scope.arena, fixture.path, Str8Lit("retry.jsonl"));
+  String8 script =
+      WriteSessionScript(scope.arena, fixture.path, Str8Lit("retry.json"), record,
+                         MakeInitializeResult(scope.arena, LspPositionEncoding::Utf16),
+                         {Str8Lit("textDocument/didOpen"), Str8Lit("shutdown"), Str8Lit("exit")});
+
+  ResolveState resolve = {};
+  resolve.entries.push_back(
+      {.root = std::string((const char *)root.str, (size_t)root.size), .script_path = {}, .missing = true});
+  EditorLspConfig config = MakeLspConfig(&resolve);
+  EditorLspEnable(&editor.ed, &config);
+
+  Buffer *buffer =
+      OpenFileBuffer(&editor.ed, WriteTextFile(scope.arena, root, Str8Lit("main.cpp"), Str8Lit("int x;\n")));
+  CHECK(!EditorLspGetBufferInfo(&editor.ed, buffer, nullptr));
+  CHECK_EQ(resolve.call_count, (u64)1);
+
+  resolve.entries[0].missing = false;
+  resolve.entries[0].script_path = std::string((const char *)script.str, (size_t)script.size);
+  editor.ed.cwd = PushStr8Copy(editor.ed.arena, root);
+  EditorLspOnCwdChanged(&editor.ed);
+
+  CHECK(WaitUntil([&]() {
+    (void)EditorTick(&editor.ed);
+    return BufferDidOpen(&editor.ed, buffer);
+  }));
+  CHECK(resolve.call_count >= 2);
+}
+
+TEST(lsp_editor_cwd_change_migrates_document_to_new_root) {
+  ArenaScope scope;
+  ScopedFixtureDir fixture(scope.arena, "cwd_migrate");
+  EditorScope editor(scope.arena);
+
+  String8 outer = OsPathJoin(scope.arena, fixture.path, Str8Lit("outer"));
+  String8 inner = OsPathJoin(scope.arena, outer, Str8Lit("inner"));
+  CHECK(OsMakeDirs(inner));
+  CHECK(OsFileWrite(OsPathJoin(scope.arena, outer, Str8Lit(".git")), String8{}));
+  String8 inner_git = OsPathJoin(scope.arena, inner, Str8Lit(".git"));
+  CHECK(OsFileWrite(inner_git, String8{}));
+
+  String8 record_inner = OsPathJoin(scope.arena, fixture.path, Str8Lit("inner.jsonl"));
+  String8 record_outer = OsPathJoin(scope.arena, fixture.path, Str8Lit("outer.jsonl"));
+  String8 script_inner =
+      WriteSessionScript(scope.arena, fixture.path, Str8Lit("inner.json"), record_inner,
+                         MakeInitializeResult(scope.arena, LspPositionEncoding::Utf16),
+                         {Str8Lit("textDocument/didOpen"), Str8Lit("textDocument/didClose"),
+                          Str8Lit("shutdown"), Str8Lit("exit")});
+  String8 script_outer =
+      WriteSessionScript(scope.arena, fixture.path, Str8Lit("outer.json"), record_outer,
+                         MakeInitializeResult(scope.arena, LspPositionEncoding::Utf16),
+                         {Str8Lit("textDocument/didOpen"), Str8Lit("textDocument/didClose"),
+                          Str8Lit("shutdown"), Str8Lit("exit")});
+
+  ResolveState resolve = {};
+  resolve.entries.push_back(
+      {.root = std::string((const char *)inner.str, (size_t)inner.size),
+       .script_path = std::string((const char *)script_inner.str, (size_t)script_inner.size)});
+  resolve.entries.push_back(
+      {.root = std::string((const char *)outer.str, (size_t)outer.size),
+       .script_path = std::string((const char *)script_outer.str, (size_t)script_outer.size)});
+  EditorLspConfig config = MakeLspConfig(&resolve);
+  EditorLspEnable(&editor.ed, &config);
+
+  Buffer *buffer =
+      OpenFileBuffer(&editor.ed, WriteTextFile(scope.arena, inner, Str8Lit("main.cpp"), Str8Lit("int x;\n")));
+  CHECK(WaitUntil([&]() {
+    (void)EditorTick(&editor.ed);
+    return BufferDidOpen(&editor.ed, buffer);
+  }));
+
+  EditorLspBufferInfo before = {};
+  CHECK(EditorLspGetBufferInfo(&editor.ed, buffer, &before));
+  const EditorLspSession *inner_session = before.session;
+
+  CHECK(OsFileDelete(inner_git));
+  editor.ed.cwd = PushStr8Copy(editor.ed.arena, outer);
+  EditorLspOnCwdChanged(&editor.ed);
+
+  CHECK(WaitUntil([&]() {
+    (void)EditorTick(&editor.ed);
+    EditorLspBufferInfo info = {};
+    return BufferDidOpen(&editor.ed, buffer) && EditorLspGetBufferInfo(&editor.ed, buffer, &info) &&
+           info.session != inner_session;
+  }));
+
+  EditorLspBufferInfo after = {};
+  CHECK(EditorLspGetBufferInfo(&editor.ed, buffer, &after));
+  CHECK(after.session != inner_session);
+
+  CHECK(WaitUntil([&]() {
+    return RecordedMessageCount(record_inner) >= 4 && RecordedMessageCount(record_outer) >= 3;
+  }));
+  CHECK_EQ(FindRecordedMethod(scope.arena, record_inner, Str8Lit("textDocument/didClose")), (u64)3);
+  CHECK_EQ(FindRecordedMethod(scope.arena, record_outer, Str8Lit("textDocument/didOpen")), (u64)2);
+}
+
 TEST(lsp_editor_save_as_rebinds_the_document_uri) {
   ArenaScope scope;
   ScopedFixtureDir fixture(scope.arena, "save_as");
