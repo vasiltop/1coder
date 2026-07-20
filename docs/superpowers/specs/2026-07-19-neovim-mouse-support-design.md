@@ -41,10 +41,10 @@ Add `core/input/mouse.h` as the platform-neutral event and state definition. It 
 - hit-region identity,
 - and a transient `MouseState` used while a button is down or wheel motion is being accumulated.
 
-`MouseState` is intentionally short-lived. It records only the current capture, the pointer anchor, the last hovered pane for visual hover or drag-adjacent state, accumulated fractional wheel deltas, and any resize target. It may reference the active view during a gesture, but it never owns post-release restoration state. Nothing in it is serialized or persisted.
+`MouseState` is intentionally short-lived. It records only the current capture, the pointer anchor, the last hovered pane for visual hover or drag-adjacent state, accumulated fractional wheel deltas, and any resize target. It may reference the gesture-owning `View` during a gesture, but it never owns post-release restoration state. Nothing in it is serialized or persisted.
 For wheel handling, it also stores the current routed wheel target pane, independent X/Y remainders, and the current per-axis scroll semantics (line or page).
 
-Durable temporary-Visual return state lives in the selected `View`'s `VimState` as optional `mouse_visual_return_mode`, limited to `Insert` or `Replace`.
+Durable temporary-Visual return state lives in the gesture-owning `View`'s `VimState` as optional `mouse_visual_return_mode`, limited to `Insert` or `Replace`.
 
 Hit testing and resize handles use the continuous grid coordinates; derived integer cell coordinates are used for buffer text placement and other cell-snapped gestures.
 
@@ -56,7 +56,7 @@ Add `core/editor/mouse.cpp` and route every mouse event through a single `Editor
 - dispatch to mode-specific selection and paste logic,
 - split-boundary resize logic,
 - cancellation and cleanup,
-- and lifecycle management for the selected view's `mouse_visual_return_mode`.
+- and lifecycle management for the gesture-owning view's `mouse_visual_return_mode`.
 
 ### SDL translation
 
@@ -67,7 +67,7 @@ Mouse capture in SDL is short-lived: it is acquired only while a drag or resize 
 
 SDL translation explicitly handles mouse button, wheel, motion, window enter/leave, and focus-loss events:
 
-- motion updates an active drag or resize;
+- motion updates an active drag or resize on its gesture-owning `View`;
 - wheel routing uses each wheel event's own `mouse_x` / `mouse_y` and never falls back to stored hover;
 - window leave may clear visual hover or drag-adjacent state only when no capture is active;
 - focus loss always cancels any active capture.
@@ -89,6 +89,8 @@ At any shared boundary, the vertical split-edge handle takes precedence over buf
 The vertical split-edge handle is the strip within 0.125 cell of an internal X boundary (`abs(grid_x - boundary_x) <= 0.125`) across that boundary's span.
 A no-drag press on that handle belongs to the pane whose rect starts at `boundary_x` (the right/after pane).
 At a cell where a vertical split edge intersects a panel status line, the vertical split edge wins; a plain click focuses the pane on the owning side only if no drag occurs, and no horizontal status-line resize is armed at that corner.
+Focusing another pane or activating the command line does not end or collapse the prior gesture-owning `View`'s finalized temporary Visual selection; that `View` remains Visual and keeps its pending return mode while unfocused.
+Pane-local presses affect only their target `View`; wheel never affects another `View`'s temporary Visual selection.
 
 ## Behavior
 
@@ -127,9 +129,10 @@ No pixel-distance or platform-dependent slop is used.
 
 In Insert and Replace, any mouse gesture that creates a non-empty selection enters temporary Visual immediately or on drag threshold crossing. Double-click word or matching-bracket selection and triple-click line selection enter Visual immediately; drag selection enters Visual when the threshold defined above is crossed. Those selections remain visible after release just like a completed drag.
 A single click or press-release with no selection stays in the original Insert or Replace mode.
-On the first such mouse selection from Insert or Replace, set the active view's `mouse_visual_return_mode` to the originating mode and leave it set after release.
-Normal- or Visual-origin selections leave the field unset, and a new temporary mouse selection cannot start until the previous temporary Visual has ended.
-All Visual-ending paths consult that field and, if present, atomically restore the recorded mode and clear the field: plain-click collapse, selection-consuming paste or replacement, keyboard Visual exit, focus-loss cancellation, shutdown, or explicit view destruction (which clears the field without restoration).
+On the first such mouse selection from Insert or Replace in a `View`, set that same `View`'s `mouse_visual_return_mode` to the originating mode and leave it set after release.
+Normal- or Visual-origin selections leave the field unset, and a new temporary mouse selection cannot start in that `View` until its prior temporary Visual has ended.
+More than one `View` may therefore have a pending temporary mouse Visual selection at once, but at most one per `View`.
+All view-local Visual-ending paths consult the gesture-owning `View`'s field and, if present, atomically restore the recorded mode and clear that field: plain-click collapse, selection-consuming paste or replacement, and keyboard Visual exit.
 
 ### Clipboard put
 
@@ -148,7 +151,7 @@ Before accumulating a wheel event, the core hit-tests its coordinates to determi
 If the routed pane differs from the stored wheel target pane, the event is a no-op region, or `Shift` changes an affected axis between line and page semantics, the affected remainders are cleared before processing.
 A no-op event only clears and does not accumulate.
 Fractional deltas accumulate in the routed pane's own X/Y remainders in `MouseState`, keyed by the current scroll semantics for each axis, so deltas from one pane or unit cannot complete in another.
-Wheel events over the global command-line/status row or other no-op regions are always clears-only and never fall back to the focused pane.
+Wheel events over the global command-line/status row or other no-op regions are always clears-only and never fall back to the focused pane. Wheel never affects any unfocused `View`'s temporary Visual state.
 
 ### Command line and status line
 
@@ -166,11 +169,11 @@ Split resizing clamps each adjacent direct child to at least 2 full panel cells 
 
 - **Outside events:** pointer motion or clicks outside any supported region do nothing except update visual hover if the app tracks it.
 - **Motion without press:** pointer motion without an active press never changes focus.
-- **Captured drags:** once a drag or resize begins, movement remains captured until release, cancellation, or loss of focus.
-- **Release:** ending the active button finalizes a drag selection or resize but does not exit temporary Visual; the selected view's `mouse_visual_return_mode` stays pending until that selection later ends or is canceled.
-- **Window enter/leave:** enter may update visual hover or drag-adjacent state; leave may clear that state only when no capture is active.
-- **Focus loss or shutdown:** cancel any active capture, then consult the selected view's `mouse_visual_return_mode`; if it is set, restore that mode and clear it, and leave no half-finished resize behind.
-- **View destruction:** clear `mouse_visual_return_mode` without restoration.
+- **Captured drags:** once a drag or resize begins, movement remains captured until release, cancellation, or loss of focus, and the capture keeps referencing the gesture-owning `View` so it never retargets after focus changes.
+- **Release:** ending the active button finalizes a drag selection or resize but does not exit temporary Visual; the gesture-owning `View`'s `mouse_visual_return_mode` stays pending until that `View`'s selection later ends or is canceled.
+- **Window enter/leave:** enter may update visual hover or drag-adjacent state; leave may clear that state only when no capture is active. Leaving or focusing another pane does not collapse another `View`'s temporary Visual selection.
+- **Focus loss or shutdown:** walk all live panel `View`s, and the command `View` if relevant, restoring and clearing every pending `mouse_visual_return_mode` on the view that owns it, then leave no half-finished resize behind.
+- **View destruction:** clear that `View`'s `mouse_visual_return_mode` without restoration.
 - **Short or empty lines:** cursor placement and selection clamp to legal line bounds, including the empty-line case.
 - **UTF-8:** hit testing uses line-index translation and byte-boundary snapping so multi-byte text remains valid.
 - **Read-only buffers:** selection and focus changes still work; editing gestures such as middle-click put become no-ops.
