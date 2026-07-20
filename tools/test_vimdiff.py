@@ -354,5 +354,96 @@ class TestNvimIntegration(unittest.TestCase):
         self.assertEqual(text, "Xhello\n")
 
 
+# ===========================================================================
+# 10. TEXTS must include the four new shapes
+# ===========================================================================
+
+class TestNewTexts(unittest.TestCase):
+    def test_empty_text_present(self):
+        self.assertIn("empty", vimdiff.TEXTS)
+        self.assertEqual(vimdiff.TEXTS["empty"], "")
+
+    def test_lone_newline_present(self):
+        self.assertIn("lone-newline", vimdiff.TEXTS)
+        self.assertEqual(vimdiff.TEXTS["lone-newline"], "\n")
+
+    def test_tab_indented_present(self):
+        self.assertIn("tab-indented", vimdiff.TEXTS)
+        self.assertIn("\t", vimdiff.TEXTS["tab-indented"])
+
+    def test_utf8_present(self):
+        self.assertIn("utf8", vimdiff.TEXTS)
+        self.assertTrue(any(ord(c) > 127 for c in vimdiff.TEXTS["utf8"]))
+
+    def test_text_count(self):
+        self.assertEqual(len(vimdiff.TEXTS), 15)
+
+
+# ===========================================================================
+# 11. FOCUSED_CASES: structure, counts, and integration with all_cases
+# ===========================================================================
+
+class TestFocusedCases(unittest.TestCase):
+    def test_focused_cases_exists(self):
+        self.assertTrue(hasattr(vimdiff, "FOCUSED_CASES"))
+
+    def test_focused_cases_count_in_range(self):
+        n = len(vimdiff.FOCUSED_CASES)
+        self.assertGreaterEqual(n, 12)
+        self.assertLessEqual(n, 18)
+
+    def test_focused_cases_reference_valid_texts(self):
+        for text_name, _ in vimdiff.FOCUSED_CASES:
+            self.assertIn(text_name, vimdiff.TEXTS,
+                          "FOCUSED_CASES references unknown text %r" % text_name)
+
+    def test_focused_cases_excluded_from_quick(self):
+        quick_pairs = {(tn, k) for tn, _, k in vimdiff.all_cases(quick=True)}
+        for text_name, keys in vimdiff.FOCUSED_CASES:
+            self.assertNotIn(
+                (text_name, keys), quick_pairs,
+                "focused case (%r, %r) must not appear in quick mode" % (text_name, keys),
+            )
+
+    def test_focused_cases_included_in_full(self):
+        full_pairs = {(tn, k) for tn, _, k in vimdiff.all_cases(quick=False)}
+        for text_name, keys in vimdiff.FOCUSED_CASES:
+            self.assertIn(
+                (text_name, keys), full_pairs,
+                "focused case (%r, %r) must appear in full mode" % (text_name, keys),
+            )
+
+    def test_all_full_case_ids_unique(self):
+        seen = set()
+        for text_name, _, keys in vimdiff.all_cases(quick=False):
+            pair = (text_name, keys)
+            self.assertNotIn(pair, seen,
+                             "duplicate case id %r:%r" % (text_name, keys))
+            seen.add(pair)
+
+
+# ===========================================================================
+# 12. Corpus counts: quick=225, full=1515, QUICK_KEYS=15
+# ===========================================================================
+
+class TestCorpusCounts(unittest.TestCase):
+    def test_quick_keys_count(self):
+        # 13 original + 2 new representative keys
+        self.assertEqual(len(vimdiff.QUICK_KEYS), 15)
+
+    def test_quick_mode_count(self):
+        # 15 texts × 15 QUICK_KEYS = 225
+        self.assertEqual(len(list(vimdiff.all_cases(quick=True))), 225)
+
+    def test_full_mode_count(self):
+        # 15 texts × 100 full keys + 15 focused = 1515
+        self.assertEqual(len(list(vimdiff.all_cases(quick=False))), 1515)
+
+    def test_filter_applies_to_focused_cases(self):
+        # "100dw" and "100G" are focused; "100" not in any cross-product key
+        filtered = [c for c in vimdiff.all_cases(quick=False) if "100" in c[2]]
+        self.assertEqual(len(filtered), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

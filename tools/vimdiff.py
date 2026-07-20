@@ -196,6 +196,10 @@ TEXTS = {
     "single-char":    "x\n",
     "trailing-space": "word   \nnext\n",
     "leading-blank":  "\nafter blank\n",
+    "empty":          "",
+    "lone-newline":   "\n",
+    "tab-indented":   "\tword\n\tsecond\n",
+    "utf8":           "café\nnaïve\n",
 }
 
 MOTIONS = [
@@ -228,14 +232,51 @@ COMPOUND = [
     "vlld", "Vd", "vjd", "vly$p", "viwd",
 ]
 
-QUICK_KEYS = ["w", "b", "e", "$", "dw", "dd", "yyp", "ywP", "x", "p", "P", "wdw", "jp"]
+QUICK_KEYS = ["w", "b", "e", "$", "dw", "dd", "yyp", "ywP", "x", "p", "P", "wdw", "jp", ">>", "diw"]
+
+# Shape-specific workflows run only in full mode; not part of the cross-product.
+FOCUSED_CASES = [
+    # large/clamped and multiplied counts
+    ("plain",       "100dw"),
+    ("multi",       "100G"),
+    # reverse visual selection
+    ("plain",       "$v0d"),
+    # counted charwise paste
+    ("plain",       "y$3p"),
+    # dot-repeat and undo/redo depth
+    ("plain",       "x.."),
+    ("plain",       "dw.u<C-r>"),
+    # macro record/replay and count
+    ("plain",       "qadwq@a"),
+    ("plain",       "qaxq3@a"),
+    # named register and yank register
+    ("multi",       '"ayy"ap'),
+    ("plain",       'yww"0P'),
+    # text objects on delimited text
+    ("punctuation", "di("),
+    ("punctuation", "da("),
+    # word search (no /...<CR> prompt needed)
+    ("plain",       "*"),
+    ("plain",       "*n"),
+    ("plain",       "#"),
+]
 
 
 def all_cases(quick=False):
     keys = QUICK_KEYS if quick else (MOTIONS + OPERATORS + EDITS + PASTES + COMPOUND)
+    seen = set()
     for text_name, text in TEXTS.items():
         for k in keys:
-            yield text_name, text, k
+            pair = (text_name, k)
+            if pair not in seen:
+                seen.add(pair)
+                yield text_name, text, k
+    if not quick:
+        for text_name, k in FOCUSED_CASES:
+            pair = (text_name, k)
+            if pair not in seen:
+                seen.add(pair)
+                yield text_name, TEXTS[text_name], k
 
 
 def main(argv=None):
