@@ -7,12 +7,12 @@
 ## Goals
 
 - Move all mouse policy into the core so it is testable without SDL or a window.
-- Keep mouse behavior permanently equivalent to Neovim `mouse=a` on existing surfaces.
+- Keep mouse behavior Neovim-style for the exact supported gestures defined in this spec.
 - Support cursor placement, live charwise drag, double-click word or matching-bracket selection, triple-click line selection, and right-click nearest-endpoint extension.
 - Support middle-click system-clipboard put in Normal, Visual, Insert, Replace, and command-line modes.
 - Route wheel scrolling to the hovered pane, not the focused pane, with vertical, horizontal, and `Shift`-page behavior.
 - Preserve fractional wheel deltas so high-DPI trackpads scroll smoothly.
-- Support command-line cursor placement, status-line focus, and split resizing from vertical edges and status-line boundaries.
+- Support command-line cursor placement, panel status-line focus, and split resizing from vertical edges and status-line boundaries.
 - Cancel transient mouse state cleanly on release, focus loss, shutdown, or leaving an active capture.
 - Support high-DPI pixel-to-cell translation in SDL without letting SDL own any editing rules.
 
@@ -25,6 +25,8 @@
 - Explorer-specific double-click behavior.
 - Quadruple-click selection.
 - `Alt`-right block selection, because VisualBlock is still incomplete.
+
+The behavior sections below are authoritative for supported gestures. Anything not described there is unsupported, even if Neovim can do something adjacent.
 
 ## Architecture
 
@@ -58,13 +60,20 @@ Add `core/editor/mouse.cpp` and route every mouse event through a single `Editor
 
 Mouse capture in SDL is short-lived: it is acquired only while a drag or resize is active and released as soon as the core says the gesture is complete or canceled.
 
+SDL translation explicitly handles mouse button, wheel, motion, window enter/leave, and focus-loss events:
+
+- motion updates an active drag or resize;
+- wheel routing uses each wheel event's own `mouse_x` / `mouse_y`, so persistent hover state is not required for scrolling;
+- window leave clears hover only when no capture is active;
+- focus loss always cancels any active capture.
+
 ### Hit regions
 
 Use explicit hit regions instead of implicit whole-window behavior:
 
 - buffer content,
-- command-line content,
-- status line,
+- panel status line,
+- global bottom command-line/status row,
 - split borders,
 - and non-interactive background.
 
@@ -88,7 +97,7 @@ Selections always resolve through UTF-8-safe byte offsets; pointer placement nev
 - **Visual mode:** mouse motion changes the active selection live; right-click extends the nearest edge; middle-click replaces the selection with clipboard text.
 - **Insert mode:** clicking moves the insertion cursor, middle-click inserts clipboard text at the cursor, and any mouse-started selection temporarily enters Visual mode.
 - **Replace mode:** same as Insert for mouse semantics, but the restored mode after a mouse selection is Replace rather than Insert.
-- **Command-line mode:** clicking places the command-line cursor, drag selection is supported, and middle-click inserts clipboard text into the command line.
+- **Command-line mode:** only the global bottom command-line/status row is active; clicking places the command-line cursor there, drag selection is supported there, and middle-click inserts clipboard text into the command line.
 
 When a selection starts in Insert or Replace, the editor snapshots the prior mode, enters Visual for the drag, and restores the exact prior insert mode when Visual ends or is canceled.
 
@@ -109,10 +118,12 @@ Fractional deltas are accumulated per axis in `MouseState`. That keeps touchpads
 
 ### Command line and status line
 
-- Clicking the command line places the command-line cursor at the clicked cell.
-- Clicking a status line focuses the pane attached to that line.
+- The global bottom command-line/status row is command-line only; it never resizes panes.
+- Clicking the command line places the command-line cursor at the clicked cell on that global row.
+- A panel status line focuses the pane attached to that line.
+- A panel status line only arms the resize between the panes above and below it when there is a geometrically adjacent panel below; otherwise it behaves as focus only.
 - Dragging on a vertical edge resizes the left/right split.
-- Dragging on a status-line boundary resizes the top/bottom split.
+- Dragging on a status-line boundary resizes the top/bottom split only when the hit region is a panel status line with a panel below.
 
 Split resizing clamps to each pane's minimum size. If the requested delta would violate the minimum, the resize stops at the clamp point and the capture stays active until release.
 
@@ -121,6 +132,7 @@ Split resizing clamps to each pane's minimum size. If the requested delta would 
 - **Outside events:** pointer motion or clicks outside any supported region do nothing except preserve hover data for wheel routing.
 - **Captured drags:** once a drag or resize begins, movement remains captured until release, cancellation, or loss of focus.
 - **Release:** ending the active button finalizes selection or resize and clears transient state.
+- **Window enter/leave:** enter may update hover; leave clears hover only when no capture is active.
 - **Focus loss or shutdown:** cancel any active capture, restore the prior mode if a transient Visual state was in progress, and leave no half-finished resize behind.
 - **Short or empty lines:** cursor placement and selection clamp to legal line bounds, including the empty-line case.
 - **UTF-8:** hit testing uses line-index translation and byte-boundary snapping so multi-byte text remains valid.
