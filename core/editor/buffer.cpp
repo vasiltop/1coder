@@ -15,6 +15,9 @@ constexpr u64 kBufferTextReserve = MB(512);
 
 void InvalidateLspPopup(Editor *ed, Buffer *buffer) {
   if (ed == nullptr) return;
+  const EditorLspUiPopupView *popup = EditorLspUiPopup(ed->lsp_ui);
+  if (popup == nullptr || popup->kind == EditorLspUiPopupKind::None) return;
+  if (buffer != nullptr && !BufferHandleEqual(buffer->handle, popup->anchor_buffer)) return;
   EditorLspUiInvalidatePopupIfStale(ed->lsp_ui, buffer);
 }
 

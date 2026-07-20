@@ -75,6 +75,10 @@ void OpenRenamePrompt(void *user_data, const EditorLspRenamePrepareResult *resul
 
   if (ed == nullptr || result == nullptr || result->status != EditorLspRenamePrepareStatus::Ready) return;
   if (BufferFromHandle(&ed->buffers, target) == nullptr) return;
+  if (ed->command_line_active) {
+    EditorSetStatus(ed, Str8Lit("LSP: rename prompt busy"));
+    return;
+  }
 
   Buffer *buffer = BufferFromHandle(&ed->buffers, ed->command_buffer);
   if (buffer == nullptr || ed->command_view == nullptr) return;

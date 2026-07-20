@@ -588,6 +588,57 @@ TEST(lsp_wiring_rename_prompt_submits_new_name) {
   CHECK_STR(new_name, Str8Lit("renamed"));
 }
 
+TEST(lsp_wiring_rename_prompt_does_not_clobber_active_command_line) {
+  ArenaScope scope;
+  ScopedFixtureDir fixture(scope.arena, "rename_busy");
+  EditorScope editor(scope.arena);
+
+  String8 root = OsPathJoin(scope.arena, fixture.path, Str8Lit("proj"));
+  CHECK(OsMakeDirs(root));
+  CHECK(OsFileWrite(OsPathJoin(scope.arena, root, Str8Lit(".git")), String8{}));
+
+  String8 capabilities =
+      Str8Lit("{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,"
+              "\"change\":2},\"renameProvider\":{\"prepareProvider\":true}}");
+  String8 initialize_result = MakeInitializeResult(scope.arena, capabilities);
+  String8 record = OsPathJoin(scope.arena, fixture.path, Str8Lit("rename_busy.jsonl"));
+  String8 script = WriteRenameScript(scope.arena, fixture.path, Str8Lit("rename_busy_script.json"),
+                                     record, initialize_result, false);
+
+  ResolveState resolve = {};
+  resolve.entries.push_back({.root = std::string((const char *)root.str, (size_t)root.size),
+                             .script_path = std::string((const char *)script.str, (size_t)script.size)});
+  EditorLspConfig config = MakeLspConfig(&resolve);
+  EditorLspEnable(&editor.ed, &config);
+
+  Buffer *buffer =
+      OpenFileBuffer(&editor.ed, WriteTextFile(scope.arena, root, Str8Lit("rename.cpp"),
+                                               Str8Lit("int value = 1;\n")));
+  FocusBuffer(&editor.ed, buffer, 4);
+  CHECK(WaitUntil([&]() {
+    (void)EditorTick(&editor.ed);
+    EditorLspBufferInfo info = {};
+    return EditorLspGetBufferInfo(&editor.ed, buffer, &info) && info.did_open_sent;
+  }));
+
+  CommandExec(&editor.ed, CommandId::lsp_rename);
+  CommandExec(&editor.ed, CommandId::command_line_open);
+  EditorProcessSpec(&editor.ed, "x");
+
+  CHECK(WaitUntil([&]() {
+    (void)EditorTick(&editor.ed);
+    return StatusContains(&editor.ed, "rename prompt busy");
+  }));
+
+  Buffer *command = BufferFromHandle(&editor.ed.buffers, editor.ed.command_buffer);
+  CHECK(command != nullptr);
+  CHECK(editor.ed.command_line_active);
+  CHECK_STR(BufferTextAll(scope.arena, command), Str8Lit("x"));
+  CHECK_STR(editor.ed.command_line_purpose, Str8Lit(""));
+  CHECK_EQ(FindRecordedMethod(scope.arena, record, Str8Lit("textDocument/prepareRename")), (u64)3);
+  CHECK_EQ(RecordedMessageCount(record), (u64)4);
+}
+
 TEST(lsp_wiring_routes_publish_diagnostics_and_log_messages) {
   ArenaScope scope;
   ScopedFixtureDir fixture(scope.arena, "notifications");
@@ -669,6 +720,10 @@ TEST(lsp_wiring_popup_invalidates_on_switch_and_edit) {
                                    (i64)first->edit_serial,
                                    ParseJsonOrFail(scope.arena, Str8Lit("{\"contents\":\"hover\"}")),
                                    &error));
+  CHECK_EQ((u64)EditorLspUiPopup(editor.ed.lsp_ui)->kind, (u64)EditorLspUiPopupKind::Hover);
+
+  BufferInsert(&editor.ed, second, BufferSize(second), Str8Lit("!"), BufferSize(second),
+               BufferSize(second) + 1);
   CHECK_EQ((u64)EditorLspUiPopup(editor.ed.lsp_ui)->kind, (u64)EditorLspUiPopupKind::Hover);
 
   EditorShowBuffer(&editor.ed, second->handle);
