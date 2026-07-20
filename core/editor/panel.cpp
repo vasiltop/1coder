@@ -116,6 +116,39 @@ void PanelUnlink(Panel *panel) {
   return total;
 }
 
+[[nodiscard]] bool BoundarySpanContains(const Panel *before, const Panel *after, i32 x, i32 y,
+                                        Axis2 axis) {
+  if (axis == Axis2::X) {
+    return before->rect.x1 == x && after->rect.x0 == x &&
+           y >= Max(before->rect.y0, after->rect.y0) &&
+           y < Min(before->rect.y1, after->rect.y1);
+  }
+  return before->rect.y1 == y && after->rect.y0 == y &&
+         x >= Max(before->rect.x0, after->rect.x0) &&
+         x < Min(before->rect.x1, after->rect.x1);
+}
+
+[[nodiscard]] PanelBoundary PanelBoundaryAtCollapsed(Panel *root, Panel *panel, i32 x, i32 y,
+                                                     Axis2 axis) {
+  if (!panel || PanelIsLeaf(panel)) return InvalidBoundary(axis);
+
+  for (Panel *child = panel->first_child; child; child = child->next) {
+    PanelBoundary nested = PanelBoundaryAtCollapsed(root, child, x, y, axis);
+    if (nested.valid) return nested;
+  }
+
+  if (panel->split_axis != axis) return InvalidBoundary(axis);
+  for (Panel *before = panel->first_child; before && before->next; before = before->next) {
+    Panel *after = before->next;
+    if (!BoundarySpanContains(before, after, x, y, axis)) continue;
+
+    PanelBoundary boundary =
+        PanelBoundaryBetween(root, PanelLastLeaf(before), PanelFirstLeaf(after), axis);
+    if (boundary.valid) return boundary;
+  }
+  return InvalidBoundary(axis);
+}
+
 // Centre of an edge, used as the probe point for directional focus.
 void EdgeProbe(RectS32 rect, Dir2 dir, i32 *out_x, i32 *out_y) {
   i32 mid_x = rect.x0 + RectWidth(rect) / 2;
@@ -335,7 +368,11 @@ PanelBoundary PanelBoundaryAt(Panel *root, i32 x, i32 y, Axis2 axis) {
     before = PanelFromPoint(root, x, y);
     after = PanelFromPoint(root, x, y + 1);
   }
-  return PanelBoundaryBetween(root, before, after, axis);
+  PanelBoundary boundary = PanelBoundaryBetween(root, before, after, axis);
+  if (boundary.valid) return boundary;
+
+  // When a leading child collapses to zero cells, the probe on its side falls outside the tree.
+  return PanelBoundaryAtCollapsed(root, root, x, y, axis);
 }
 
 void PanelResize(Panel *panel, f32 delta_pct) {

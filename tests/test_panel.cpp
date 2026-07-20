@@ -678,7 +678,9 @@ TEST(panel_mouse_boundary_resize_repairs_before_minimum_after_relayout) {
   CHECK_EQ(RectWidth(left->rect), 0);
   CHECK_EQ(RectWidth(right->rect), 4);
 
-  PanelResizeBoundary(PanelBoundaryBetween(f.root, left, right, Axis2::X), 1);
+  PanelBoundary boundary = PanelBoundaryAt(f.root, 0, 2, Axis2::X);
+  CHECK(boundary.valid);
+  PanelResizeBoundary(boundary, 1);
   PanelLayout(f.root, narrow);
 
   CHECK_EQ(RectWidth(left->rect), 2);
@@ -753,7 +755,9 @@ TEST(panel_mouse_boundary_resize_y_repairs_minimum_after_relayout) {
   CHECK_EQ(RectHeight(top->rect), 0);
   CHECK_EQ(RectHeight(bottom->rect), 4);
 
-  PanelResizeBoundary(PanelBoundaryBetween(f.root, top, bottom, Axis2::Y), 1);
+  PanelBoundary boundary = PanelBoundaryAt(f.root, 2, 0, Axis2::Y);
+  CHECK(boundary.valid);
+  PanelResizeBoundary(boundary, 1);
   PanelLayout(f.root, short_rect);
   CHECK_EQ(RectHeight(top->rect), 2);
   CHECK_EQ(RectHeight(bottom->rect), 2);
