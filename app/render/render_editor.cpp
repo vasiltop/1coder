@@ -339,8 +339,19 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
   if (image) DrawImagePlaceholder(ctx, image, text_rect);
 
   RangeU64 visible = ViewVisibleLines(view, buffer, rows);
-  RangeU64 selection = ViewSelection(view, buffer);
-  bool has_selection = VimModeIsVisual(view->vim.mode) && !RangeEmpty(selection);
+  // One selection per cursor. Gathered once for the whole panel rather than
+  // recomputed per line, the same way search matches are.
+  RangeU64 selections[kMaxCursors + 1];
+  u64 selection_count = 0;
+  if (VimModeIsVisual(view->vim.mode)) {
+    RangeU64 primary = ViewSelection(view, buffer);
+    if (!RangeEmpty(primary)) selections[selection_count++] = primary;
+    for (u64 i = 0; i < view->extra_count; i += 1) {
+      RangeU64 range = ViewSelectionFor(view, buffer, view->extras[i].offset,
+                                        view->extras[i].anchor);
+      if (!RangeEmpty(range)) selections[selection_count++] = range;
+    }
+  }
   u64 cursor_line = ViewCursorLine(view, buffer);
 
   // Search matches, gathered once for the visible span rather than per line.
@@ -377,8 +388,8 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
       DrawSelectionOnLine(ctx, buffer, view, line, matches[i], text_rect, top, columns,
                           ctx->theme.search_match);
     }
-    if (has_selection) {
-      DrawSelectionOnLine(ctx, buffer, view, line, selection, text_rect, top, columns,
+    for (u64 i = 0; i < selection_count; i += 1) {
+      DrawSelectionOnLine(ctx, buffer, view, line, selections[i], text_rect, top, columns,
                           ctx->theme.selection);
     }
 

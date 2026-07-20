@@ -44,6 +44,11 @@ void ViewClearExtraCursors(View *view);
 // view is full. Returns false when the view is full.
 bool ViewAddCursor(View *view, const Buffer *buffer, u64 offset);
 
+// Adds a cursor at `offset` and makes it the primary, demoting the one that was
+// primary to a secondary. Used by ctrl-click, so that a drag from the new cursor
+// grows its own selection and leaves the others where they are.
+void ViewAddCursorAsPrimary(View *view, const Buffer *buffer, u64 offset);
+
 // Removes the cursor sitting at `offset`, if there is one. The primary can be
 // removed too -- a secondary is promoted in its place -- but the last remaining
 // cursor never is, since the view always has exactly one primary. Returns

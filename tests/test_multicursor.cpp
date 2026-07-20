@@ -1,6 +1,7 @@
 #include "editor/command.h"
 #include "editor/editor.h"
 #include "editor/multicursor.h"
+#include "editor/view.h"
 #include "test.h"
 
 // Multi-cursor, driven through the keyboard path like the vim tests, so what is
@@ -425,3 +426,96 @@ TEST(multicursor_dot_repeat_does_not_square) {
 
   Destroy(&f);
 }
+
+
+// ---------------------------------------------------------------------------
+// Selections
+// ---------------------------------------------------------------------------
+
+// The selection spans of every cursor, primary included, ascending.
+void SelectionSpans(Fixture *f, RangeU64 *out, u64 *count) {
+  View *view = ViewOf(f);
+  Buffer *buffer = BufferOf(f);
+  u64 n = 0;
+  out[n++] = ViewSelection(view, buffer);
+  for (u64 i = 0; i < view->extra_count; i += 1) {
+    out[n++] = ViewSelectionFor(view, buffer, view->extras[i].offset, view->extras[i].anchor);
+  }
+  for (u64 i = 1; i < n; i += 1) {
+    RangeU64 v = out[i];
+    u64 j = i;
+    while (j > 0 && out[j - 1].min > v.min) { out[j] = out[j - 1]; j -= 1; }
+    out[j] = v;
+  }
+  *count = n;
+}
+
+TEST(multicursor_visual_selects_per_cursor) {
+  Fixture f = MakeFixture("alpha one\nbeta two\ngamma three");
+
+  Type(&f, "<leader>mcjcjc<CR>");
+  // Each cursor selects its own three characters.
+  Type(&f, "vll");
+
+  RangeU64 spans[8];
+  u64 count = 0;
+  SelectionSpans(&f, spans, &count);
+  CHECK_EQ(count, 3);
+  for (u64 i = 0; i < count; i += 1) CHECK_EQ(spans[i].max - spans[i].min, 3);
+
+  // The operator acts on every selection.
+  Type(&f, "d");
+  CHECK_STR(TextOf(&f), Str8Lit("ha one\na two\nma three"));
+  // And drops back to normal mode with the cursors intact.
+  CHECK_EQ(ViewOf(&f)->vim.mode, VimMode::Normal);
+  CHECK_EQ(CountOf(&f), 3);
+
+  Destroy(&f);
+}
+
+TEST(multicursor_visual_yank_and_change) {
+  Fixture f = MakeFixture("alpha\nbravo\ncharlie");
+
+  Type(&f, "<leader>mcjcjc<CR>");
+  Type(&f, "vllc__<Esc>");
+  CHECK_STR(TextOf(&f), Str8Lit("__ha\n__vo\n__rlie"));
+
+  Destroy(&f);
+}
+
+TEST(multicursor_overlapping_selections_merge) {
+  Fixture f = MakeFixture("abcdefgh");
+
+  // Two cursors two columns apart, each selecting three characters to the
+  // right: their spans overlap, so they must collapse to one selection rather
+  // than delete the shared middle twice.
+  Type(&f, "<leader>mcllc<CR>");
+  CHECK_EQ(CountOf(&f), 2);
+
+  Type(&f, "vlll");
+  CHECK_EQ(CountOf(&f), 1);
+
+  RangeU64 spans[8];
+  u64 count = 0;
+  SelectionSpans(&f, spans, &count);
+  CHECK_EQ(count, 1);
+
+  Type(&f, "d");
+  // Columns 0..5 were covered by the union; g and h remain.
+  CHECK_STR(TextOf(&f), Str8Lit("gh"));
+
+  Destroy(&f);
+}
+
+TEST(multicursor_visual_line_fans_out) {
+  Fixture f = MakeFixture("one\ntwo\nthree\nfour\nfive\nsix");
+
+  // A cursor on line 0 and one on line 2; each linewise-selects itself and the
+  // line below, then both pairs are deleted.
+  Type(&f, "<leader>mcjjc<CR>");
+  Type(&f, "Vjd");
+  CHECK_STR(TextOf(&f), Str8Lit("five\nsix"));
+
+  Destroy(&f);
+}
+

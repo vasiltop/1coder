@@ -91,6 +91,12 @@ void ViewSetCursorLineColumn(View *view, const Buffer *buffer, u64 line, u64 col
 // to whole lines.
 [[nodiscard]] RangeU64 ViewSelection(const View *view, const Buffer *buffer);
 
+// The same, for a cursor other than the primary. The mode is a property of the
+// view, but the anchor is per-cursor, so several cursors in visual mode each
+// select their own span.
+[[nodiscard]] RangeU64 ViewSelectionFor(const View *view, const Buffer *buffer, u64 cursor,
+                                        u64 anchor);
+
 // ---------------------------------------------------------------------------
 // Scrolling
 // ---------------------------------------------------------------------------

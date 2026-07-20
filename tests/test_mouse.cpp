@@ -1380,13 +1380,36 @@ TEST(mouse_plain_click_collapses_cursors) {
   Destroy(&f);
 }
 
-TEST(mouse_ctrl_click_does_not_begin_a_drag) {
+TEST(mouse_ctrl_drag_extends_new_cursor_selection) {
   Fixture f = MakeFixture("alpha\nbeta\ngamma");
 
+  View *view = EditorFocusedView(&f.ed);
+  Buffer *buffer = EditorFocusedBuffer(&f.ed);
   RectS32 text = EditorPanelTextRect(&f.ed, f.ed.focused_panel);
+
+  // A cursor on line 0, then ctrl-drag out a selection on line 1.
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f, (f32)text.y0 + 0.1f);
   SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f,
                (f32)text.y0 + 1.1f, KeyMod::Ctrl);
-  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::None);
+  CHECK_EQ(ViewCursorCount(view), 2);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::Panel);
+
+  SendMouse(&f, MouseAction::Drag, MouseButton::Left, (f32)text.x0 + 3.9f, (f32)text.y0 + 1.1f);
+  CHECK_EQ((u32)view->vim.mode, (u32)VimMode::Visual);
+
+  // The new cursor is primary and its selection spans the drag; the first
+  // cursor stays where it was put.
+  u64 line1 = BufferOffsetFromLine(buffer, 1);
+  RangeU64 selection = ViewSelection(view, buffer);
+  CHECK_EQ(selection.min, line1);
+  CHECK(selection.max > line1);
+
+  SendMouse(&f, MouseAction::Release, MouseButton::Left, (f32)text.x0 + 3.9f, (f32)text.y0 + 1.1f);
+
+  // Deleting the selection fans out: the whole word under the drag goes, and
+  // the char under the other cursor with it.
+  EditorProcessSpec(&f.ed, "d");
+  CHECK_STR(TextOf(f.arena, buffer), Str8Lit("lpha\n\ngamma"));
 
   Destroy(&f);
 }

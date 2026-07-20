@@ -47,6 +47,28 @@ bool ViewAddCursor(View *view, const Buffer *buffer, u64 offset) {
   return true;
 }
 
+void ViewAddCursorAsPrimary(View *view, const Buffer *buffer, u64 offset) {
+  u64 clamped = ViewClampCursorAllowLineEnd(buffer, offset);
+  if (view->cursor == clamped) return;
+
+  Cursor demoted = PrimaryCursor(view);
+
+  for (u64 i = 0; i < view->extra_count; i += 1) {
+    if (view->extras[i].offset != clamped) continue;
+    // Already a cursor there: the two simply trade places.
+    InstallCursor(view, &view->extras[i]);
+    view->extras[i] = demoted;
+    return;
+  }
+
+  if (view->extra_count >= kMaxCursors) return;
+  view->extras[view->extra_count] = demoted;
+  view->extra_count += 1;
+
+  Cursor added = {clamped, BufferColumnFromOffset(buffer, clamped), clamped};
+  InstallCursor(view, &added);
+}
+
 bool ViewRemoveCursorAt(View *view, const Buffer *buffer, u64 offset) {
   // The view must keep a primary, so the last cursor cannot be taken away.
   if (view->extra_count == 0) return false;
@@ -115,15 +137,41 @@ void MultiCursorNormalize(View *view, const Buffer *buffer) {
     is_primary[j] = primary;
   }
 
-  // Merge cursors that ended up in the same place. A merged-away primary hands
-  // its identity to whichever cursor absorbed it, so the view is never left
-  // without one.
+  // Merge cursors that ended up in the same place -- or, in visual mode, whose
+  // selections have grown into each other, since two overlapping selections
+  // would otherwise have their shared text operated on twice. A merged-away
+  // primary hands its identity to whichever cursor absorbed it, so the view is
+  // never left without one.
+  bool visual = VimModeIsVisual(view->vim.mode);
   u64 unique = 0;
   for (u64 i = 0; i < count; i += 1) {
-    if (unique > 0 && all[unique - 1].offset == all[i].offset) {
+    bool merge = false;
+    if (unique > 0) {
+      if (all[unique - 1].offset == all[i].offset) {
+        merge = true;
+      } else if (visual) {
+        RangeU64 previous = ViewSelectionFor(view, buffer, all[unique - 1].offset,
+                                             all[unique - 1].anchor);
+        RangeU64 current = ViewSelectionFor(view, buffer, all[i].offset, all[i].anchor);
+        merge = current.min <= previous.max;
+      }
+    }
+
+    if (merge) {
+      Cursor *kept = &all[unique - 1];
+      // The survivor covers both spans. Which end the cursor sits on is kept
+      // from whichever cursor reaches further, so extending the selection
+      // onwards from the merge carries on in the same direction.
+      bool forward = all[i].offset >= all[i].anchor;
+      u64 low = Min(Min(kept->offset, kept->anchor), Min(all[i].offset, all[i].anchor));
+      u64 high = Max(Max(kept->offset, kept->anchor), Max(all[i].offset, all[i].anchor));
+      kept->offset = forward ? high : low;
+      kept->anchor = forward ? low : high;
+      kept->preferred_column = BufferColumnFromOffset(buffer, kept->offset);
       is_primary[unique - 1] = is_primary[unique - 1] || is_primary[i];
       continue;
     }
+
     all[unique] = all[i];
     is_primary[unique] = is_primary[i];
     unique += 1;

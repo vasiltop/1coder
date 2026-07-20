@@ -399,17 +399,21 @@ void HandleLeftPanelPress(Editor *ed, MouseHit hit, const MouseEvent &event) {
   }
 
   // Ctrl-click adds a cursor where it lands, or takes away the one already
-  // there. It deliberately does not begin a drag: there is nowhere to put a
-  // second selection yet, so a ctrl-drag would only half work.
+  // there. The added one becomes primary and begins a drag, so dragging from it
+  // grows a selection under that cursor while the others stay put.
   if (HasFlag(event.modifiers, KeyMod::Ctrl)) {
-    ClearCapture(&ed->mouse);
-    if (VimModeIsVisual(view->vim.mode)) CollapseSelection(view, buffer);
-
-    if (!ViewRemoveCursorAt(view, buffer, hit.offset)) {
-      ViewAddCursor(view, buffer, hit.offset);
+    if (ViewRemoveCursorAt(view, buffer, hit.offset)) {
+      ClearCapture(&ed->mouse);
+      MultiCursorNormalize(view, buffer);
+      ScrollViewToOwnCursor(ed, hit.panel, view, buffer);
+      return;
     }
-    MultiCursorNormalize(view, buffer);
+
+    ViewAddCursorAsPrimary(view, buffer, hit.offset);
     ScrollViewToOwnCursor(ed, hit.panel, view, buffer);
+    // Character granularity only: a ctrl-drag extends the new cursor's own
+    // selection, and word/line gestures are left to plain clicks.
+    BeginPanelCapture(ed, hit, MouseButton::Left, MouseSelectionKind::Character);
     return;
   }
 
