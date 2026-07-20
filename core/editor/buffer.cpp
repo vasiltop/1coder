@@ -45,17 +45,30 @@ void BufferDestroy(Buffer *buffer) {
   *buffer = Buffer{};
 }
 
+bool BufferEditBlocked(const Buffer *buffer, RangeU64 range) {
+  if (BufferIsReadOnly(buffer)) return true;
+  if (!BufferIsQueryOnly(buffer)) return false;
+
+  // query_end is the newline after the query when results exist, or the buffer
+  // size when the query is the only line. Edits may touch up to and including
+  // that offset (inserting before the newline) but nothing past it.
+  u64 query_end = BufferLineEnd(buffer, 0);
+  return range.min > query_end || range.max > query_end;
+}
+
 // The single mutation path: every text change in the editor arrives here, which
 // is what keeps the line index, undo stack, dirty flag and hooks in step.
 void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
                    u64 cursor_before, u64 cursor_after) {
   // Enforced here rather than in each command: this is the only way text
   // changes, so one check covers every caller.
-  if (BufferIsReadOnly(buffer)) return;
+  if (BufferEditBlocked(buffer, range)) return;
 
   // A one-line buffer takes the text up to the first newline and drops the
   // rest, so no command -- typing, pasting, joining -- can turn it into two.
-  if (HasFlag(buffer->flags, BufferFlags::SingleLine)) {
+  // Query-only pickers get the same treatment on the query line so paste and
+  // `o` cannot split results off into a second editable line.
+  if (HasFlag(buffer->flags, BufferFlags::SingleLine) || BufferIsQueryOnly(buffer)) {
     u64 newline = Str8FindFirstChar(new_text, '\n');
     if (newline < new_text.size) new_text = Str8Prefix(new_text, newline);
   }

@@ -76,7 +76,7 @@ void VimYankRange(Editor *ed, View *view, Buffer *buffer, RangeU64 range, bool l
 
 u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, RangeU64 range,
                      bool linewise) {
-  if (BufferIsReadOnly(buffer) && op != OperatorKind::Yank) return view->cursor;
+  if (op != OperatorKind::Yank && BufferEditBlocked(buffer, range)) return view->cursor;
 
   // Neovim leaves 'startofline' off, so a linewise delete keeps the column
   // rather than jumping to the first non-blank.
@@ -133,7 +133,7 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
 
 u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool after) {
   Register reg = EditorGetRegister(ed, RegisterNormalise(view->vim.pending_register));
-  if (reg.text.size == 0 || BufferIsReadOnly(buffer)) return pos;
+  if (reg.text.size == 0) return pos;
 
   TempArena scratch = ScratchBegin();
 
@@ -158,6 +158,11 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
     u64 at = after ? LineRangeWithNewline(&buffer->lines, &buffer->text, line).max
                    : BufferOffsetFromLine(buffer, line);
 
+    if (BufferEditBlocked(buffer, RangeU64{at, at})) {
+      ScratchEnd(scratch);
+      return pos;
+    }
+
     // A final line with no newline of its own needs one adding first, or the
     // pasted text would join onto it.
     if (after && at > 0 && BufferByteAt(buffer, at - 1) != '\n') {
@@ -173,6 +178,10 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
     // and land the text on the following line.
     u64 line_end = BufferLineEnd(buffer, BufferLineFromOffset(buffer, pos));
     u64 at = after ? Min(BufferNextCodepoint(buffer, pos), line_end) : pos;
+    if (BufferEditBlocked(buffer, RangeU64{at, at})) {
+      ScratchEnd(scratch);
+      return pos;
+    }
     // Characterwise paste leaves the cursor on the last pasted character.
     BufferInsert(ed, buffer, at, text, pos, at + text.size);
     cursor = (text.size > 0) ? at + text.size - 1 : at;
@@ -183,7 +192,7 @@ u64 VimPaste(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count, bool af
 }
 
 u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool indent) {
-  if (BufferIsReadOnly(buffer)) return view->cursor;
+  if (BufferEditBlocked(buffer, lines)) return view->cursor;
 
   u64 column = BufferColumnFromOffset(buffer, view->cursor);
   u64 first = BufferLineFromOffset(buffer, lines.min);
@@ -228,8 +237,6 @@ u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool 
 }
 
 u64 VimJoinLines(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count) {
-  if (BufferIsReadOnly(buffer)) return pos;
-
   BufferBeginEditGroup(buffer);
 
   u64 cursor = pos;
@@ -250,11 +257,14 @@ u64 VimJoinLines(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count) {
       content = BufferNextCodepoint(buffer, content);
     }
 
+    RangeU64 replace = RangeU64{end, content};
+    if (BufferEditBlocked(buffer, replace)) break;
+
     // No separator is added when the line is empty or already ends in one.
     bool need_space = (end > BufferOffsetFromLine(buffer, line)) && (content < next_range.max);
     String8 separator = need_space ? Str8Lit(" ") : String8{nullptr, 0};
 
-    BufferReplace(ed, buffer, RangeU64{end, content}, separator, cursor, end);
+    BufferReplace(ed, buffer, replace, separator, cursor, end);
     cursor = end;
   }
 

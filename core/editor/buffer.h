@@ -39,6 +39,7 @@ enum class BufferFlags : u32 {
   Dirty = 1 << 0,      // has unsaved changes
   ReadOnly = 1 << 1,   // rejects every edit
   SingleLine = 1 << 2, // newlines are dropped; the command window is one line
+  QueryOnly = 1 << 3,  // picker: only line 0 is editable
 };
 ENUM_FLAG_OPS(BufferFlags)
 
@@ -127,6 +128,9 @@ void BufferDestroy(Buffer *buffer);
 [[nodiscard]] inline bool BufferIsReadOnly(const Buffer *buffer) {
   return HasFlag(buffer->flags, BufferFlags::ReadOnly);
 }
+[[nodiscard]] inline bool BufferIsQueryOnly(const Buffer *buffer) {
+  return HasFlag(buffer->flags, BufferFlags::QueryOnly);
+}
 
 // ---------------------------------------------------------------------------
 // Mutation
@@ -136,6 +140,10 @@ void BufferDestroy(Buffer *buffer);
 // line index, undo history, dirty flag and hooks consistent by construction
 // rather than by remembering to update them.
 // ---------------------------------------------------------------------------
+
+// True when the buffer rejects this edit: fully read-only, or a query-only
+// picker and the range touches anything past the query line.
+[[nodiscard]] bool BufferEditBlocked(const Buffer *buffer, RangeU64 range);
 
 void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
                    u64 cursor_before, u64 cursor_after);
