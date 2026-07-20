@@ -108,14 +108,20 @@ void EnsureLineCapacity(SyntaxCache *cache, u64 needed) {
   cache->line_capacity = new_capacity;
 }
 
-void EnsureTokenCapacity(Buffer *buffer, u64 needed) {
+// `current_count` is the number of live tokens *right now* -- during
+// SyntaxRebuild that is the scan's running local counter, not
+// `buffer->tokens.count` (which stays 0 until the whole rebuild finishes and
+// is assigned once at the end). Copying from `buffer->tokens.count` instead
+// would see 0 on every growth mid-rebuild and silently drop every token
+// appended so far into uninitialized memory.
+void EnsureTokenCapacity(Buffer *buffer, u64 current_count, u64 needed) {
   SyntaxCache *cache = &buffer->syntax;
   if (needed <= cache->token_capacity) return;
 
   u64 new_capacity = Max(needed, Max(cache->token_capacity * 2, kSyntaxInitialTokenCapacity));
   Token *tokens = PushArrayNoZero(cache->arena, Token, new_capacity);
-  if (buffer->tokens.count > 0) {
-    for (u64 i = 0; i < buffer->tokens.count; i += 1) tokens[i] = buffer->tokens.tokens[i];
+  if (current_count > 0) {
+    for (u64 i = 0; i < current_count; i += 1) tokens[i] = buffer->tokens.tokens[i];
   }
   buffer->tokens.tokens = tokens;
   cache->token_capacity = new_capacity;
@@ -125,7 +131,7 @@ void EnsureTokenCapacity(Buffer *buffer, u64 needed) {
 // non-Default set the renderer seam promises.
 void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind kind) {
   if (end <= start) return;
-  EnsureTokenCapacity(buffer, *token_count + 1);
+  EnsureTokenCapacity(buffer, *token_count, *token_count + 1);
   buffer->tokens.tokens[*token_count] = Token{start, end, kind};
   *token_count += 1;
 }
@@ -226,6 +232,7 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
 [[nodiscard]] SyntaxState ScanLine(Buffer *buffer, const LanguageDefinition *lang, RangeU64 range,
                                     SyntaxState incoming, u64 *token_count) {
   u64 i = range.min;
+  const u64 line_start = range.min;
   const u64 end = range.max;
   SyntaxMode mode = incoming.mode;
 
@@ -266,9 +273,11 @@ void AppendToken(Buffer *buffer, u64 *token_count, u64 start, u64 end, TokenKind
 
   // A leading '#' (modulo indentation) on an otherwise-fresh line is a whole-
   // line preprocessor directive for languages that have them (C/C++). This
-  // check only ever runs when `mode` just resolved to Default above, matching
-  // the "active multiline state beats everything" precedence.
-  if (lang->preprocessor_directives && i < end) {
+  // must only fire when `i` is still at the true line start: if a multiline
+  // construct carried in from a previous line and closed mid-line above, `i`
+  // has already moved past that closer, and whatever follows on the same
+  // line is not line-leading even though `mode` just resolved to Default.
+  if (lang->preprocessor_directives && i == line_start && i < end) {
     u64 p = i;
     while (p < end && CharIsSpace(BufferByteAt(buffer, p))) p += 1;
     if (p < end && BufferByteAt(buffer, p) == '#') {

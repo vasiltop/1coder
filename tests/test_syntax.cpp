@@ -799,3 +799,120 @@ TEST(syntax_scan_reattach_same_language_is_stable) {
 
   Destroy(&f);
 }
+
+// --- Regression: token growth mid-rebuild must not lose earlier tokens -----
+//
+// EnsureTokenCapacity used to copy `buffer->tokens.count` old entries when
+// growing, but during SyntaxRebuild the live count lives in a local counter
+// threaded through ScanLine/AppendToken -- buffer->tokens.count stays 0 until
+// the whole rebuild finishes. Any growth past the initial 256-token capacity
+// therefore "copied" zero old tokens, silently corrupting everything below
+// the new capacity's old boundary with uninitialized memory. This fixture
+// forces multiple growths (256 -> 512) and checks tokens at the very start,
+// straddling the old boundary, and at the very end are all intact.
+TEST(syntax_scan_growth_preserves_earlier_tokens) {
+  Fixture f = MakeFixture();
+
+  // Each repeat of "x=1;" yields exactly 3 tokens (Operator, Number,
+  // Punctuation); "x" itself stays Default/untokenized. 100 repeats is 300
+  // tokens, comfortably past the 256-token initial capacity.
+  constexpr int kRepeats = 100;
+  constexpr int kUnitLen = 4;
+  char text[kRepeats * kUnitLen + 1];
+  for (int r = 0; r < kRepeats; r += 1) {
+    text[r * kUnitLen + 0] = 'x';
+    text[r * kUnitLen + 1] = '=';
+    text[r * kUnitLen + 2] = '1';
+    text[r * kUnitLen + 3] = ';';
+  }
+  text[kRepeats * kUnitLen] = '\0';
+
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  CHECK_EQ(buffer->tokens.count, (u64)(kRepeats * 3));
+  CHECK(buffer->syntax.token_capacity >= buffer->tokens.count);
+
+  // Sorted, non-overlapping, non-empty across the entire array -- exactly
+  // the invariant that silently broke when growth clobbered earlier tokens
+  // with uninitialized entries.
+  for (u64 i = 0; i < buffer->tokens.count; i += 1) {
+    CHECK(buffer->tokens.tokens[i].end > buffer->tokens.tokens[i].start);
+    if (i + 1 < buffer->tokens.count) {
+      CHECK(buffer->tokens.tokens[i].end <= buffer->tokens.tokens[i + 1].start);
+    }
+  }
+
+  auto CheckUnit = [&](int unit) {
+    u64 base = (u64)unit * 3;
+    u64 unit_start = (u64)unit * kUnitLen;
+    const Token &eq = buffer->tokens.tokens[base + 0];
+    const Token &num = buffer->tokens.tokens[base + 1];
+    const Token &semi = buffer->tokens.tokens[base + 2];
+
+    CHECK_EQ(eq.start, unit_start + 1);
+    CHECK_EQ(eq.end, unit_start + 2);
+    CHECK_EQ((int)eq.kind, (int)TokenKind::Operator);
+
+    CHECK_EQ(num.start, unit_start + 2);
+    CHECK_EQ(num.end, unit_start + 3);
+    CHECK_EQ((int)num.kind, (int)TokenKind::Number);
+
+    CHECK_EQ(semi.start, unit_start + 3);
+    CHECK_EQ(semi.end, unit_start + 4);
+    CHECK_EQ((int)semi.kind, (int)TokenKind::Punctuation);
+  };
+
+  CheckUnit(0);               // Early: well inside the original capacity.
+  CheckUnit(kRepeats / 2);    // Middle: straddles the old 256-token boundary.
+  CheckUnit(kRepeats - 1);    // Late: only reachable after growth.
+
+  Destroy(&f);
+}
+
+// --- Regression: preprocessor check must not fire mid-line after a comment
+// closes -----------------------------------------------------------------
+//
+// The C/C++ line-leading '#' check used to run from wherever `i` had reached
+// after handling a carried-over multiline construct, without confirming `i`
+// was still at the true line start. A block comment opened on a previous
+// line and closed mid-line, followed by whitespace and '#', used to be
+// misclassified as a whole-line Preprocessor directive even though the '#'
+// isn't actually line-leading.
+TEST(syntax_scan_preprocessor_not_triggered_after_comment_closes_mid_line) {
+  Fixture f = MakeFixture();
+  const char *text = "/* start\nend */ #define X 1\n";
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  for (u64 i = 0; i < buffer->tokens.count; i += 1) {
+    CHECK((int)buffer->tokens.tokens[i].kind != (int)TokenKind::Preprocessor);
+  }
+
+  u64 hash_off = Off(text, "#define");
+  CHECK(TokenAt(buffer, hash_off) == nullptr);
+
+  // Sanity: the carried-over comment still correctly closes on line 1.
+  u64 close_start = Off(text, "end */");
+  const Token *comment_tok = TokenAt(buffer, close_start);
+  CHECK(comment_tok != nullptr);
+  CHECK_EQ((int)comment_tok->kind, (int)TokenKind::Comment);
+  CHECK_EQ(comment_tok->end, close_start + Str8Lit("end */").size);
+
+  Destroy(&f);
+}
+
+// A genuine, fresh-line preprocessor directive with leading indentation
+// (no carried-over construct) must still be recognised -- the mid-line fix
+// must not over-correct and break ordinary indented directives.
+TEST(syntax_scan_preprocessor_still_works_with_leading_whitespace) {
+  Fixture f = MakeFixture();
+  const char *text = "int a;\n  #define X 1\n";
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  u64 hash_off = Off(text, "#define");
+  const Token *tok = TokenAt(buffer, hash_off);
+  CHECK(tok != nullptr);
+  CHECK_EQ((int)tok->kind, (int)TokenKind::Preprocessor);
+  CHECK_EQ(tok->end, LineEndOf(text, hash_off));
+
+  Destroy(&f);
+}
