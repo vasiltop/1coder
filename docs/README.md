@@ -12,6 +12,7 @@ the editor properly, or for changing it.
 - [The command window](commands.md) — `:` syntax, and how to add a command
 - [Search](search.md) — live grep, file finder, buffer list
 - [The file explorer](explorer.md) — directories as editable text
+- [Git](git.md) — Magit-style status, stage/hunks, pull/push args
 - [Fonts and colours](rendering.md) — what is configurable without a rebuild
 
 ## Changing it

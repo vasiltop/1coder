@@ -219,6 +219,24 @@ inline constexpr CommandFlags CmdSingle = CommandFlags::Single;
   X(recompile,             "recompile",             "Rerun the last compile command",  CommandArg::None, CmdSingle)                  \
   X(next_error,            "next-error",            "Jump to the next compile error",  CommandArg::None, CmdSingle)                  \
   X(prev_error,            "prev-error",            "Jump to the previous compile error", CommandArg::None, CmdSingle)               \
+  /* ---- git ---- */                                                                                                                \
+  X(git,                   "git",                   "Open the git status buffer",      CommandArg::None, CmdSingle)                  \
+  X(git_refresh,           "git-refresh",           "Reload the git status buffer",    CommandArg::None, CmdHidden|CmdSingle)        \
+  X(git_stage,             "git-stage",             "Stage the file or hunk under the cursor", CommandArg::None, CmdHidden|CmdSingle) \
+  X(git_unstage,           "git-unstage",           "Unstage the file or hunk under the cursor", CommandArg::None, CmdHidden|CmdSingle) \
+  X(git_discard,           "git-discard",           "Discard unstaged changes under the cursor", CommandArg::None, CmdHidden|CmdSingle) \
+  X(git_discard_apply,     "git-discard-apply",     "Apply a confirmed discard",       CommandArg::None, CmdHidden|CmdSingle)        \
+  X(git_toggle,            "git-toggle",            "Expand or collapse hunks under the cursor", CommandArg::None, CmdHidden|CmdSingle) \
+  X(git_diff,              "git-diff",              "Show the diff under the cursor",  CommandArg::None, CmdHidden|CmdSingle)        \
+  X(git_open,              "git-open",              "Open the file or commit under the cursor", CommandArg::None, CmdHidden|CmdSingle) \
+  X(git_log,               "git-log",               "Open the git log buffer",         CommandArg::None, CmdSingle)                  \
+  X(git_commit,            "git-commit",            "Commit staged changes",           CommandArg::Text, CmdSingle)                  \
+  X(git_pull,              "git-pull",              "Pull from the remote",            CommandArg::Text, CmdSingle)                  \
+  X(git_push,              "git-push",              "Push to the remote",              CommandArg::Text, CmdSingle)                  \
+  X(git_arg_rebase,        "git-arg-rebase",        "Toggle pull --rebase",            CommandArg::None, CmdHidden|CmdSingle)        \
+  X(git_arg_autostash,     "git-arg-autostash",     "Toggle pull --autostash",         CommandArg::None, CmdHidden|CmdSingle)        \
+  X(git_arg_ff_only,       "git-arg-ff-only",       "Toggle pull --ff-only",           CommandArg::None, CmdHidden|CmdSingle)        \
+  X(git_arg_set_upstream,  "git-arg-set-upstream",  "Toggle push -u",                  CommandArg::None, CmdHidden|CmdSingle)        \
   /* ---- display ---- */                                                                                                            \
   X(line_numbers_absolute, "number",                "Show absolute line numbers",      CommandArg::None, CmdSingle)                  \
   X(line_numbers_relative, "relativenumber",        "Show relative line numbers",      CommandArg::None, CmdSingle)                  \

@@ -169,6 +169,10 @@ void EditorInstallDefaultBindings(Editor *ed) {
   // The explorer for the containing directory. `-` does the same thing; this is
   // the discoverable spelling of it.
   KeymapBind(normal, "<leader>e", CommandId::explorer_parent);
+
+  // Magit-style git status. Buffer-local keys (s/u/F/P/r/...) live on the
+  // [git] buffer itself; this only opens it.
+  KeymapBind(normal, "<leader>gs", CommandId::git);
   KeymapBind(normal, "<leader>cf", CommandId::lsp_format);
   KeymapBind(normal, "<leader>rn", CommandId::lsp_rename);
   KeymapBind(normal, "<leader>d", CommandId::lsp_diagnostic_float);
