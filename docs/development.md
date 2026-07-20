@@ -62,6 +62,11 @@ all three platforms, **runs the test suite against the release binary**, package
 an archive per platform, and publishes them together. If any platform fails, no
 release is published — the tests are a gate, not a formality.
 
+Release bodies are generated from conventional commits (`feat:`, `fix:`, …)
+between the previous tag and the new one via [git-cliff](https://git-cliff.org)
+and [`cliff.toml`](../cliff.toml). Prefer those prefixes so the notes group
+cleanly into Features, Bug Fixes, and the rest.
+
 Tag only commits that CI has already gone green on. A tag that fails to build
 cannot be retried into existence; it has to be moved or bumped.
 

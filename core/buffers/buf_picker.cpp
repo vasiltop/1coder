@@ -115,7 +115,13 @@ void LiveGrepRefilter(Editor *ed, Buffer *buffer) {
 
   u64 query_end = BufferLineEnd(buffer, 0);
   String8 body = Str8ListJoin(scratch.arena, &lines, Str8Lit("\n"));
+  // Refilter rewrites the results region; clear guards that would block it.
+  bool read_only = BufferIsReadOnly(buffer);
+  bool query_only = BufferIsQueryOnly(buffer);
+  buffer->flags &= ~(BufferFlags::ReadOnly | BufferFlags::QueryOnly);
   BufferReplace(ed, buffer, RangeU64{query_end, BufferSize(buffer)}, body, query_end, query_end);
+  if (read_only) buffer->flags |= BufferFlags::ReadOnly;
+  if (query_only) buffer->flags |= BufferFlags::QueryOnly;
 
   ScratchEnd(scratch);
   payload->updating = false;
@@ -163,9 +169,11 @@ void FinderRefilter(Editor *ed, Buffer *buffer) {
   // and the cursor sitting in it -- untouched.
   u64 query_end = BufferLineEnd(buffer, 0);
   bool read_only = BufferIsReadOnly(buffer);
-  buffer->flags &= ~BufferFlags::ReadOnly;
+  bool query_only = BufferIsQueryOnly(buffer);
+  buffer->flags &= ~(BufferFlags::ReadOnly | BufferFlags::QueryOnly);
   BufferReplace(ed, buffer, RangeU64{query_end, BufferSize(buffer)}, body, query_end, query_end);
   if (read_only) buffer->flags |= BufferFlags::ReadOnly;
+  if (query_only) buffer->flags |= BufferFlags::QueryOnly;
 
   ScratchEnd(scratch);
   payload->updating = false;
@@ -280,6 +288,7 @@ BufferHandle LiveGrepBufferOpen(Editor *ed) {
     buffer->hooks.keymap = keymap;
   }
 
+  buffer->flags |= BufferFlags::QueryOnly;
   BufferSetText(ed, buffer, String8{nullptr, 0});
   LiveGrepRefilter(ed, buffer);
 
@@ -304,6 +313,7 @@ BufferHandle FinderBufferOpen(Editor *ed) {
   buffer->user_data = payload;
   buffer->hooks.on_edit = FinderOnEdit;
   buffer->hooks.on_submit = FinderSubmit;
+  buffer->flags |= BufferFlags::QueryOnly;
 
   if (!buffer->hooks.keymap) {
     Keymap *keymap = KeymapAlloc(ed->arena, ed->normal_map);

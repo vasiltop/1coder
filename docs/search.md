@@ -10,8 +10,8 @@ None of them adds a UI concept, which was the point of the buffer system:
   matches hanging off `user_data`. `<CR>` opens the file at that line.
 - **A picker** is the same thing with an editable query on its first line. Its
   `on_edit` hook rewrites everything below as you type, so it opens in insert
-  mode and narrows live. `<Esc>` drops to normal mode to navigate results with
-  `j`/`k`, and `<CR>` opens one.
+  mode and narrows live. Result lines are not editable — `<Esc>` drops to
+  normal mode to navigate them with `j`/`k`, and `<CR>` opens one.
 
 Live search reads the tree once into memory and rescans those bytes per
 keystroke; re-reading the project on every character would not be usable. The

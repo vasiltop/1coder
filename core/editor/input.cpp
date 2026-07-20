@@ -61,8 +61,6 @@ void RecordChord(InputState *input, KeyChord chord) {
 // Inserts a typed character. Not a command, because there is one of these per
 // printable codepoint and binding them all would be absurd.
 void InsertText(Editor *ed, View *view, Buffer *buffer, u32 codepoint) {
-  if (BufferIsReadOnly(buffer)) return;
-
   u8 encoded[4];
   u32 length = Utf8Encode(encoded, codepoint);
   String8 text = String8{encoded, length};
@@ -73,9 +71,12 @@ void InsertText(Editor *ed, View *view, Buffer *buffer, u32 codepoint) {
     u64 line_end = BufferLineEnd(buffer, BufferLineFromOffset(buffer, view->cursor));
     u64 end = (view->cursor < line_end) ? BufferNextCodepoint(buffer, view->cursor)
                                         : view->cursor;
-    BufferReplace(ed, buffer, RangeU64{view->cursor, end}, text, view->cursor,
-                  view->cursor + length);
+    RangeU64 range = RangeU64{view->cursor, end};
+    if (BufferEditBlocked(buffer, range)) return;
+    BufferReplace(ed, buffer, range, text, view->cursor, view->cursor + length);
   } else {
+    RangeU64 range = RangeU64{view->cursor, view->cursor};
+    if (BufferEditBlocked(buffer, range)) return;
     BufferInsert(ed, buffer, view->cursor, text, view->cursor, view->cursor + length);
   }
 

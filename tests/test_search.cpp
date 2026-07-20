@@ -163,6 +163,7 @@ TEST(live_grep_searches_as_you_type) {
   CHECK_STR(live->name, Str8Lit("[live-grep]"));
   CHECK_EQ((u32)EditorFocusedView(&ed)->vim.mode, (u32)VimMode::Insert);
   CHECK(live->hooks.on_edit != nullptr);
+  CHECK(BufferIsQueryOnly(live));
 
   // An empty query matches nothing, so the buffer is just the query line.
   CHECK_EQ(BufferLineCount(live), 1);
@@ -297,6 +298,7 @@ TEST(picker_buffers_are_ordinary_buffers) {
   Buffer *finder = EditorFocusedBuffer(&ed);
   CHECK_STR(finder->name, Str8Lit("[files]"));
   CHECK(finder->hooks.on_edit != nullptr);
+  CHECK(BufferIsQueryOnly(finder));
   u64 unfiltered = BufferLineCount(finder);
   CHECK(unfiltered > 1);
 
@@ -306,9 +308,47 @@ TEST(picker_buffers_are_ordinary_buffers) {
   CHECK(BufferLineCount(finder) < unfiltered);
   CHECK_STR(BufferLineText(arena, finder, 1), Str8Lit("src/deep/two.cpp"));
 
+  // Result lines reject edits; only the query is mutable.
+  EditorProcessSpec(&ed, "<Esc>jx");
+  CHECK_STR(BufferLineText(arena, finder, 1), Str8Lit("src/deep/two.cpp"));
+  CHECK_STR(BufferLineText(arena, finder, 0), Str8Lit("two"));
+  u64 after_result_edit = BufferLineCount(finder);
+  EditorProcessSpec(&ed, "dd");
+  CHECK_EQ(BufferLineCount(finder), after_result_edit);
+  CHECK_STR(BufferLineText(arena, finder, 1), Str8Lit("src/deep/two.cpp"));
+
   // Enter while still typing opens the top result, as it does for live search.
-  EditorProcessSpec(&ed, "<CR>");
+  EditorProcessSpec(&ed, "ki<CR>");
   CHECK(Str8EndsWith(EditorFocusedBuffer(&ed)->path, Str8Lit("src/deep/two.cpp")));
+
+  EditorDestroy(&ed);
+  ArenaRelease(arena);
+  Destroy(&tree);
+}
+
+TEST(picker_result_lines_are_not_editable) {
+  Tree tree = MakeTree("picker-ro");
+
+  Arena *arena = ArenaAlloc(MB(64));
+  Editor ed = {};
+  EditorInit(&ed, arena, RectS32{0, 0, 80, 25});
+  ed.cwd = PushStr8Copy(arena, tree.root);
+
+  EditorProcessSpec(&ed, "<leader>pg");
+  Buffer *live = EditorFocusedBuffer(&ed);
+  CHECK(BufferIsQueryOnly(live));
+  EditorProcessSpec(&ed, "needle");
+  CHECK_EQ(BufferLineCount(live), 3);
+  String8 result = BufferLineText(arena, live, 1);
+
+  EditorProcessSpec(&ed, "<Esc>jx");
+  CHECK_STR(BufferLineText(arena, live, 1), result);
+  CHECK_STR(BufferLineText(arena, live, 0), Str8Lit("needle"));
+
+  // Typing on the query still refilters.
+  EditorProcessSpec(&ed, "kA here");
+  CHECK_STR(BufferLineText(arena, live, 0), Str8Lit("needle here"));
+  CHECK_EQ(BufferLineCount(live), 2);
 
   EditorDestroy(&ed);
   ArenaRelease(arena);
