@@ -4,6 +4,7 @@
 #include "buffers/buf_image.h"
 #include "editor/command.h"
 #include "os/os_file.h"
+#include "editor/lsp.h"
 
 // Provided by core/buffers/buf_command.cpp.
 BufferHandle CommandLineBufferOpen(Editor *ed);
@@ -45,6 +46,7 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   ed->command_buffer = CommandLineBufferOpen(ed);
   ed->command_view = PushStruct(arena, View);
   ViewInit(ed->command_view, ed->command_buffer);
+  EditorLspInit(ed);
 
   // What <CR> on a path opens. Images are the only kind that needs more than
   // "read it as text"; anything unregistered falls through to exactly that.
@@ -55,6 +57,7 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
 }
 
 void EditorDestroy(Editor *ed) {
+  EditorLspDestroy(ed);
   BufferRegistryDestroy(&ed->buffers);
 
   for (u64 i = 0; i < kRegisterCount; i += 1) {
@@ -65,6 +68,8 @@ void EditorDestroy(Editor *ed) {
   if (ed->search_arena) ArenaRelease(ed->search_arena);
   ed->status_arena = nullptr;
 }
+
+bool EditorTick(Editor *ed) { return EditorLspTick(ed); }
 
 void EditorLayout(Editor *ed) {
   // The bottom row belongs to the command line and global status, so panels
@@ -214,6 +219,8 @@ BufferHandle EditorOpenFile(Editor *ed, String8 path) {
   // between two windows onto it.
   BufferHandle existing = BufferFromPath(&ed->buffers, absolute);
   if (existing.index != 0) {
+    Buffer *existing_buffer = BufferFromHandle(&ed->buffers, existing);
+    if (existing_buffer) EditorLspOnFileBufferOpened(ed, existing_buffer);
     ScratchEnd(scratch);
     return existing;
   }
@@ -231,6 +238,7 @@ BufferHandle EditorOpenFile(Editor *ed, String8 path) {
     buffer->name = PushStr8Copy(buffer->arena, Str8PathBase(absolute));
   }
 
+  EditorLspOnFileBufferOpened(ed, buffer);
   ScratchEnd(scratch);
   return handle;
 }

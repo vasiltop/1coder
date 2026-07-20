@@ -2,6 +2,7 @@
 
 #include "buffers/buf_explorer.h"
 #include "editor/filetype.h"
+#include "editor/lsp.h"
 #include "os/os_file.h"
 #include "vim/vim_motions.h"
 #include "vim/vim_operators.h"
@@ -890,6 +891,7 @@ static void Cmd_write_file(CommandArgs *a) {
     EditorSetStatus(a->ed, Str8Lit("write: failed"));
     return;
   }
+  EditorLspOnBufferSaved(a->ed, buffer);
   EditorSetStatusF(a->ed, "\"%.*s\" written", (int)buffer->path.size, (char *)buffer->path.str);
 }
 

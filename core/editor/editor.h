@@ -36,6 +36,8 @@ struct ClipboardHooks {
   void (*write)(String8 text);
 };
 
+struct EditorLsp;
+
 // Where a partly-typed chord sequence has got to, plus the machinery for
 // repeating the last change with `.`.
 struct InputState {
@@ -125,6 +127,7 @@ struct Editor {
   Arena *register_arenas[kRegisterCount];
 
   ClipboardHooks clipboard;
+  EditorLsp *lsp;
 
   String8 cwd;
   String8 status_message;
@@ -168,6 +171,7 @@ struct Editor {
 
 void EditorInit(Editor *ed, Arena *arena, RectS32 screen);
 void EditorDestroy(Editor *ed);
+[[nodiscard]] bool EditorTick(Editor *ed);
 
 // Recomputes every panel rect. Call after a split, a close or a window resize.
 void EditorLayout(Editor *ed);
