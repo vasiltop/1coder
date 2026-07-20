@@ -669,8 +669,11 @@ static void Cmd_delete_to_line_end(CommandArgs *a) {
   u64 end = BufferLineEnd(buffer, ViewCursorLine(view, buffer));
   if (end <= view->cursor) return;
 
+  u64 size_before = BufferSize(buffer);
   VimYankRange(a->ed, view, buffer, RangeU64{view->cursor, end}, false);
   BufferDelete(a->ed, buffer, RangeU64{view->cursor, end}, view->cursor, view->cursor);
+  // D is single-line charwise: an empty line remains after delete.
+  if (size_before > 0 && BufferSize(buffer) == 0) buffer->final_newline = true;
   ViewSetCursor(view, buffer, view->cursor);
 }
 

@@ -2034,16 +2034,15 @@ TEST(vim_indent_cursor_placement) {
   Type(&f, ">>");
   CHECK_EQ(CursorColumn(&f), 0);  // lands on the tab
 
-  // After << the cursor goes to the last char when it was beyond new indent.
+  // After << the cursor lands on the first non-blank (Neovim parity).
   Fixture g = MakeFixture("\tone\ntwo");
   Type(&g, "<<");
-  CHECK_EQ(CursorColumn(&g), 2);  // 'e' in "one" (last char, col 2)
+  CHECK_EQ(CursorColumn(&g), 0);  // 'o' in "one" is now first non-blank
 
-  // Cursor in the new indent after << stays put.
+  // With remaining indent, cursor lands at the first non-blank after dedent.
   Fixture h = MakeFixture("\t\tone\ntwo");
-  // cursor starts at col 0 (first tab)
   Type(&h, "<<");
-  CHECK_EQ(CursorColumn(&h), 0);  // stays in remaining tab
+  CHECK_EQ(CursorColumn(&h), 1);  // 'o' after the remaining tab
 
   Destroy(&f);
   Destroy(&g);
@@ -2145,4 +2144,136 @@ TEST(vim_indent_join_undo) {
 
   Destroy(&f);
   Destroy(&g);
+}
+
+// ---------------------------------------------------------------------------
+// Linewise-empty save semantics
+// ---------------------------------------------------------------------------
+
+TEST(vim_linewise_delete_clears_final_newline_when_empty) {
+  // dd that empties the buffer must clear final_newline so a subsequent :w
+  // writes "" not "\n" (Neovim parity: linewise delete on last line).
+  Fixture f = MakeFixture("hello");
+  BufferOf(&f)->final_newline = true;
+  Type(&f, "dd");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
+  CHECK(!BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_charwise_delete_preserves_final_newline) {
+  // x (charwise, non-emptying) leaves final_newline untouched.
+  Fixture f = MakeFixture("hello");
+  BufferOf(&f)->final_newline = true;
+  Type(&f, "x");
+  CHECK_STR(TextOf(&f), Str8Lit("ello"));
+  CHECK(BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_multiline_charwise_delete_clears_final_newline) {
+  // de crossing multiple lines and emptying the buffer clears final_newline
+  // (Neovim: writes "" not "\n" – same behaviour as linewise dd).
+  Fixture f = MakeFixture("a\n\n\nb");
+  BufferOf(&f)->final_newline = true;
+  Type(&f, "de");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
+  CHECK(!BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_charwise_delete_singleline_empty_keeps_newline) {
+  // d$ on a single-line no-eol buffer empties the line but leaves it in place;
+  // final_newline is forced to true so :w writes "\n" (Neovim fixeol parity).
+  Fixture f = MakeFixture("hello");
+  BufferOf(&f)->final_newline = false;
+  Type(&f, "d$");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
+  CHECK(BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+TEST(vim_D_singleline_noeol_sets_final_newline) {
+  // D on a single-line no-eol buffer: empty line remains → fixeol writes "\n".
+  Fixture f = MakeFixture("hello");
+  BufferOf(&f)->final_newline = false;
+  Type(&f, "D");
+  CHECK_STR(TextOf(&f), Str8Lit(""));
+  CHECK(BufferOf(&f)->final_newline);
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Paragraph-forward EOF cursor
+// ---------------------------------------------------------------------------
+
+TEST(vim_paragraph_forward_single_line_lands_at_last_char) {
+  // } on a single-line buffer with no trailing blank lands on the last char.
+  Fixture f = MakeFixture("hello");
+  Type(&f, "}");
+  CHECK_EQ(CursorColumn(&f), 4);  // 'o'
+  Destroy(&f);
+}
+
+TEST(vim_paragraph_forward_multiline_no_blank_lands_at_last_char) {
+  // } with no following blank paragraph lands on last char of last line.
+  Fixture f = MakeFixture("one\ntwo\nthree");
+  Type(&f, "}");
+  CHECK_EQ(CursorLine(&f), 2);
+  CHECK_EQ(CursorColumn(&f), 4);  // 'e' in "three"
+  Destroy(&f);
+}
+
+TEST(vim_paragraph_forward_trailing_blank_lands_at_blank_start) {
+  // } to a trailing blank line lands at the start of that blank line.
+  Fixture f = MakeFixture("one\ntwo\n\nthree");
+  Type(&f, "}");
+  CHECK_EQ(CursorLine(&f), 2);
+  CHECK_EQ(CursorColumn(&f), 0);
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Exclusive dw clipped to source line
+// ---------------------------------------------------------------------------
+
+TEST(vim_dw_does_not_cross_line) {
+  // dw at the last word of a line must not consume the newline or spill onto
+  // the next line when the w motion lands in the middle of the next line.
+  Fixture f = MakeFixture("    indented\n  less\nnone");
+  // w moves cursor to 'i' of "indented"; dw must delete only "indented".
+  Type(&f, "wdw");
+  CHECK_STR(TextOf(&f), Str8Lit("    \n  less\nnone"));
+  Destroy(&f);
+}
+
+TEST(vim_dw_at_line_end_clips_to_single_char) {
+  // $dw when at the last char of a line deletes only that char.
+  Fixture f = MakeFixture("    indented\n  less\nnone");
+  Type(&f, "$dw");
+  CHECK_STR(TextOf(&f), Str8Lit("    indente\n  less\nnone"));
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Dedent (<< ) cursor at first non-blank
+// ---------------------------------------------------------------------------
+
+TEST(vim_dedent_cursor_at_first_nonblank) {
+  // << always leaves the cursor on the first non-blank character of the line,
+  // regardless of how much leading whitespace was removed.
+  Fixture f = MakeFixture("    indented\n  less\nnone");
+  Type(&f, "<<");
+  CHECK_EQ(CursorLine(&f), 0);
+  CHECK_EQ(CursorColumn(&f), 0);  // first non-blank after dedent
+  Destroy(&f);
+}
+
+TEST(vim_dedent_cursor_unindented_line) {
+  // << on a line with no indent leaves cursor at column 0.
+  Fixture f = MakeFixture("hello\nworld");
+  Type(&f, "<<");
+  CHECK_EQ(CursorLine(&f), 0);
+  CHECK_EQ(CursorColumn(&f), 0);
+  Destroy(&f);
 }

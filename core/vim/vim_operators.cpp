@@ -31,6 +31,15 @@ RangeU64 VimRangeFromMotion(const Buffer *buffer, u64 from, MotionResult motion)
         if (range.max == line_start && line > 0) {
           u64 previous_end = BufferLineEnd(buffer, line - 1);
           if (previous_end > range.min) range.max = previous_end;
+        } else {
+          // When `w` lands partway into the next line (not at its very start),
+          // clip the range to the end of the source line so `dw` never deletes
+          // a newline or content from the following line.
+          u64 from_line = BufferLineFromOffset(buffer, range.min);
+          if (line > from_line) {
+            u64 from_end = BufferLineEnd(buffer, from_line);
+            range.max = (from_end > range.min) ? from_end : range.min;
+          }
         }
       }
       break;
@@ -95,7 +104,28 @@ u64 VimApplyOperator(Editor *ed, View *view, Buffer *buffer, OperatorKind op, Ra
 
     case OperatorKind::Delete: {
       VimYankRange(ed, view, buffer, range, linewise);
+
+      // Detect whether the range crosses a line boundary BEFORE the delete so
+      // we can reason about what nvim does with final_newline afterwards.
+      u64 del_start_line = BufferLineFromOffset(buffer, range.min);
+      u64 del_end_line   = (range.max > range.min)
+                               ? BufferLineFromOffset(buffer, range.max - 1)
+                               : del_start_line;
+      bool cross_line    = linewise || del_end_line > del_start_line;
+      u64 size_before    = BufferSize(buffer);
+
       BufferDelete(ed, buffer, range, view->cursor, range.min);
+
+      // Only update final_newline when the buffer is empty after the delete.
+      // cross-line (linewise or multi-line charwise): all lines removed → ""
+      // single-line charwise that actually deleted: empty line remains → "\n"
+      // single-line charwise no-op on already-empty buffer: leave unchanged
+      if (BufferSize(buffer) == 0) {
+        if (cross_line)
+          buffer->final_newline = false;
+        else if (size_before > 0)
+          buffer->final_newline = true;
+      }
 
       if (linewise) {
         // The cursor lands on whichever line moved up into the deleted one,
@@ -305,18 +335,15 @@ u64 VimIndentLines(Editor *ed, View *view, Buffer *buffer, RangeU64 lines, bool 
     return BufferOffsetFromColumn(buffer, first, Min(old_col, old_first_nonblank));
   }
 
-  // After <<: stay at old_col if it is inside the new indent; else last char.
-  RangeU64 new_range = BufferLineRange(buffer, first);
-  u64 new_fnb = 0;
-  for (u64 p = new_range.min; p < new_range.max; p++) {
-    u8 c = BufferByteAt(buffer, p);
-    if (c != ' ' && c != '\t') break;
-    new_fnb++;
+  // After <<: cursor always lands at the first non-blank (Neovim parity).
+  {
+    RangeU64 fr = BufferLineRange(buffer, first);
+    u64 fnb = fr.min;
+    while (fnb < fr.max && (BufferByteAt(buffer, fnb) == ' ' ||
+                             BufferByteAt(buffer, fnb) == '\t'))
+      fnb++;
+    return fnb;
   }
-  if (old_col < new_fnb) return BufferOffsetFromColumn(buffer, first, old_col);
-  u64 line_end = BufferLineEnd(buffer, first);
-  if (line_end > new_range.min) return line_end - 1;
-  return new_range.min;
 }
 
 u64 VimJoinLines(Editor *ed, View *view, Buffer *buffer, u64 pos, u64 count) {
