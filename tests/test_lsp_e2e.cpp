@@ -374,9 +374,10 @@ TEST(lsp_e2e_real_process_lifecycle_completion_hover_and_shutdown) {
   WaitForEditor(&editor.ed, layout.record_path, "completion apply", [&]() {
     (void)EditorTick(&editor.ed);
     return EditorLspUiPopup(editor.ed.lsp_ui)->kind == EditorLspUiPopupKind::None &&
-           Str8Match(BufferTextAll(scope.arena, buffer), Str8Lit("std::vector\n"));
+           Str8Match(BufferTextAll(scope.arena, buffer), Str8Lit("std::vector"));
   });
-  CHECK_STR(BufferTextAll(scope.arena, buffer), Str8Lit("std::vector\n"));
+  CHECK_STR(BufferTextAll(scope.arena, buffer), Str8Lit("std::vector"));
+  CHECK(buffer->final_newline);
 
   EditorProcessSpec(&editor.ed, "<Esc><C-Space>");
   WaitForEditor(&editor.ed, layout.record_path, "hover popup", [&]() {
@@ -449,8 +450,9 @@ TEST(lsp_e2e_real_process_navigation_formatting_and_rename_workspace_edit) {
   WaitForEditor(&editor.ed, layout.record_path, "formatting result", [&]() {
     (void)EditorTick(&editor.ed);
     return Str8Match(BufferTextAll(scope.arena, target_buffer),
-                     Str8Lit("void helper(){}\nint spacing = 0;\n"));
+                     Str8Lit("void helper(){}\nint spacing = 0;"));
   });
+  CHECK(target_buffer->final_newline);
   CHECK(BufferIsDirty(target_buffer));
   CHECK_EQ(RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("textDocument/formatting")),
            (u64)1);
@@ -473,13 +475,15 @@ TEST(lsp_e2e_real_process_navigation_formatting_and_rename_workspace_edit) {
   WaitForEditor(&editor.ed, layout.record_path, "rename workspace edit", [&]() {
     (void)EditorTick(&editor.ed);
     return !editor.ed.command_line_active &&
-           Str8Match(BufferTextAll(scope.arena, main_buffer), Str8Lit("renamed();\n")) &&
+           Str8Match(BufferTextAll(scope.arena, main_buffer), Str8Lit("renamed();")) &&
            Str8Match(BufferTextAll(scope.arena, target_buffer),
-                     Str8Lit("void renamed(){}\nint spacing = 0;\n"));
+                     Str8Lit("void renamed(){}\nint spacing = 0;"));
   });
 
   CHECK(BufferIsDirty(main_buffer));
   CHECK(BufferIsDirty(target_buffer));
+  CHECK(main_buffer->final_newline);
+  CHECK(target_buffer->final_newline);
   CHECK_EQ(RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("textDocument/rename")),
            (u64)1);
 
