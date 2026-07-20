@@ -661,6 +661,58 @@ TEST(panel_mouse_boundary_resize_zero_delta_is_noop_below_minimum) {
   Destroy(&f);
 }
 
+TEST(panel_mouse_boundary_resize_repairs_before_minimum_after_relayout) {
+  Fixture f = MakeFixture();
+
+  Panel *right = PanelSplit(f.arena, f.root, Axis2::X, NextView(&f));
+  Panel *left = f.root->first_child;
+
+  PanelLayout(f.root, kScreen);
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, left, right, Axis2::X), -38);
+  PanelLayout(f.root, kScreen);
+  CHECK_EQ(RectWidth(left->rect), 2);
+  CHECK_EQ(RectWidth(right->rect), 78);
+
+  RectS32 narrow = {0, 0, 4, 8};
+  PanelLayout(f.root, narrow);
+  CHECK_EQ(RectWidth(left->rect), 0);
+  CHECK_EQ(RectWidth(right->rect), 4);
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, left, right, Axis2::X), 1);
+  PanelLayout(f.root, narrow);
+
+  CHECK_EQ(RectWidth(left->rect), 2);
+  CHECK_EQ(RectWidth(right->rect), 2);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_repairs_after_minimum_after_relayout) {
+  Fixture f = MakeFixture();
+
+  Panel *right = PanelSplit(f.arena, f.root, Axis2::X, NextView(&f));
+  Panel *left = f.root->first_child;
+
+  PanelLayout(f.root, kScreen);
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, left, right, Axis2::X), 38);
+  PanelLayout(f.root, kScreen);
+  CHECK_EQ(RectWidth(left->rect), 78);
+  CHECK_EQ(RectWidth(right->rect), 2);
+
+  RectS32 narrow = {0, 0, 4, 8};
+  PanelLayout(f.root, narrow);
+  CHECK_EQ(RectWidth(left->rect), 3);
+  CHECK_EQ(RectWidth(right->rect), 1);
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, left, right, Axis2::X), -1);
+  PanelLayout(f.root, narrow);
+
+  CHECK_EQ(RectWidth(left->rect), 2);
+  CHECK_EQ(RectWidth(right->rect), 2);
+
+  Destroy(&f);
+}
+
 TEST(panel_equalize) {
   Fixture f = MakeFixture();
 

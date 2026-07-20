@@ -369,20 +369,20 @@ void PanelResizeBoundary(PanelBoundary boundary, i32 delta_cells) {
   if (parent_extent <= 0) return;
 
   constexpr i32 kMinChildExtent = 2;
-  if (parent_extent < 2 * kMinChildExtent) return;
-
   i32 before_extent = RectExtent(boundary.before->rect, boundary.axis);
   i32 after_extent = RectExtent(boundary.after->rect, boundary.axis);
-  i32 max_grow = Max(after_extent - kMinChildExtent, 0);
-  i32 max_shrink = Max(before_extent - kMinChildExtent, 0);
-  i32 clamped_delta = Clamp(-max_shrink, delta_cells, max_grow);
-  i32 target_before = before_extent + clamped_delta;
+  i32 combined_extent = before_extent + after_extent;
+  if (combined_extent < 2 * kMinChildExtent) return;
+
+  i32 target_before =
+      Clamp(kMinChildExtent, before_extent + delta_cells, combined_extent - kMinChildExtent);
   if (target_before == before_extent) return;
 
-  i32 parent_start = (boundary.axis == Axis2::X) ? boundary.parent->rect.x0 : boundary.parent->rect.y0;
-  i32 target_edge = ((boundary.axis == Axis2::X) ? boundary.before->rect.x1
-                                                 : boundary.before->rect.y1) -
-                    parent_start + clamped_delta;
+  i32 parent_start =
+      (boundary.axis == Axis2::X) ? boundary.parent->rect.x0 : boundary.parent->rect.y0;
+  i32 pair_start = ((boundary.axis == Axis2::X) ? boundary.before->rect.x0 : boundary.before->rect.y0) -
+                   parent_start;
+  i32 target_edge = pair_start + target_before;
 
   f64 pair_total = boundary.before->size_pct + boundary.after->size_pct;
   if (pair_total <= 0.0) return;
