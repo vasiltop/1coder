@@ -7,6 +7,7 @@
 #include "input/keys.h"
 #include "text/gap_buffer.h"
 #include "text/line_index.h"
+#include "text/syntax.h"
 #include "text/token.h"
 #include "text/undo.h"
 
@@ -100,6 +101,7 @@ struct Buffer {
   LineIndex lines;
   UndoStack undo;
   TokenArray tokens;
+  SyntaxCache syntax;
 
   // Bumped on every edit. Lets consumers -- dot-repeat recording, syntax
   // providers -- notice a change without diffing the text.

@@ -60,6 +60,9 @@ void DrawBufferLine(RenderContext *ctx, const Buffer *buffer, u64 line, RectF32 
                     f32 baseline_y, u64 scroll_column, i32 columns) {
   RangeU64 range = BufferLineRange(buffer, line);
 
+  const TokenArray *tokens = &buffer->tokens;
+  u64 token_index = TokenIndexAtOffset(tokens, range.min);
+
   u64 column = 0;
   for (u64 p = range.min; p < range.max;) {
     DecodedCodepoint decoded = BufferDecodeAt(buffer, p);
@@ -69,7 +72,16 @@ void DrawBufferLine(RenderContext *ctx, const Buffer *buffer, u64 line, RectF32 
 
       // Tabs occupy a cell and draw nothing.
       if (decoded.codepoint != '\t') {
-        TokenKind kind = TokenKindAtOffset(&buffer->tokens, p);
+        while (token_index < tokens->count && tokens->tokens[token_index].end <= p) {
+          token_index += 1;
+        }
+
+        TokenKind kind = TokenKind::Default;
+        if (token_index < tokens->count) {
+          const Token *token = &tokens->tokens[token_index];
+          if (token->start <= p && p < token->end) kind = token->kind;
+        }
+
         f32 x = ColumnX(ctx, text_rect, column, scroll_column);
         DrawGlyph(ctx->draw, decoded.codepoint, x, baseline_y,
                   ThemeColorForToken(&ctx->theme, kind));
