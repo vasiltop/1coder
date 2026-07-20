@@ -113,6 +113,7 @@ jobs:
               install -Dm755 build-release/editor "${name}/1code"
               tar -czf "${name}.tar.gz" "$name"
               asset="${name}.tar.gz"
+              sum="sha256sum"
               ;;
             macOS)
               # Apple's strip has no -s; the default already drops the symbol
@@ -121,16 +122,18 @@ jobs:
               install -m755 build-release/editor "${name}/1code"
               tar -czf "${name}.tar.gz" "$name"
               asset="${name}.tar.gz"
+              # macOS ships shasum but no sha256sum; git-bash is the reverse.
+              sum="shasum -a 256"
               ;;
             Windows)
               cp build-release/editor.exe "${name}/1code.exe"
               7z a -tzip "${name}.zip" "$name" >/dev/null
               asset="${name}.zip"
+              sum="sha256sum"
               ;;
           esac
 
-          # shasum is the one spelling present on all three runners.
-          shasum -a 256 "$asset" > "${asset}.sha256"
+          $sum "$asset" > "${asset}.sha256"
           echo "asset=${asset}" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
