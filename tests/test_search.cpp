@@ -1,58 +1,56 @@
 #include "editor/command.h"
 #include "editor/editor.h"
+#include "os/os_file.h"
 #include "search/search.h"
 #include "test.h"
-
-#include <stdlib.h>
-#include <unistd.h>
+#include "test_tempdir.h"
 
 namespace {
 
 // A small tree on disk, since walking and grepping are about the filesystem.
+// `arena` and `root` are borrowed from `dir`, which owns both.
 struct Tree {
+  TempDir dir;
   Arena *arena;
   String8 root;
 };
 
 Tree MakeTree(const char *tag) {
   Tree tree = {};
-  tree.arena = ArenaAlloc(MB(16));
+  tree.dir = MakeTempDir(tag);
+  tree.arena = tree.dir.arena;
+  tree.root = tree.dir.path;
 
-  const char *base = getenv("TMPDIR");
-  if (!base || !*base) base = "/tmp";
-  tree.root = PushStr8F(tree.arena, "%s/1code_search_%s_%d", base, tag, (int)getpid());
+  // .git and build are here to be skipped by the walk, and binary.o to be
+  // skipped by the grep.
+  const char *dirs[] = {"src/deep", ".git", "build"};
+  for (const char *sub : dirs) {
+    bool ok = OsMakeDirs(TempPath(&tree.dir, sub));
+    CHECK(ok);
+  }
 
-  TempArena scratch = ScratchBegin1(tree.arena);
-  String8 cmd = PushStr8F(
-      scratch.arena,
-      "rm -rf '%.*s' && mkdir -p '%.*s/src/deep' '%.*s/.git' '%.*s/build' && "
-      "printf 'alpha needle\\nbeta\\n' > '%.*s/src/one.cpp' && "
-      "printf 'gamma\\nNEEDLE here\\n' > '%.*s/src/deep/two.cpp' && "
-      "printf 'nothing\\n' > '%.*s/src/three.txt' && "
-      "printf 'needle\\n' > '%.*s/.git/hidden.cpp' && "
-      "printf 'needle\\n' > '%.*s/build/generated.cpp' && "
-      "printf 'needle\\n' > '%.*s/binary.o'",
-      (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size, (char *)tree.root.str,
-      (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size, (char *)tree.root.str,
-      (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size, (char *)tree.root.str,
-      (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size, (char *)tree.root.str,
-      (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size, (char *)tree.root.str);
-  int rc = system((const char *)cmd.str);
-  (void)rc;
-  ScratchEnd(scratch);
+  struct Fixture {
+    const char *path;
+    String8 contents;
+  } files[] = {
+      {"src/one.cpp", Str8Lit("alpha needle\nbeta\n")},
+      {"src/deep/two.cpp", Str8Lit("gamma\nNEEDLE here\n")},
+      {"src/three.txt", Str8Lit("nothing\n")},
+      {".git/hidden.cpp", Str8Lit("needle\n")},
+      {"build/generated.cpp", Str8Lit("needle\n")},
+      {"binary.o", Str8Lit("needle\n")},
+  };
+  for (const Fixture &file : files) {
+    bool ok = OsFileWrite(TempPath(&tree.dir, file.path), file.contents);
+    CHECK(ok);
+  }
 
   return tree;
 }
 
-void Destroy(Tree *tree) {
-  TempArena scratch = ScratchBegin1(tree->arena);
-  String8 cmd =
-      PushStr8F(scratch.arena, "rm -rf '%.*s'", (int)tree->root.size, (char *)tree->root.str);
-  int rc = system((const char *)cmd.str);
-  (void)rc;
-  ScratchEnd(scratch);
-  ArenaRelease(tree->arena);
-}
+// Qualified, or unqualified lookup stops at this overload and never finds the
+// TempDir one at global scope.
+void Destroy(Tree *tree) { ::Destroy(&tree->dir); }
 
 bool ListContains(PathList list, const char *want) {
   for (u64 i = 0; i < list.count; i += 1) {

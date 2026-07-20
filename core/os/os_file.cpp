@@ -36,9 +36,107 @@ int CompareEntries(const void *a, const void *b) {
   return 0;
 }
 
+bool IsPathSep(u8 c) {
+#if defined(_WIN32)
+  return c == '/' || c == '\\';
+#else
+  return c == '/';
+#endif
+}
+
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// Platform-independent. These compose the primitives below rather than calling
+// the OS themselves, so there is one copy rather than one per platform.
+// ---------------------------------------------------------------------------
+
+String8 OsPathJoin(Arena *arena, String8 a, String8 b) {
+  if (a.size == 0) return PushStr8Copy(arena, b);
+  if (b.size == 0) return PushStr8Copy(arena, a);
+
+  bool a_ends = IsPathSep(a.str[a.size - 1]);
+  bool b_starts = IsPathSep(b.str[0]);
+
+  if (a_ends && b_starts) return PushStr8Cat(arena, a, Str8Skip(b, 1));
+  if (a_ends || b_starts) return PushStr8Cat(arena, a, b);
+
+  // Forward slash even on Windows, where the Win32 APIs accept it and the rest
+  // of the editor displays paths in one style.
+  TempArena scratch = ScratchBegin1(arena);
+  String8 joined = PushStr8Cat(scratch.arena, a, Str8Lit("/"));
+  String8 result = PushStr8Cat(arena, joined, b);
+  ScratchEnd(scratch);
+  return result;
+}
+
+bool OsMakeDirs(String8 path) {
+  if (path.size == 0) return false;
+
+  TempArena scratch = ScratchBegin();
+  String8 partial = PushStr8Copy(scratch.arena, path);
+
+  // Walk forwards, terminating the string at each separator in turn. Mutating
+  // the copy in place avoids one allocation per component.
+  bool ok = true;
+  for (u64 i = 1; i <= partial.size && ok; i += 1) {
+    bool at_end = (i == partial.size);
+    if (!at_end && !IsPathSep(partial.str[i])) continue;
+
+    // "C:" is a drive, not a directory that can be created.
+    if (i == 2 && partial.str[1] == ':') continue;
+
+    u8 saved = at_end ? 0 : partial.str[i];
+    partial.str[i] = 0;
+    ok = OsMakeDir(String8{partial.str, i});
+    if (!at_end) partial.str[i] = saved;
+  }
+
+  ScratchEnd(scratch);
+  return ok;
+}
+
+namespace {
+
+// Creates the parent of `path` so that a create or a move into a directory that
+// does not exist yet works the way typing the line implies.
+bool MakeParentDirs(String8 path) {
+  String8 parent = Str8PathDir(path);
+  if (parent.size == 0 || Str8Match(parent, path)) return true;
+  return OsMakeDirs(parent);
+}
+
+}  // namespace
+
+bool OsDirDeleteRecursive(String8 path) {
+  TempArena scratch = ScratchBegin();
+  FileList entries = OsDirList(scratch.arena, path);
+
+  bool ok = true;
+  for (u64 i = 0; i < entries.count; i += 1) {
+    FileInfo *info = &entries.files[i];
+    String8 child = OsPathJoin(scratch.arena, path, info->name);
+
+    // A symlink is unlinked whatever it points at. Descending would let this
+    // delete files outside the tree being removed.
+    if (info->is_dir && !info->is_link) {
+      if (!OsDirDeleteRecursive(child)) ok = false;
+    } else {
+      if (!OsFileDelete(child)) ok = false;
+    }
+  }
+
+  ScratchEnd(scratch);
+
+  if (!ok) return false;
+  return OsDirDelete(path);
+}
+
 #if !defined(_WIN32)
+
+// ---------------------------------------------------------------------------
+// POSIX
+// ---------------------------------------------------------------------------
 
 FileContents OsFileRead(Arena *arena, String8 path) {
   TempArena scratch = ScratchBegin1(arena);
@@ -242,41 +340,6 @@ bool OsMakeDir(String8 path) {
   return ok;
 }
 
-bool OsMakeDirs(String8 path) {
-  if (path.size == 0) return false;
-
-  TempArena scratch = ScratchBegin();
-  String8 partial = PushStr8Copy(scratch.arena, path);
-
-  // Walk forwards, terminating the string at each separator in turn. Mutating
-  // the copy in place avoids one allocation per component.
-  bool ok = true;
-  for (u64 i = 1; i <= partial.size && ok; i += 1) {
-    bool at_end = (i == partial.size);
-    if (!at_end && partial.str[i] != '/') continue;
-
-    u8 saved = at_end ? 0 : partial.str[i];
-    partial.str[i] = 0;
-    ok = OsMakeDir(String8{partial.str, i});
-    if (!at_end) partial.str[i] = saved;
-  }
-
-  ScratchEnd(scratch);
-  return ok;
-}
-
-namespace {
-
-// Creates the parent of `path` so that a create or a move into a directory that
-// does not exist yet works the way typing the line implies.
-bool MakeParentDirs(String8 path) {
-  String8 parent = Str8PathDir(path);
-  if (parent.size == 0 || Str8Match(parent, path)) return true;
-  return OsMakeDirs(parent);
-}
-
-}  // namespace
-
 bool OsFileCreate(String8 path) {
   if (!MakeParentDirs(path)) return false;
 
@@ -305,30 +368,6 @@ bool OsDirDelete(String8 path) {
   bool ok = (rmdir(cpath) == 0);
   ScratchEnd(scratch);
   return ok;
-}
-
-bool OsDirDeleteRecursive(String8 path) {
-  TempArena scratch = ScratchBegin();
-  FileList entries = OsDirList(scratch.arena, path);
-
-  bool ok = true;
-  for (u64 i = 0; i < entries.count; i += 1) {
-    FileInfo *info = &entries.files[i];
-    String8 child = OsPathJoin(scratch.arena, path, info->name);
-
-    // A symlink is unlinked whatever it points at. Descending would let this
-    // delete files outside the tree being removed.
-    if (info->is_dir && !info->is_link) {
-      if (!OsDirDeleteRecursive(child)) ok = false;
-    } else {
-      if (!OsFileDelete(child)) ok = false;
-    }
-  }
-
-  ScratchEnd(scratch);
-
-  if (!ok) return false;
-  return OsDirDelete(path);
 }
 
 namespace {
@@ -384,25 +423,325 @@ String8 OsPathAbsolute(Arena *arena, String8 path) {
 
 #else
 
-// Windows implementations are not written yet; the editor targets Linux first.
-// They slot in here without touching any caller.
-#  error "os_file: Windows backend not implemented yet"
+// ---------------------------------------------------------------------------
+// Windows
+//
+// Everything goes through the wide APIs. The "A" variants would encode paths in
+// the active code page, which mangles any name outside it -- String8 is UTF-8
+// and stays that way, converted at the call boundary and nowhere else.
+// ---------------------------------------------------------------------------
 
-#endif
+namespace {
 
-String8 OsPathJoin(Arena *arena, String8 a, String8 b) {
-  if (a.size == 0) return PushStr8Copy(arena, b);
-  if (b.size == 0) return PushStr8Copy(arena, a);
+// A single ReadFile/WriteFile takes a DWORD, so larger files go round in
+// chunks. 256MB keeps the loop count trivial without overflowing.
+constexpr u64 kIoChunk = 0x10000000;
 
-  bool a_ends = (a.str[a.size - 1] == '/');
-  bool b_starts = (b.str[0] == '/');
+wchar_t *PushWide(Arena *arena, String8 s) {
+  int need = 0;
+  if (s.size) {
+    need = MultiByteToWideChar(CP_UTF8, 0, (const char *)s.str, (int)s.size, nullptr, 0);
+    if (need < 0) need = 0;
+  }
+  wchar_t *out = PushArrayNoZero(arena, wchar_t, (u64)need + 1);
+  if (need > 0) {
+    MultiByteToWideChar(CP_UTF8, 0, (const char *)s.str, (int)s.size, out, need);
+  }
+  out[need] = 0;
+  return out;
+}
 
-  if (a_ends && b_starts) return PushStr8Cat(arena, a, Str8Skip(b, 1));
-  if (a_ends || b_starts) return PushStr8Cat(arena, a, b);
+String8 PushUtf8(Arena *arena, const wchar_t *w) {
+  // `need` counts the terminator, since -1 asks for the whole NUL-terminated
+  // string to be measured.
+  int need = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+  if (need <= 1) return String8{nullptr, 0};
+
+  u8 *out = PushArrayNoZero(arena, u8, (u64)need);
+  WideCharToMultiByte(CP_UTF8, 0, w, -1, (char *)out, need, nullptr, nullptr);
+  return String8{out, (u64)need - 1};
+}
+
+DWORD PathAttributes(String8 path) {
+  TempArena scratch = ScratchBegin();
+  DWORD attrs = GetFileAttributesW(PushWide(scratch.arena, path));
+  ScratchEnd(scratch);
+  return attrs;
+}
+
+}  // namespace
+
+FileContents OsFileRead(Arena *arena, String8 path) {
+  TempArena scratch = ScratchBegin1(arena);
+  HANDLE file = CreateFileW(PushWide(scratch.arena, path), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ScratchEnd(scratch);
+  if (file == INVALID_HANDLE_VALUE) return FileContents{String8{nullptr, 0}, false};
+
+  LARGE_INTEGER size;
+  if (!GetFileSizeEx(file, &size) || size.QuadPart < 0) {
+    CloseHandle(file);
+    return FileContents{String8{nullptr, 0}, false};
+  }
+
+  u8 *data = PushArrayNoZero(arena, u8, (u64)size.QuadPart + 1);
+  u64 total = 0;
+  bool ok = true;
+  while (total < (u64)size.QuadPart) {
+    DWORD chunk = (DWORD)Min((u64)size.QuadPart - total, kIoChunk);
+    DWORD got = 0;
+    if (!ReadFile(file, data + total, chunk, &got, nullptr) || got == 0) {
+      ok = false;
+      break;
+    }
+    total += got;
+  }
+  CloseHandle(file);
+
+  if (!ok) return FileContents{String8{nullptr, 0}, false};
+
+  data[total] = 0;
+  return FileContents{String8{data, total}, true};
+}
+
+bool OsFileWrite(String8 path, String8 data) {
+  TempArena scratch = ScratchBegin();
+
+  // Write to a temporary beside the target, then rename over it: a crash or a
+  // full disk leaves the original file intact rather than half-written.
+  String8 temp_path = PushStr8F(scratch.arena, "%.*s.tmp%u", (int)path.size, (char *)path.str,
+                                (unsigned)GetCurrentProcessId());
+  wchar_t *wtemp = PushWide(scratch.arena, temp_path);
+
+  HANDLE file = CreateFileW(wtemp, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    ScratchEnd(scratch);
+    return false;
+  }
+
+  bool ok = true;
+  u64 total = 0;
+  while (total < data.size) {
+    DWORD chunk = (DWORD)Min(data.size - total, kIoChunk);
+    DWORD put = 0;
+    if (!WriteFile(file, data.str + total, chunk, &put, nullptr) || put == 0) {
+      ok = false;
+      break;
+    }
+    total += put;
+  }
+  if (!CloseHandle(file)) ok = false;
+
+  if (ok) {
+    // COPY_ALLOWED is what lets this cross volumes, so there is no separate
+    // copy-and-unlink fallback the way POSIX needs for EXDEV.
+    ok = MoveFileExW(wtemp, PushWide(scratch.arena, path),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED) != 0;
+  }
+  if (!ok) DeleteFileW(wtemp);
+
+  ScratchEnd(scratch);
+  return ok;
+}
+
+FileMapping OsFileMap(String8 path) {
+  FileMapping mapping = {};
+
+  TempArena scratch = ScratchBegin();
+  HANDLE file = CreateFileW(PushWide(scratch.arena, path), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ScratchEnd(scratch);
+  if (file == INVALID_HANDLE_VALUE) return mapping;
+
+  LARGE_INTEGER size;
+  if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0) {
+    CloseHandle(file);
+    return mapping;
+  }
+
+  HANDLE section = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+  CloseHandle(file);
+  if (!section) return mapping;
+
+  void *data = MapViewOfFile(section, FILE_MAP_READ, 0, 0, 0);
+  // The view survives the section handle, so there is no reason to hold it.
+  CloseHandle(section);
+  if (!data) return mapping;
+
+  mapping.data = (u8 *)data;
+  mapping.size = (u64)size.QuadPart;
+  mapping.ok = true;
+  return mapping;
+}
+
+void OsFileUnmap(FileMapping *mapping) {
+  if (!mapping->ok) return;
+  UnmapViewOfFile(mapping->data);
+  *mapping = FileMapping{};
+}
+
+bool OsFileExists(String8 path) {
+  DWORD attrs = PathAttributes(path);
+  return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+bool OsDirExists(String8 path) {
+  DWORD attrs = PathAttributes(path);
+  return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+FileList OsDirList(Arena *arena, String8 path) {
+  FileList list = {};
 
   TempArena scratch = ScratchBegin1(arena);
-  String8 joined = PushStr8Cat(scratch.arena, a, Str8Lit("/"));
-  String8 result = PushStr8Cat(arena, joined, b);
+  String8 pattern = OsPathJoin(scratch.arena, path, Str8Lit("*"));
+
+  WIN32_FIND_DATAW find;
+  HANDLE handle = FindFirstFileW(PushWide(scratch.arena, pattern), &find);
+  if (handle == INVALID_HANDLE_VALUE) {
+    ScratchEnd(scratch);
+    return list;
+  }
+
+  // Gather into a list first, since the entry count is not known up front.
+  struct Node {
+    Node *next;
+    FileInfo info;
+  };
+  Node *first = nullptr, *last = nullptr;
+  u64 count = 0;
+
+  do {
+    String8 name = PushUtf8(scratch.arena, find.cFileName);
+    if (Str8Match(name, Str8Lit(".")) || Str8Match(name, Str8Lit(".."))) continue;
+
+    Node *node = PushStruct(scratch.arena, Node);
+    node->info.name = PushStr8Copy(arena, name);
+
+    // FindFirstFile reports the link itself, and a directory symlink or
+    // junction keeps the directory attribute, so is_dir already describes the
+    // target the way the POSIX side arranges with an extra stat.
+    node->info.is_dir = (find.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    node->info.is_link = (find.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+    node->info.size = ((u64)find.nFileSizeHigh << 32) | (u64)find.nFileSizeLow;
+
+    if (last) {
+      last->next = node;
+      last = node;
+    } else {
+      first = last = node;
+    }
+    count += 1;
+  } while (FindNextFileW(handle, &find));
+  FindClose(handle);
+
+  list.files = PushArrayNoZero(arena, FileInfo, Max(count, (u64)1));
+  list.count = count;
+  u64 i = 0;
+  for (Node *n = first; n; n = n->next) list.files[i++] = n->info;
+
+  ScratchEnd(scratch);
+
+  qsort(list.files, list.count, sizeof(FileInfo), CompareEntries);
+  return list;
+}
+
+bool OsMakeDir(String8 path) {
+  TempArena scratch = ScratchBegin();
+  bool ok = CreateDirectoryW(PushWide(scratch.arena, path), nullptr) != 0;
+  bool exists = (!ok && GetLastError() == ERROR_ALREADY_EXISTS);
+  ScratchEnd(scratch);
+
+  return ok || (exists && OsDirExists(path));
+}
+
+bool OsFileCreate(String8 path) {
+  if (!MakeParentDirs(path)) return false;
+
+  TempArena scratch = ScratchBegin();
+  // CREATE_NEW is what makes this refuse to truncate something already there.
+  HANDLE file = CreateFileW(PushWide(scratch.arena, path), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+  ScratchEnd(scratch);
+
+  if (file == INVALID_HANDLE_VALUE) return false;
+  CloseHandle(file);
+  return true;
+}
+
+bool OsFileDelete(String8 path) {
+  TempArena scratch = ScratchBegin();
+  wchar_t *wpath = PushWide(scratch.arena, path);
+
+  bool ok = DeleteFileW(wpath) != 0;
+  if (!ok) {
+    // A directory symlink or junction goes through RemoveDirectory rather than
+    // DeleteFile. It removes the link, never what it points at, which is the
+    // behaviour OsDirDeleteRecursive depends on to stay inside the subtree.
+    DWORD attrs = GetFileAttributesW(wpath);
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) &&
+        (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
+      ok = RemoveDirectoryW(wpath) != 0;
+    }
+  }
+
+  ScratchEnd(scratch);
+  return ok;
+}
+
+bool OsDirDelete(String8 path) {
+  TempArena scratch = ScratchBegin();
+  bool ok = RemoveDirectoryW(PushWide(scratch.arena, path)) != 0;
+  ScratchEnd(scratch);
+  return ok;
+}
+
+bool OsRename(String8 from, String8 to) {
+  if (!MakeParentDirs(to)) return false;
+
+  TempArena scratch = ScratchBegin();
+  bool ok = MoveFileExW(PushWide(scratch.arena, from), PushWide(scratch.arena, to),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED) != 0;
+  ScratchEnd(scratch);
+  return ok;
+}
+
+String8 OsGetCwd(Arena *arena) {
+  TempArena scratch = ScratchBegin1(arena);
+
+  // With a zero buffer this returns the length required, terminator included.
+  DWORD need = GetCurrentDirectoryW(0, nullptr);
+  if (need == 0) {
+    ScratchEnd(scratch);
+    return String8{nullptr, 0};
+  }
+
+  wchar_t *buffer = PushArrayNoZero(scratch.arena, wchar_t, (u64)need);
+  String8 result = String8{nullptr, 0};
+  if (GetCurrentDirectoryW(need, buffer) != 0) result = PushUtf8(arena, buffer);
+
   ScratchEnd(scratch);
   return result;
 }
+
+String8 OsPathAbsolute(Arena *arena, String8 path) {
+  TempArena scratch = ScratchBegin1(arena);
+  wchar_t *wpath = PushWide(scratch.arena, path);
+
+  DWORD need = GetFullPathNameW(wpath, 0, nullptr, nullptr);
+  String8 result = String8{nullptr, 0};
+  if (need != 0) {
+    wchar_t *buffer = PushArrayNoZero(scratch.arena, wchar_t, (u64)need);
+    if (GetFullPathNameW(wpath, need, buffer, nullptr) != 0) result = PushUtf8(arena, buffer);
+  }
+
+  ScratchEnd(scratch);
+
+  // GetFullPathName is purely lexical and does not require the path to exist,
+  // but it still fails on a malformed one, so fall back to the input.
+  if (result.size == 0) return PushStr8Copy(arena, path);
+  return result;
+}
+
+#endif

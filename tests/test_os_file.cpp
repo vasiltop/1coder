@@ -4,7 +4,6 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 TEST(os_file_write_then_read) {
   TempDir dir = MakeTempDir("rw");
