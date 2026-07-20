@@ -357,7 +357,7 @@ BufferHandle OpenNamedGit(Editor *ed, String8 name, GitViewMode mode, String8 ro
     KeymapBind(keymap, "<CR>", CommandId::git_open);
     KeymapBind(keymap, "l", CommandId::git_log);
     KeymapBind(keymap, "c", CommandId::git_commit);
-    KeymapBind(keymap, "g", CommandId::git_refresh);
+    KeymapBind(keymap, "R", CommandId::git_refresh);
     KeymapBind(keymap, "F", CommandId::git_pull);
     KeymapBind(keymap, "P", CommandId::git_push);
     KeymapBind(keymap, "r", CommandId::git_arg_rebase);

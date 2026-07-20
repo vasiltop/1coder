@@ -314,3 +314,31 @@ TEST(git_leader_gs_opens_status) {
   CHECK(EditorFocusedBuffer(&f.ed) == buffer);
   Destroy(&f);
 }
+
+TEST(git_gg_goes_to_file_start) {
+  // Bare `g` used to be refresh and stole the first chord of `gg`.
+  if (!HaveGit()) return;
+  Fixture f = MakeFixture("git_gg");
+  if (!InitRepo(&f)) {
+    Destroy(&f);
+    return;
+  }
+  WriteFile(&f, "a.txt", Str8Lit("x\n"));
+  CHECK_EQ(RunIn(f.arena, f.dir.path, {Str8Lit("add"), Str8Lit("a.txt")}).exit_code, 0);
+  CHECK_EQ(RunIn(f.arena, f.dir.path, {Str8Lit("commit"), Str8Lit("-m"), Str8Lit("c")}).exit_code, 0);
+  WriteFile(&f, "a.txt", Str8Lit("x\ny\n"));
+
+  CommandExecLine(&f.ed, Str8Lit("git"));
+  Buffer *buffer = GitStatusBuffer(&f);
+  CHECK(buffer != nullptr);
+  CHECK(BufferLineCount(buffer) > 1);
+
+  View *view = EditorFocusedView(&f.ed);
+  ViewSetCursorLineColumn(view, buffer, BufferLineCount(buffer) - 1, 0);
+  CHECK(ViewCursorLine(view, buffer) > 0);
+
+  EditorProcessSpec(&f.ed, "gg");
+  CHECK_EQ(ViewCursorLine(view, buffer), 0);
+
+  Destroy(&f);
+}
