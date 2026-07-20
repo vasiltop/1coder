@@ -72,8 +72,8 @@ struct LanguageDefinition {
 // into contiguous storage -- and fills the buffer's TokenArray plus a per-line
 // cache of the lexer state carried across line boundaries.
 //
-// Only full rebuilds exist here; incremental re-lexing after a single edit
-// (wiring into BufferReplace/undo/redo) is a later task.
+// SyntaxRebuild performs a full rescan; SyntaxBeginEdit/SyntaxEndEdit perform
+// incremental updates after BufferReplace, undo, and redo.
 // ---------------------------------------------------------------------------
 
 // Multiline lexical constructs a line can start or end inside of. `Default`
@@ -114,6 +114,10 @@ struct SyntaxCache {
   u64 line_count;
   u64 line_capacity;
   u64 token_capacity;  // capacity backing Buffer::tokens.tokens
+
+  // Set after each incremental update to the number of lines actually
+  // rescanned; allows tests to prove convergence stops early.
+  u64 lines_scanned_last_update;
 };
 
 // Attaches syntax highlighting to `buffer` for `path`, allocating a dedicated
@@ -132,3 +136,32 @@ void SyntaxDestroy(SyntaxCache *cache);
 // replacement (BufferSetText) so a highlighted buffer never shows stale
 // tokens; incremental edits are Task 3.
 void SyntaxRebuild(Buffer *buffer);
+
+// ---------------------------------------------------------------------------
+// Incremental syntax update
+//
+// Used by BufferReplace/undo/redo to update tokens without a full rebuild.
+// SyntaxBeginEdit captures pre-mutation state; SyntaxEndEdit performs the
+// minimal re-lex after the gap buffer and line index are updated.
+// Both are no-ops when no syntax cache is attached.
+// ---------------------------------------------------------------------------
+
+struct SyntaxEdit {
+  u64 old_start_line;
+  u64 old_end_line;
+  u64 old_line_count;
+  u64 old_size;
+  // State entering the first changed line (for re-lexing).
+  SyntaxState start_state;
+  // Token index of the first token on old_start_line.
+  u64 prefix_token_end;
+  // Token index past the last token on old_end_line (start of suffix tokens).
+  u64 suffix_token_start;
+  // Total token count before the edit.
+  u64 old_token_count;
+  // Byte offset where the suffix tokens began (for computing delta).
+  u64 suffix_byte_start;
+};
+
+[[nodiscard]] SyntaxEdit SyntaxBeginEdit(const Buffer *buffer, RangeU64 old_range);
+void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 new_range);

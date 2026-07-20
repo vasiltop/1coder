@@ -916,3 +916,366 @@ TEST(syntax_scan_preprocessor_still_works_with_leading_whitespace) {
 
   Destroy(&f);
 }
+
+// ===========================================================================
+// Incremental syntax update (Task 3)
+//
+// These tests verify that BufferReplace, undo, and redo call the incremental
+// update path and produce correct tokens without a full rebuild.
+// ===========================================================================
+
+// 1. Replace "/*" with spaces: following comment tokens disappear and later
+//    keywords recover.
+TEST(syntax_incremental_remove_block_comment_opener) {
+  Fixture f = MakeFixture();
+  const char *text = "int a; /* comment\nstuff */ int b;\n";
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  // Before edit: "stuff */" on line 1 is inside a block comment.
+  CHECK_EQ((int)buffer->syntax.lines[1].incoming.mode, (int)SyntaxMode::BlockComment);
+
+  // Replace "/*" with "  " (same length, removes comment opener).
+  u64 slash_star = Off(text, "/*");
+  BufferReplace(nullptr, buffer, RangeU64{slash_star, slash_star + 2}, Str8Lit("  "), 0, 0);
+
+  // After edit: line 1 should no longer be in BlockComment state.
+  CHECK_EQ((int)buffer->syntax.lines[1].incoming.mode, (int)SyntaxMode::Default);
+
+  // "int" on line 1 (after "*/") should now be a Type token because the
+  // comment is gone -- "stuff */ int b;" is now regular code.
+  // Find "int b" in the post-edit buffer.
+  TempArena scratch = ScratchBegin();
+  String8 all = BufferTextAll(scratch.arena, buffer);
+  u64 int_b = Str8FindFirst(all, Str8Lit("int b"));
+  const Token *tok = TokenAt(buffer, int_b);
+  CHECK(tok != nullptr);
+  CHECK_EQ((int)tok->kind, (int)TokenKind::Type);
+  ScratchEnd(scratch);
+
+  Destroy(&f);
+}
+
+// 2. Insert a block-comment opener so state propagates through later lines;
+//    then insert the closer and verify state returns to Default.
+TEST(syntax_incremental_insert_block_comment_propagates) {
+  Fixture f = MakeFixture();
+  const char *text = "int a;\nint b;\nint c;\n";
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  // All lines start and end in Default mode.
+  CHECK_EQ((int)buffer->syntax.lines[0].outgoing.mode, (int)SyntaxMode::Default);
+  CHECK_EQ((int)buffer->syntax.lines[1].incoming.mode, (int)SyntaxMode::Default);
+  CHECK_EQ((int)buffer->syntax.lines[2].incoming.mode, (int)SyntaxMode::Default);
+
+  // Insert "/*" at end of line 0 (before the newline).
+  u64 first_newline = Str8FindFirstChar(Str8C(text), '\n');
+  BufferReplace(nullptr, buffer, RangeU64{first_newline, first_newline}, Str8Lit("/*"), 0, 0);
+
+  // Now line 0 ends in BlockComment, and that propagates.
+  CHECK_EQ((int)buffer->syntax.lines[0].outgoing.mode, (int)SyntaxMode::BlockComment);
+  CHECK_EQ((int)buffer->syntax.lines[1].incoming.mode, (int)SyntaxMode::BlockComment);
+  CHECK_EQ((int)buffer->syntax.lines[2].incoming.mode, (int)SyntaxMode::BlockComment);
+
+  // "int b" on line 1 should now be Comment, not Type.
+  TempArena scratch = ScratchBegin();
+  String8 all = BufferTextAll(scratch.arena, buffer);
+  u64 int_b = Str8FindFirst(all, Str8Lit("int b"));
+  const Token *tok = TokenAt(buffer, int_b);
+  CHECK(tok != nullptr);
+  CHECK_EQ((int)tok->kind, (int)TokenKind::Comment);
+  ScratchEnd(scratch);
+
+  // Now insert "*/" at start of line 2 to close the comment.
+  u64 line2_start = BufferOffsetFromLine(buffer, 2);
+  BufferReplace(nullptr, buffer, RangeU64{line2_start, line2_start}, Str8Lit("*/"), 0, 0);
+
+  // Line 2 should now start in BlockComment (inheriting from line 1) but the
+  // close is at the beginning so it exits immediately.
+  CHECK_EQ((int)buffer->syntax.lines[2].incoming.mode, (int)SyntaxMode::BlockComment);
+  CHECK_EQ((int)buffer->syntax.lines[2].outgoing.mode, (int)SyntaxMode::Default);
+
+  // Line 3 (the 4th line if we count from 0) is now Default.
+  if (buffer->syntax.line_count > 3) {
+    CHECK_EQ((int)buffer->syntax.lines[3].incoming.mode, (int)SyntaxMode::Default);
+  }
+
+  Destroy(&f);
+}
+
+// 3. Insert newlines: line cache count aligns with BufferLineCount, suffix
+//    tokens shift by exact byte delta, prefix tokens unchanged.
+TEST(syntax_incremental_insert_newlines) {
+  Fixture f = MakeFixture();
+  const char *text = "int a;\nint b;\n";
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  u64 orig_line_count = BufferLineCount(buffer);
+  CHECK_EQ(buffer->syntax.line_count, orig_line_count);
+
+  // Remember token for "int" on line 1 (at start of "int b;").
+  u64 int_b_off = Off(text, "int b");
+  const Token *before_tok = TokenAt(buffer, int_b_off);
+  CHECK(before_tok != nullptr);
+  CHECK_EQ((int)before_tok->kind, (int)TokenKind::Type);
+  u64 before_int_a_start = Off(text, "int a");
+
+  // Insert a newline at the start of line 1.
+  u64 line1_start = BufferOffsetFromLine(buffer, 1);
+  BufferReplace(nullptr, buffer, RangeU64{line1_start, line1_start}, Str8Lit("\n"), 0, 0);
+
+  // Line count increased by 1.
+  CHECK_EQ(BufferLineCount(buffer), orig_line_count + 1);
+  CHECK_EQ(buffer->syntax.line_count, BufferLineCount(buffer));
+
+  // "int a" token on line 0 is unaffected (prefix).
+  const Token *int_a_tok = TokenAt(buffer, before_int_a_start);
+  CHECK(int_a_tok != nullptr);
+  CHECK_EQ((int)int_a_tok->kind, (int)TokenKind::Type);
+
+  // "int b" token shifted by 1 byte (the inserted newline).
+  const Token *shifted_tok = TokenAt(buffer, int_b_off + 1);
+  CHECK(shifted_tok != nullptr);
+  CHECK_EQ((int)shifted_tok->kind, (int)TokenKind::Type);
+
+  Destroy(&f);
+}
+
+// 4. Delete lines: cache realigns and token indexes/ranges remain valid.
+TEST(syntax_incremental_delete_lines) {
+  Fixture f = MakeFixture();
+  const char *text = "int a;\nint b;\nint c;\n";
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  CHECK_EQ(BufferLineCount(buffer), (u64)4);
+  CHECK_EQ(buffer->syntax.line_count, (u64)4);
+
+  // Delete line 1 entirely ("int b;\n").
+  u64 line1_start = BufferOffsetFromLine(buffer, 1);
+  u64 line2_start = BufferOffsetFromLine(buffer, 2);
+  BufferReplace(nullptr, buffer, RangeU64{line1_start, line2_start}, String8{nullptr, 0}, 0, 0);
+
+  CHECK_EQ(BufferLineCount(buffer), (u64)3);
+  CHECK_EQ(buffer->syntax.line_count, (u64)3);
+
+  // "int c" should still be correctly tokenized (now on line 1).
+  TempArena scratch = ScratchBegin();
+  String8 all = BufferTextAll(scratch.arena, buffer);
+  u64 int_c = Str8FindFirst(all, Str8Lit("int c"));
+  const Token *tok = TokenAt(buffer, int_c);
+  CHECK(tok != nullptr);
+  CHECK_EQ((int)tok->kind, (int)TokenKind::Type);
+  ScratchEnd(scratch);
+
+  // All tokens are in bounds and sorted.
+  u64 buf_size = BufferSize(buffer);
+  for (u64 i = 0; i < buffer->tokens.count; i += 1) {
+    CHECK(buffer->tokens.tokens[i].start < buffer->tokens.tokens[i].end);
+    CHECK(buffer->tokens.tokens[i].end <= buf_size);
+    if (i + 1 < buffer->tokens.count) {
+      CHECK(buffer->tokens.tokens[i].end <= buffer->tokens.tokens[i + 1].start);
+    }
+  }
+
+  Destroy(&f);
+}
+
+// 5. Edit near the top of a long buffer with no state change: convergence.
+TEST(syntax_incremental_convergence_stops_early) {
+  Fixture f = MakeFixture();
+
+  // Build a 200-line buffer: line 0 is editable, lines 1-199 are all "int x;\n"
+  constexpr int kLines = 200;
+  char text[kLines * 8 + 16];
+  int pos = 0;
+  pos += snprintf(text + pos, sizeof(text) - pos, "int a;\n");
+  for (int i = 1; i < kLines; i += 1) {
+    pos += snprintf(text + pos, sizeof(text) - pos, "int x;\n");
+  }
+
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+  CHECK_EQ(BufferLineCount(buffer), (u64)(kLines + 1));  // trailing newline -> empty last line
+
+  // Edit only line 0: replace "a" with "z" (no state change).
+  u64 a_pos = 4;  // "int " is 4 bytes, "a" is at 4
+  BufferReplace(nullptr, buffer, RangeU64{a_pos, a_pos + 1}, Str8Lit("z"), 0, 0);
+
+  // lines_scanned_last_update should be much smaller than total line count.
+  CHECK(buffer->syntax.lines_scanned_last_update < (u64)kLines);
+  // It should only need to rescan line 0 and then converge (maybe line 1 too).
+  CHECK(buffer->syntax.lines_scanned_last_update <= 3);
+
+  Destroy(&f);
+}
+
+// 6. Edit that changes multiline state scans beyond the changed line only
+//    until state stabilizes.
+TEST(syntax_incremental_state_change_scans_until_stable) {
+  Fixture f = MakeFixture();
+  // Line 0: "/*", Line 1: "a", Line 2: "*/", Line 3: "int x;\n"
+  const char *text = "/*\na\n*/\nint x;\n";
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  CHECK_EQ((int)buffer->syntax.lines[0].outgoing.mode, (int)SyntaxMode::BlockComment);
+  CHECK_EQ((int)buffer->syntax.lines[2].outgoing.mode, (int)SyntaxMode::Default);
+  CHECK_EQ((int)buffer->syntax.lines[3].incoming.mode, (int)SyntaxMode::Default);
+
+  // Delete "/*" from line 0, making all lines start in Default.
+  BufferReplace(nullptr, buffer, RangeU64{0, 2}, String8{nullptr, 0}, 0, 0);
+
+  // All lines should now be Default mode.
+  for (u64 i = 0; i < buffer->syntax.line_count; i += 1) {
+    CHECK_EQ((int)buffer->syntax.lines[i].incoming.mode, (int)SyntaxMode::Default);
+  }
+
+  // The update scanned multiple lines (at least lines 0-3) because the state
+  // changed propagated, but less than or equal to the total line count.
+  CHECK(buffer->syntax.lines_scanned_last_update <= buffer->syntax.line_count);
+  CHECK(buffer->syntax.lines_scanned_last_update >= 2);
+
+  Destroy(&f);
+}
+
+// 7. UTF-8 before/inside the edit preserves byte offsets.
+TEST(syntax_incremental_utf8_preserves_offsets) {
+  Fixture f = MakeFixture();
+  // "café" uses 2-byte é (0xC3 0xA9), then a keyword on the next line.
+  const char *text = "// caf\xC3\xA9\nint x;\n";
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  // "int" token should be at byte offset 9 (comment is "// café\n" = 9 bytes).
+  u64 int_off = Off(text, "int");
+  const Token *tok = TokenAt(buffer, int_off);
+  CHECK(tok != nullptr);
+  CHECK_EQ((int)tok->kind, (int)TokenKind::Type);
+
+  // Replace "x" with "yy" on line 1 (after the UTF-8 line).
+  u64 x_off = Off(text, "x;");
+  BufferReplace(nullptr, buffer, RangeU64{x_off, x_off + 1}, Str8Lit("yy"), 0, 0);
+
+  // "int" is still at byte offset `int_off` (unchanged by edit after it on same line).
+  const Token *tok2 = TokenAt(buffer, int_off);
+  CHECK(tok2 != nullptr);
+  CHECK_EQ((int)tok2->kind, (int)TokenKind::Type);
+
+  // The edit was on line 1, so line 0 comment token is also preserved.
+  u64 comment_off = 0;  // "//" starts at byte 0
+  const Token *comment_tok = TokenAt(buffer, comment_off);
+  CHECK(comment_tok != nullptr);
+  CHECK_EQ((int)comment_tok->kind, (int)TokenKind::Comment);
+
+  Destroy(&f);
+}
+
+// 8. Undo and redo restore the exact token arrays and line states.
+TEST(syntax_incremental_undo_redo_restores_tokens) {
+  Fixture f = MakeFixture();
+  const char *text = "int a;\nint b;\n";
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  // Snapshot tokens before edit.
+  u64 token_count_before = buffer->tokens.count;
+  TempArena scratch = ScratchBegin();
+  Token *tokens_before = PushArrayNoZero(scratch.arena, Token, token_count_before);
+  for (u64 i = 0; i < token_count_before; i += 1) {
+    tokens_before[i] = buffer->tokens.tokens[i];
+  }
+
+  // Edit: replace "int a" with "float a".
+  u64 int_a = Off(text, "int a");
+  BufferReplace(nullptr, buffer, RangeU64{int_a, int_a + 3}, Str8Lit("float"), 0, 0);
+
+  // Verify the edit changed tokens.
+  CHECK(buffer->tokens.count != token_count_before ||
+        buffer->tokens.tokens[0].end != tokens_before[0].end);
+
+  // Undo.
+  bool moved = false;
+  (void)BufferUndo(nullptr, buffer, &moved);
+  CHECK(moved);
+
+  // After undo, tokens must match the original exactly.
+  CHECK_EQ(buffer->tokens.count, token_count_before);
+  for (u64 i = 0; i < token_count_before; i += 1) {
+    CHECK_EQ(buffer->tokens.tokens[i].start, tokens_before[i].start);
+    CHECK_EQ(buffer->tokens.tokens[i].end, tokens_before[i].end);
+    CHECK_EQ((int)buffer->tokens.tokens[i].kind, (int)tokens_before[i].kind);
+  }
+
+  // Redo should produce the same result as the original edit.
+  (void)BufferRedo(nullptr, buffer, &moved);
+  CHECK(moved);
+
+  // After redo, "float" should be a Type token.
+  const Token *float_tok = TokenAt(buffer, int_a);
+  CHECK(float_tok != nullptr);
+  CHECK_EQ((int)float_tok->kind, (int)TokenKind::Type);
+  CHECK_EQ(float_tok->end, int_a + 5);
+
+  ScratchEnd(scratch);
+  Destroy(&f);
+}
+
+// 9. Existing buffer_hooks_fire_on_edit still observes exactly one callback
+//    per direct edit/undo/redo -- the incremental syntax update must not
+//    interfere with hook counts.
+TEST(syntax_incremental_hooks_still_fire_once) {
+  Fixture f = MakeFixture();
+  Buffer *buffer = OpenAttached(&f, "main.cpp", "int a;\nint b;\n");
+
+  static u32 edit_count;
+  edit_count = 0;
+
+  buffer->hooks.on_edit = [](Editor *, Buffer *, RangeU64, u64) {
+    edit_count += 1;
+  };
+
+  // Direct edit.
+  BufferReplace(nullptr, buffer, RangeU64{0, 3}, Str8Lit("float"), 0, 0);
+  CHECK_EQ(edit_count, 1);
+
+  // Undo.
+  bool moved = false;
+  (void)BufferUndo(nullptr, buffer, &moved);
+  CHECK_EQ(edit_count, 2);
+
+  // Redo.
+  (void)BufferRedo(nullptr, buffer, &moved);
+  CHECK_EQ(edit_count, 3);
+
+  Destroy(&f);
+}
+
+// 10. Save-as language reselection: when the path extension changes, syntax
+//     rebuilds with the new language. When it stays the same, no rebuild.
+TEST(syntax_incremental_save_as_language_reselection) {
+  Fixture f = MakeFixture();
+  const char *text = "let x = 1;\n";
+  Buffer *buffer = OpenAttached(&f, "app.js", text);
+  buffer->path = PushStr8Copy(f.arena, Str8Lit("app.js"));
+
+  // Currently JavaScript: "let" is a keyword.
+  const Token *let_tok = TokenAt(buffer, 0);
+  CHECK(let_tok != nullptr);
+  CHECK_EQ((int)let_tok->kind, (int)TokenKind::Keyword);
+
+  // Simulate save-as to a .cpp file: language changes, syntax must rebuild.
+  const LanguageDefinition *old_lang = buffer->syntax.language;
+  SyntaxAttach(buffer, Str8Lit("output.cpp"));
+  buffer->path = PushStr8Copy(f.arena, Str8Lit("output.cpp"));
+
+  // Language changed: "let" is not a C++ keyword, so it should not be
+  // highlighted as one.
+  CHECK(buffer->syntax.language != old_lang);
+
+  // Verify tokens reflect C++ language now -- "let" is just a plain identifier
+  // in C++ (no keyword group contains it), so TokenAt returns nullptr.
+  const Token *let_tok2 = TokenAt(buffer, 0);
+  CHECK(let_tok2 == nullptr);
+
+  // Save-as to same language is a no-op.
+  u64 token_count_before = buffer->tokens.count;
+  SyntaxAttach(buffer, Str8Lit("other.cpp"));
+  CHECK_EQ(buffer->tokens.count, token_count_before);
+
+  Destroy(&f);
+}

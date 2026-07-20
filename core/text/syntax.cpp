@@ -484,5 +484,199 @@ void SyntaxRebuild(Buffer *buffer) {
   }
 
   cache->line_count = line_total;
+  cache->lines_scanned_last_update = line_total;
   buffer->tokens.count = token_count;
+}
+
+// ---------------------------------------------------------------------------
+// Incremental syntax update
+// ---------------------------------------------------------------------------
+
+SyntaxEdit SyntaxBeginEdit(const Buffer *buffer, RangeU64 old_range) {
+  SyntaxEdit edit = {};
+  const SyntaxCache *cache = &buffer->syntax;
+  if (cache->arena == nullptr || cache->language == nullptr) return edit;
+
+  u64 size = BufferSize(buffer);
+  u64 start_off = Min(old_range.min, size);
+  u64 end_off = Min(old_range.max, size);
+
+  edit.old_size = size;
+  edit.old_line_count = cache->line_count;
+  edit.old_start_line = BufferLineFromOffset(buffer, start_off);
+  edit.old_end_line = BufferLineFromOffset(buffer, end_off);
+
+  // State entering the first changed line.
+  edit.start_state = (edit.old_start_line == 0)
+    ? SyntaxState{SyntaxMode::Default}
+    : cache->lines[edit.old_start_line - 1].outgoing;
+
+  // Token boundaries: prefix tokens are all tokens before old_start_line.
+  edit.prefix_token_end = cache->lines[edit.old_start_line].first_token;
+
+  // Suffix tokens start after old_end_line.
+  if (edit.old_end_line + 1 < cache->line_count) {
+    edit.suffix_token_start = cache->lines[edit.old_end_line + 1].first_token;
+    edit.suffix_byte_start = BufferOffsetFromLine(buffer, edit.old_end_line + 1);
+  } else {
+    edit.suffix_token_start = buffer->tokens.count;
+    edit.suffix_byte_start = size;
+  }
+
+  edit.old_token_count = buffer->tokens.count;
+
+  return edit;
+}
+
+void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 /*new_range*/) {
+  SyntaxCache *cache = &buffer->syntax;
+  if (cache->arena == nullptr || cache->language == nullptr) return;
+
+  u64 new_size = BufferSize(buffer);
+  u64 new_line_count = BufferLineCount(buffer);
+
+  // Byte delta for shifting suffix tokens.
+  i64 byte_delta = (i64)new_size - (i64)edit.old_size;
+
+  // Line geometry.
+  i64 line_delta = (i64)new_line_count - (i64)edit.old_line_count;
+  u64 old_edited_lines = edit.old_end_line - edit.old_start_line + 1;
+  u64 new_edited_lines = (u64)((i64)old_edited_lines + line_delta);
+
+  u64 old_suffix_lines = (edit.old_end_line + 1 < edit.old_line_count)
+    ? (edit.old_line_count - edit.old_end_line - 1) : 0;
+  u64 total_new_lines = edit.old_start_line + new_edited_lines + old_suffix_lines;
+
+  // Grow line cache if needed.
+  EnsureLineCapacity(cache, total_new_lines);
+
+  // Move suffix line-cache entries to their new positions.
+  u64 old_suffix_idx = edit.old_end_line + 1;
+  u64 new_suffix_idx = edit.old_start_line + new_edited_lines;
+
+  if (old_suffix_lines > 0 && old_suffix_idx != new_suffix_idx) {
+    if (new_suffix_idx > old_suffix_idx) {
+      for (u64 i = old_suffix_lines; i > 0; i -= 1)
+        cache->lines[new_suffix_idx + i - 1] = cache->lines[old_suffix_idx + i - 1];
+    } else {
+      for (u64 i = 0; i < old_suffix_lines; i += 1)
+        cache->lines[new_suffix_idx + i] = cache->lines[old_suffix_idx + i];
+    }
+  }
+  cache->line_count = total_new_lines;
+
+  // --- Rescan lines, collecting tokens into scratch storage. ---
+  // We scan from edit.old_start_line onward.  After all lines in the new
+  // edited region are scanned, we check each suffix line: if the state we
+  // carry into it equals its (already-moved) cached incoming state, we stop
+  // (convergence) and retain the remaining suffix tokens with a byte shift.
+
+  TempArena scratch = ScratchBegin(&cache->arena, 1);
+
+  u64 rescan_cap = 256;
+  Token *rescan_tokens = PushArrayNoZero(scratch.arena, Token, rescan_cap);
+  u64 rescan_count = 0;
+
+  SyntaxState state = edit.start_state;
+  u64 lines_scanned = 0;
+  u64 converge_line = total_new_lines; // line where we stopped (suffix kept from here)
+
+  for (u64 line = edit.old_start_line; line < total_new_lines; line += 1) {
+    // Check convergence: once we are past the edited region and our state
+    // matches the cached incoming state of this (moved) suffix line, stop.
+    if (line >= new_suffix_idx) {
+      if (state.mode == cache->lines[line].incoming.mode) {
+        converge_line = line;
+        break;
+      }
+    }
+
+    RangeU64 range = BufferLineRange(buffer, line);
+    SyntaxState incoming = state;
+    u64 first_tok = rescan_count;
+
+    // Redirect buffer->tokens to our scratch array so ScanLine/AppendToken
+    // works unmodified.
+    Token *saved_tokens = buffer->tokens.tokens;
+    u64 saved_count_val = buffer->tokens.count;
+    u64 saved_cap = cache->token_capacity;
+
+    buffer->tokens.tokens = rescan_tokens;
+    cache->token_capacity = rescan_cap;
+
+    u64 local_count = rescan_count;
+    state = ScanLine(buffer, cache->language, range, incoming, &local_count);
+
+    // Pick up growth if EnsureTokenCapacity triggered.
+    rescan_tokens = buffer->tokens.tokens;
+    rescan_cap = cache->token_capacity;
+    rescan_count = local_count;
+
+    buffer->tokens.tokens = saved_tokens;
+    buffer->tokens.count = saved_count_val;
+    cache->token_capacity = saved_cap;
+
+    cache->lines[line] = SyntaxLineCache{incoming, state, 0, rescan_count - first_tok};
+    lines_scanned += 1;
+  }
+
+  // --- Determine suffix tokens to retain ---
+  // If we converged at `converge_line`, the suffix tokens start at the old
+  // token index stored in that line's (moved) cache entry.  Otherwise there
+  // are no suffix tokens to retain (we rescanned everything).
+  u64 retained_suffix_token_start = edit.old_token_count; // sentinel: nothing
+  u64 retained_suffix_count = 0;
+  if (converge_line < total_new_lines) {
+    retained_suffix_token_start = cache->lines[converge_line].first_token;
+    retained_suffix_count = edit.old_token_count - retained_suffix_token_start;
+  }
+
+  // --- Splice token array: [prefix] [rescanned] [shifted suffix] ---
+  u64 new_total_tokens = edit.prefix_token_end + rescan_count + retained_suffix_count;
+  EnsureTokenCapacity(buffer, edit.prefix_token_end, new_total_tokens);
+
+  // Shift and copy retained suffix tokens.  Source and destination may overlap
+  // so copy in the safe direction.
+  if (retained_suffix_count > 0) {
+    u64 src = retained_suffix_token_start;
+    u64 dst = edit.prefix_token_end + rescan_count;
+    if (dst <= src) {
+      for (u64 i = 0; i < retained_suffix_count; i += 1) {
+        Token t = buffer->tokens.tokens[src + i];
+        t.start = (u64)((i64)t.start + byte_delta);
+        t.end   = (u64)((i64)t.end   + byte_delta);
+        buffer->tokens.tokens[dst + i] = t;
+      }
+    } else {
+      for (u64 i = retained_suffix_count; i > 0; i -= 1) {
+        Token t = buffer->tokens.tokens[src + i - 1];
+        t.start = (u64)((i64)t.start + byte_delta);
+        t.end   = (u64)((i64)t.end   + byte_delta);
+        buffer->tokens.tokens[dst + i - 1] = t;
+      }
+    }
+  }
+
+  // Copy rescanned tokens.
+  for (u64 i = 0; i < rescan_count; i += 1) {
+    buffer->tokens.tokens[edit.prefix_token_end + i] = rescan_tokens[i];
+  }
+
+  buffer->tokens.count = new_total_tokens;
+
+  // --- Fix up first_token indices and update suffix incoming states. ---
+  u64 running = 0;
+  for (u64 line = 0; line < total_new_lines; line += 1) {
+    cache->lines[line].first_token = running;
+    running += cache->lines[line].token_count;
+  }
+
+  // If we converged, fix the incoming state of the convergence line to match
+  // (it already should, but be explicit).
+  if (converge_line < total_new_lines) {
+    cache->lines[converge_line].incoming = state;
+  }
+
+  cache->lines_scanned_last_update = lines_scanned;
+  ScratchEnd(scratch);
 }
