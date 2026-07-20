@@ -610,6 +610,26 @@ TEST(vim_insert_mode_typing_and_backspace) {
   Destroy(&f);
 }
 
+TEST(vim_typing_past_the_right_edge_scrolls) {
+  Fixture f = MakeFixture("");
+
+  i32 width = EditorPanelTextWidth(&f.ed, f.ed.focused_panel);
+  CHECK(width > 0);
+
+  Type(&f, "i");
+  for (i32 i = 0; i < width + 20; i += 1) Type(&f, "x");
+
+  // Typing moves the cursor without going through a command, so the scroll has
+  // to happen on the text path too -- not only where CommandExec does it.
+  View *view = ViewOf(&f);
+  u64 column = CursorColumn(&f);
+  CHECK(column > (u64)width);
+  CHECK(view->scroll_column > 0);
+  CHECK(column - view->scroll_column < (u64)width);
+
+  Destroy(&f);
+}
+
 TEST(vim_insert_utf8) {
   Fixture f = MakeFixture("");
 

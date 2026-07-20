@@ -261,7 +261,13 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
     }
   } else if (VimModeIsInsert(view->vim.mode)) {
     // Unbound printable keys are text.
-    if (ChordIsPrintable(chord)) InsertText(ed, view, buffer, chord.codepoint);
+    if (ChordIsPrintable(chord)) {
+      InsertText(ed, view, buffer, chord.codepoint);
+      // Typing moves the cursor without going through CommandExec, which is
+      // where every other cursor move gets its scroll. Without this, typing
+      // past the right edge walks the cursor off screen.
+      EditorScrollFocusedToCursor(ed);
+    }
     ClearPending(input);
   } else {
     ClearPending(input);
