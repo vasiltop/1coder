@@ -72,12 +72,14 @@ SDL translation explicitly handles mouse button, wheel, motion, window enter/lea
 Use explicit hit regions instead of implicit whole-window behavior:
 
 - buffer content,
+- panel gutter,
 - panel status line,
 - global bottom command-line/status row,
 - split borders,
 - and non-interactive background.
 
 The core resolves the region first, then decides the behavior. Nested split boundary discovery walks the split tree so the correct vertical-edge or status-line boundary is chosen even inside multi-level layouts.
+At any shared boundary, vertical split-edge hit testing takes precedence over the gutter.
 
 ## Behavior
 
@@ -90,6 +92,11 @@ The core resolves the region first, then decides the behavior. Nested split boun
 - Right-click extends the nearest endpoint of the current selection to the clicked position. If no selection exists, it behaves like a simple cursor placement.
 
 Selections always resolve through UTF-8-safe byte offsets; pointer placement never splits a codepoint or lands inside an invalid byte sequence.
+
+### Panel gutter
+
+- Clicking the panel gutter focuses that pane and places the cursor at column zero of the corresponding visible buffer line.
+- Dragging from the panel gutter starts a charwise selection at that line start and extends it live as the pointer moves.
 
 ### Mode semantics
 
