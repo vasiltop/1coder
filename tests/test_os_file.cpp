@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_WIN32)
+#  include <share.h>
+#  include <stdio.h>
+#endif
+
 TEST(os_file_write_then_read) {
   TempDir dir = MakeTempDir("rw");
   String8 path = OsPathJoin(dir.arena, dir.path, Str8Lit("hello.txt"));
@@ -19,6 +24,27 @@ TEST(os_file_write_then_read) {
 
   Destroy(&dir);
 }
+
+#if defined(_WIN32)
+TEST(os_file_read_allows_existing_writer) {
+  TempDir dir = MakeTempDir("shared_read");
+  String8 path = OsPathJoin(dir.arena, dir.path, Str8Lit("record.txt"));
+
+  FILE *writer = _fsopen(PushCStr(dir.arena, path), "wb", _SH_DENYNO);
+  CHECK(writer != nullptr);
+  if (writer != nullptr) {
+    CHECK_EQ(fwrite("message", 1, 7, writer), (size_t)7);
+    CHECK_EQ(fflush(writer), 0);
+
+    FileContents contents = OsFileRead(dir.arena, path);
+    CHECK(contents.ok);
+    CHECK_STR(contents.data, Str8Lit("message"));
+    fclose(writer);
+  }
+
+  Destroy(&dir);
+}
+#endif
 
 TEST(os_file_overwrite_replaces_contents) {
   TempDir dir = MakeTempDir("overwrite");

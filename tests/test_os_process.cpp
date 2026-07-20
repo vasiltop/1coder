@@ -202,7 +202,11 @@ TEST(os_process_find_executable_uses_path_for_bare_name) {
 
     String8 found = OsFindExecutable(arena, fake_name);
     CHECK(found.size > 0);
+#if defined(_WIN32)
+    CHECK(Str8Match(found, fake_path, StringMatch::CaseInsensitive));
+#else
     CHECK_STR(found, fake_path);
+#endif
   }
 
   ArenaRelease(arena);

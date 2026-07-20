@@ -142,7 +142,11 @@ void CheckCommand(const LspServerCommand &command, LspLanguage language, String8
                   String8 executable, String8 root, String8 *arguments, u64 argument_count) {
   CHECK_EQ((u64)command.language, (u64)language);
   CHECK_STR(command.language_id, language_id);
+#if defined(_WIN32)
+  CHECK(Str8Match(command.executable, executable, StringMatch::CaseInsensitive));
+#else
   CHECK_STR(command.executable, executable);
+#endif
   CHECK_STR(command.root, root);
   CHECK_EQ(command.argument_count, argument_count);
   for (u64 i = 0; i < argument_count; i += 1) CHECK_STR(command.arguments[i], arguments[i]);

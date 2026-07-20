@@ -17,6 +17,7 @@
 #if defined(_WIN32)
 #  include <fcntl.h>
 #  include <io.h>
+#  include <share.h>
 #  include <windows.h>
 #  include <shellapi.h>
 #else
@@ -352,7 +353,7 @@ FILE *OpenRecordFile(String8 path) {
   MultiByteToWideChar(CP_UTF8, 0, (const char *)path.str, (int)path.size, wide, need);
   wide[need] = 0;
 
-  FILE *result = _wfopen(wide, L"ab");
+  FILE *result = _wfsopen(wide, L"ab", _SH_DENYNO);
   ArenaRelease(arena);
   return result;
 #else
