@@ -1,6 +1,7 @@
 #include "buffers/buf_image.h"
 #include "editor/command.h"
 #include "editor/editor.h"
+#include "editor/multicursor.h"
 #include "input/mouse.h"
 #include "test.h"
 
@@ -79,6 +80,13 @@ MouseEvent MouseWheelAt(f32 grid_x, f32 grid_y, f32 wheel_x, f32 wheel_y,
 void SendMouse(Fixture *f, MouseAction action, MouseButton button, f32 grid_x, f32 grid_y,
                u8 click_count = 1) {
   EditorProcessMouse(&f->ed, MouseEventAt(action, button, grid_x, grid_y, click_count));
+}
+
+void SendMouseMod(Fixture *f, MouseAction action, MouseButton button, f32 grid_x, f32 grid_y,
+                  KeyMod modifiers, u8 click_count = 1) {
+  MouseEvent event = MouseEventAt(action, button, grid_x, grid_y, click_count);
+  event.modifiers = modifiers;
+  EditorProcessMouse(&f->ed, event);
 }
 
 void SendWheel(Fixture *f, f32 grid_x, f32 grid_y, f32 wheel_x, f32 wheel_y,
@@ -1271,6 +1279,114 @@ TEST(mouse_resize_corner_prefers_vertical_boundary) {
   CHECK(f.ed.focused_panel == right);
   CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::Boundary);
   CHECK_EQ((u32)f.ed.mouse.capture.boundary.axis, (u32)Axis2::X);
+
+  Destroy(&f);
+}
+
+// ---------------------------------------------------------------------------
+// Multiple cursors
+// ---------------------------------------------------------------------------
+
+TEST(mouse_ctrl_click_adds_and_removes_cursors) {
+  Fixture f = MakeFixture("alpha\nbeta\ngamma");
+
+  View *view = EditorFocusedView(&f.ed);
+  Buffer *buffer = EditorFocusedBuffer(&f.ed);
+  RectS32 text = EditorPanelTextRect(&f.ed, f.ed.focused_panel);
+
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f, (f32)text.y0 + 0.1f);
+  CHECK_EQ(ViewCursorCount(view), 1);
+
+  SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f,
+               (f32)text.y0 + 1.1f, KeyMod::Ctrl);
+  CHECK_EQ(ViewCursorCount(view), 2);
+
+  SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f,
+               (f32)text.y0 + 2.1f, KeyMod::Ctrl);
+  CHECK_EQ(ViewCursorCount(view), 3);
+
+  // Ctrl-clicking a cursor takes it away again.
+  SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f,
+               (f32)text.y0 + 1.1f, KeyMod::Ctrl);
+  CHECK_EQ(ViewCursorCount(view), 2);
+
+  // Including the primary, which hands over to one of the others.
+  SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f,
+               (f32)text.y0 + 0.1f, KeyMod::Ctrl);
+  CHECK_EQ(ViewCursorCount(view), 1);
+  CHECK_EQ(view->cursor, BufferOffsetFromLine(buffer, 2));
+
+  // The last cursor cannot be removed: the view always has a primary.
+  SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f,
+               (f32)text.y0 + 2.1f, KeyMod::Ctrl);
+  CHECK_EQ(ViewCursorCount(view), 1);
+
+  Destroy(&f);
+}
+
+TEST(mouse_ctrl_click_cursors_take_edits) {
+  Fixture f = MakeFixture("alpha\nbeta\ngamma");
+
+  RectS32 text = EditorPanelTextRect(&f.ed, f.ed.focused_panel);
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f, (f32)text.y0 + 0.1f);
+  SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f,
+               (f32)text.y0 + 1.1f, KeyMod::Ctrl);
+  SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f,
+               (f32)text.y0 + 2.1f, KeyMod::Ctrl);
+
+  EditorProcessSpec(&f.ed, "iX<Esc>");
+  CHECK_STR(TextOf(f.arena, EditorFocusedBuffer(&f.ed)), Str8Lit("Xalpha\nXbeta\nXgamma"));
+
+  Destroy(&f);
+}
+
+TEST(mouse_ctrl_click_past_line_end_adds_end_of_line_cursor) {
+  Fixture f = MakeFixture("alpha\nbeta");
+
+  View *view = EditorFocusedView(&f.ed);
+  Buffer *buffer = EditorFocusedBuffer(&f.ed);
+  RectS32 text = EditorPanelTextRect(&f.ed, f.ed.focused_panel);
+
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f, (f32)text.y0 + 1.1f);
+  // Clicking off the end of a line lands past its last character, which is a
+  // position normal mode cannot otherwise hold.
+  SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 30.0f,
+               (f32)text.y0 + 0.1f, KeyMod::Ctrl);
+  CHECK_EQ(ViewCursorCount(view), 2);
+
+  EditorProcessSpec(&f.ed, "iZ<Esc>");
+  CHECK_STR(TextOf(f.arena, buffer), Str8Lit("alphaZ\nZbeta"));
+
+  Destroy(&f);
+}
+
+TEST(mouse_plain_click_collapses_cursors) {
+  Fixture f = MakeFixture("alpha\nbeta\ngamma");
+
+  View *view = EditorFocusedView(&f.ed);
+  Buffer *buffer = EditorFocusedBuffer(&f.ed);
+  RectS32 text = EditorPanelTextRect(&f.ed, f.ed.focused_panel);
+
+  SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f,
+               (f32)text.y0 + 1.1f, KeyMod::Ctrl);
+  CHECK_EQ(ViewCursorCount(view), 2);
+
+  // Pointing somewhere definite starts over, or the next keystroke would edit
+  // places the user did not just point at.
+  SendMouse(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f, (f32)text.y0 + 2.1f);
+  CHECK_EQ(ViewCursorCount(view), 1);
+  CHECK_EQ(view->cursor, BufferOffsetFromLine(buffer, 2));
+
+  Destroy(&f);
+}
+
+TEST(mouse_ctrl_click_does_not_begin_a_drag) {
+  Fixture f = MakeFixture("alpha\nbeta\ngamma");
+
+  RectS32 text = EditorPanelTextRect(&f.ed, f.ed.focused_panel);
+  SendMouseMod(&f, MouseAction::Press, MouseButton::Left, (f32)text.x0 + 0.1f,
+               (f32)text.y0 + 1.1f, KeyMod::Ctrl);
+  CHECK_EQ((u32)f.ed.mouse.capture.kind, (u32)MouseCaptureKind::None);
 
   Destroy(&f);
 }

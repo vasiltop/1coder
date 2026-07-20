@@ -47,6 +47,29 @@ bool ViewAddCursor(View *view, const Buffer *buffer, u64 offset) {
   return true;
 }
 
+bool ViewRemoveCursorAt(View *view, const Buffer *buffer, u64 offset) {
+  // The view must keep a primary, so the last cursor cannot be taken away.
+  if (view->extra_count == 0) return false;
+
+  u64 clamped = ViewClampCursorAllowLineEnd(buffer, offset);
+
+  if (view->cursor == clamped) {
+    // Promote the first secondary rather than leaving the view headless.
+    InstallCursor(view, &view->extras[0]);
+    for (u64 i = 1; i < view->extra_count; i += 1) view->extras[i - 1] = view->extras[i];
+    view->extra_count -= 1;
+    return true;
+  }
+
+  for (u64 i = 0; i < view->extra_count; i += 1) {
+    if (view->extras[i].offset != clamped) continue;
+    for (u64 j = i + 1; j < view->extra_count; j += 1) view->extras[j - 1] = view->extras[j];
+    view->extra_count -= 1;
+    return true;
+  }
+  return false;
+}
+
 void MultiCursorNormalize(View *view, const Buffer *buffer) {
   if (view->extra_count == 0) {
     view->cursor = ViewClampCursorToMode(view, buffer, view->cursor);
