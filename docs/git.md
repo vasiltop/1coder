@@ -19,7 +19,7 @@ below.
 | `Enter` | Open the file, or show a commit from the log |
 | `l` | Open `[git-log]` |
 | `c` | Prompt for `:git-commit ` |
-| `g` | Refresh |
+| `R` | Refresh |
 | `F` | Pull (honours Args) |
 | `P` | Push (honours Args) |
 
