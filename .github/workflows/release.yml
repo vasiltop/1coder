@@ -94,6 +94,11 @@ jobs:
       - name: Build release
         run: just release
 
+      # Packaging a binary that never passed the suite is the one failure this
+      # workflow cannot take back once the assets are published.
+      - name: Test release build
+        run: ./build-release/editor_tests
+
       - name: Package binary
         run: |
           set -euo pipefail

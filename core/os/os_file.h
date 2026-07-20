@@ -6,6 +6,11 @@
 
 // Thin file and directory access. Lives in core rather than behind SDL so that
 // buffers can be loaded and saved in tests with no window and no SDL link.
+//
+// Every path handed back uses '/' as the separator, on Windows too: Win32
+// accepts forward slashes on input and only emits backslashes, so converting
+// once here keeps the rest of the editor from having to know about either.
+// Paths coming *in* may use either separator.
 
 struct FileContents {
   String8 data;

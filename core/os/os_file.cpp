@@ -462,6 +462,20 @@ String8 PushUtf8(Arena *arena, const wchar_t *w) {
   return String8{out, (u64)need - 1};
 }
 
+// Win32 hands back backslashes. Everything above the os layer -- the explorer,
+// the search results, the status line -- then has to cope with two separators
+// meaning the same thing, so they are rewritten once here instead. Win32
+// accepts forward slashes on the way back in, so nothing is lost.
+//
+// Rewrites in place, which is safe because every caller has just pushed the
+// string onto an arena of its own.
+String8 NormalizeSeparators(String8 path) {
+  for (u64 i = 0; i < path.size; i += 1) {
+    if (path.str[i] == '\\') path.str[i] = '/';
+  }
+  return path;
+}
+
 DWORD PathAttributes(String8 path) {
   TempArena scratch = ScratchBegin();
   DWORD attrs = GetFileAttributesW(PushWide(scratch.arena, path));
@@ -719,7 +733,7 @@ String8 OsGetCwd(Arena *arena) {
 
   wchar_t *buffer = PushArrayNoZero(scratch.arena, wchar_t, (u64)need);
   String8 result = String8{nullptr, 0};
-  if (GetCurrentDirectoryW(need, buffer) != 0) result = PushUtf8(arena, buffer);
+  if (GetCurrentDirectoryW(need, buffer) != 0) result = NormalizeSeparators(PushUtf8(arena, buffer));
 
   ScratchEnd(scratch);
   return result;
@@ -733,7 +747,9 @@ String8 OsPathAbsolute(Arena *arena, String8 path) {
   String8 result = String8{nullptr, 0};
   if (need != 0) {
     wchar_t *buffer = PushArrayNoZero(scratch.arena, wchar_t, (u64)need);
-    if (GetFullPathNameW(wpath, need, buffer, nullptr) != 0) result = PushUtf8(arena, buffer);
+    if (GetFullPathNameW(wpath, need, buffer, nullptr) != 0) {
+      result = NormalizeSeparators(PushUtf8(arena, buffer));
+    }
   }
 
   ScratchEnd(scratch);
