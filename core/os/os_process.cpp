@@ -312,12 +312,27 @@ void TerminateWindowsProcessTree(DWORD root_pid) {
   }
   CloseHandle(snapshot);
 
+  // Windows reuses pids aggressively and th32ParentProcessID is never validated
+  // against the parent's lifetime, so a dead parent's pid handed to a new
+  // process turns this walk into a cycle -- and a cycle grows `ordered` faster
+  // than the index advances, so the loop never ends. Skipping pids already
+  // queued keeps it bounded by the size of the snapshot.
   std::vector<DWORD> ordered;
   ordered.push_back(root_pid);
   for (size_t index = 0; index < ordered.size(); index += 1) {
     DWORD parent = ordered[index];
     for (const PROCESSENTRY32W &process : processes) {
-      if (process.th32ParentProcessID == parent) ordered.push_back(process.th32ProcessID);
+      if (process.th32ParentProcessID != parent) continue;
+      // The idle process reports itself as its own parent.
+      if (process.th32ProcessID == parent) continue;
+      bool seen = false;
+      for (DWORD known : ordered) {
+        if (known == process.th32ProcessID) {
+          seen = true;
+          break;
+        }
+      }
+      if (!seen) ordered.push_back(process.th32ProcessID);
     }
   }
 
@@ -826,6 +841,10 @@ bool OsProcessHasExited(OsProcess *process) {
 void OsProcessTerminate(OsProcess *process) {
   OsProcessImpl *impl = GetImpl(process);
   if (!impl) return;
+  // Once the child has been reaped its pid belongs to the OS again, and both
+  // paths below address the process by pid rather than by handle. Signalling it
+  // then would land on whatever process inherited the number.
+  if (impl->waited) return;
 
 #if defined(_WIN32)
   if (impl->job_handle != nullptr) {
