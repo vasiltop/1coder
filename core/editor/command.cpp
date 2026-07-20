@@ -1608,9 +1608,9 @@ static void PromptCompile(Editor *ed) {
   ScratchEnd(scratch);
 }
 
-// Shows the compile buffer in a horizontal split (:split / <leader>h): if some
-// window already displays it, focus that window; otherwise open it stacked
-// below the current one (Axis2::Y).
+// Shows the compile buffer side by side: if some window already displays it,
+// focus that window; otherwise open it in a vertical split (Axis2::X --
+// :vsplit / <leader>v).
 static void ShowCompileBuffer(Editor *ed, View *origin, BufferHandle handle) {
   if (!ed || handle.index == 0) return;
 
@@ -1626,7 +1626,7 @@ static void ShowCompileBuffer(Editor *ed, View *origin, BufferHandle handle) {
   }
 
   EditorPushJump(ed, origin);
-  if (!EditorSplit(ed, Axis2::Y)) {
+  if (!EditorSplit(ed, Axis2::X)) {
     EditorShowBuffer(ed, handle);
     return;
   }
