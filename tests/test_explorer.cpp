@@ -466,13 +466,21 @@ TEST(explorer_dash_climbs_and_lands_on_the_child) {
 TEST(explorer_dash_at_the_root_does_nothing) {
   EditorFixture f = MakeEditorFixture("explorer_root");
 
-  BufferHandle root = ExplorerBufferOpen(&f.ed, Str8Lit("/"));
+  // The topmost directory is "/" on POSIX but a drive root on Windows, so it
+  // has to be taken from the machine rather than written down.
+#if defined(_WIN32)
+  String8 root_dir = Str8Prefix(OsGetCwd(f.arena), 3);  // "C:/"
+#else
+  String8 root_dir = Str8Lit("/");
+#endif
+
+  BufferHandle root = ExplorerBufferOpen(&f.ed, root_dir);
   CHECK(root.index != 0);
   EditorShowBuffer(&f.ed, root);
 
-  // The parent of "/" is "/", so this must not push a jump or churn the buffer.
+  // The root is its own parent, so this must not push a jump or churn buffers.
   Keys(&f, "-");
-  CHECK_STR(ExplorerBufferDir(FocusedBuffer(&f)), Str8Lit("/"));
+  CHECK_STR(ExplorerBufferDir(FocusedBuffer(&f)), root_dir);
 
   Destroy(&f);
 }

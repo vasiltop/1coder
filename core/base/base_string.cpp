@@ -213,7 +213,17 @@ String8 Str8PathDir(String8 path) {
   u64 back = Str8FindLastChar(path, '\\');
   if (back != path.size && (slash == path.size || back > slash)) slash = back;
 #endif
-  return (slash == path.size) ? String8{nullptr, 0} : Str8Prefix(path, slash);
+  if (slash == path.size) return String8{nullptr, 0};
+
+#if defined(_WIN32)
+  // "C:/" is a drive root and has no parent, so it answers empty the way "/"
+  // does. The prefix would otherwise be "C:", which names the current directory
+  // on that drive rather than its root -- and the explorer would treat it as
+  // one more level to walk up into.
+  if (slash == 2 && path.str[1] == ':') return String8{nullptr, 0};
+#endif
+
+  return Str8Prefix(path, slash);
 }
 
 String8 Str8PathExt(String8 path) {

@@ -83,15 +83,13 @@ TEST(search_walk_survives_a_deep_tree) {
   // recursing into a subdirectory would discard everything found so far.
   Tree tree = MakeTree("deep");
 
-  TempArena scratch = ScratchBegin1(tree.arena);
-  String8 cmd = PushStr8F(scratch.arena,
-                          "mkdir -p '%.*s/a/b/c/d/e' && for i in 1 2 3 4 5; do "
-                          "printf 'x\\n' > \"%.*s/a/b/c/d/e/f$i.cpp\"; done",
-                          (int)tree.root.size, (char *)tree.root.str, (int)tree.root.size,
-                          (char *)tree.root.str);
-  int rc = system((const char *)cmd.str);
-  (void)rc;
-  ScratchEnd(scratch);
+  CHECK(OsMakeDirs(TempPath(&tree.dir, "a/b/c/d/e")));
+  for (int i = 1; i <= 5; i += 1) {
+    TempArena scratch = ScratchBegin1(tree.arena);
+    String8 path = PushStr8F(scratch.arena, "a/b/c/d/e/f%d.cpp", i);
+    CHECK(OsFileWrite(OsPathJoin(scratch.arena, tree.root, path), Str8Lit("x\n")));
+    ScratchEnd(scratch);
+  }
 
   PathList files = SearchWalkFiles(tree.arena, tree.root);
   CHECK(ListContains(files, "a/b/c/d/e/f1.cpp"));
