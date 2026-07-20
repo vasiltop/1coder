@@ -36,7 +36,6 @@ static const String8 kCppTypes[] = {
     Str8LitComp("wchar_t"), Str8LitComp("char8_t"), Str8LitComp("char16_t"),
     Str8LitComp("char32_t"),Str8LitComp("short"),   Str8LitComp("int"),
     Str8LitComp("long"),    Str8LitComp("float"),   Str8LitComp("double"),
-    Str8LitComp("size_t"),  Str8LitComp("ptrdiff_t"),
 };
 
 static const String8 kCppConstants[] = {
@@ -165,8 +164,6 @@ static const String8 kPyTypes[] = {
 
 static const String8 kPyConstants[] = {
     Str8LitComp("True"),    Str8LitComp("False"),   Str8LitComp("None"),
-    Str8LitComp("self"),    Str8LitComp("cls"),     Str8LitComp("__name__"),
-    Str8LitComp("__file__"),
 };
 
 static const KeywordGroup kPyGroups[] = {
@@ -208,7 +205,6 @@ static const String8 kRustTypes[] = {
 
 static const String8 kRustConstants[] = {
     Str8LitComp("true"),    Str8LitComp("false"),   Str8LitComp("None"),
-    Str8LitComp("Some"),    Str8LitComp("Ok"),       Str8LitComp("Err"),
 };
 
 static const KeywordGroup kRustGroups[] = {
