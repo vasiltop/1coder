@@ -77,6 +77,9 @@ void Str8ListPush(Arena *arena, String8List *list, String8 s);
 // Path helpers, used by the file buffer and later by the explorer.
 [[nodiscard]] String8 Str8PathBase(String8 path);       // "a/b/c.txt" -> "c.txt"
 [[nodiscard]] String8 Str8PathDir(String8 path);        // "a/b/c.txt" -> "a/b"
+// A path with no parent: "/" on POSIX, "C:/" on Windows. Note that "C:" is not
+// one -- it names the current directory on that drive, not the drive's root.
+[[nodiscard]] bool Str8PathIsRoot(String8 path);
 [[nodiscard]] String8 Str8PathExt(String8 path);        // "a/b/c.txt" -> "txt"
 
 // ---------------------------------------------------------------------------

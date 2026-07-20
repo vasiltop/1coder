@@ -89,8 +89,10 @@ BufferHandle ExplorerBufferOpen(Editor *ed, String8 dir) {
   String8 absolute = OsPathAbsolute(scratch.arena, dir);
 
   // Trailing separators would defeat the dedupe: "/src" and "/src/" must be the
-  // same buffer. The root is left alone, since "" is not a directory.
-  while (absolute.size > 1 && absolute.str[absolute.size - 1] == '/') {
+  // same buffer. A root keeps its separator, since neither "" nor "C:" names a
+  // directory.
+  while (!Str8PathIsRoot(absolute) && absolute.size > 1 &&
+         absolute.str[absolute.size - 1] == '/') {
     absolute = Str8Chop(absolute, 1);
   }
 

@@ -207,23 +207,28 @@ String8 Str8PathBase(String8 path) {
   return (slash == path.size) ? path : Str8Skip(path, slash + 1);
 }
 
+bool Str8PathIsRoot(String8 path) {
+#if defined(_WIN32)
+  // A drive root: "C:/" or "C:\".
+  if (path.size == 3 && path.str[1] == ':' && (path.str[2] == '/' || path.str[2] == '\\')) {
+    return true;
+  }
+#endif
+  return path.size == 1 && path.str[0] == '/';
+}
+
 String8 Str8PathDir(String8 path) {
+  // A root has no parent. Without this "C:/" would yield "C:", which names the
+  // current directory on that drive rather than its root, giving the explorer
+  // one phantom level to walk up into.
+  if (Str8PathIsRoot(path)) return String8{nullptr, 0};
+
   u64 slash = Str8FindLastChar(path, '/');
 #if defined(_WIN32)
   u64 back = Str8FindLastChar(path, '\\');
   if (back != path.size && (slash == path.size || back > slash)) slash = back;
 #endif
-  if (slash == path.size) return String8{nullptr, 0};
-
-#if defined(_WIN32)
-  // "C:/" is a drive root and has no parent, so it answers empty the way "/"
-  // does. The prefix would otherwise be "C:", which names the current directory
-  // on that drive rather than its root -- and the explorer would treat it as
-  // one more level to walk up into.
-  if (slash == 2 && path.str[1] == ':') return String8{nullptr, 0};
-#endif
-
-  return Str8Prefix(path, slash);
+  return (slash == path.size) ? String8{nullptr, 0} : Str8Prefix(path, slash);
 }
 
 String8 Str8PathExt(String8 path) {
