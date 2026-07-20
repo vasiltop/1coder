@@ -44,7 +44,7 @@ struct UndoStack {
   u64 pos;       // records [0, pos) are applied; [pos, count) are undone-and-redoable
   u32 next_group;
   u32 open_group;
-  b32 group_open;
+  u32 group_depth;  // 0 when no group is open; see UndoBeginGroup
   u64 group_start_count; // count when the current group began; used by BufferSetFinalNewline
   Arena *record_arena;  // exclusive to the record array, so it grows in place
   Arena *text_arena;    // holds record text; popped when redo history is discarded
@@ -59,8 +59,11 @@ void UndoInit(UndoStack *undo, Arena *record_arena, Arena *text_arena,
 // Discards all history. Text storage is reclaimed.
 void UndoClear(UndoStack *undo);
 
-// Records sharing an open group undo together. Groups do not nest; a second
-// Begin without an End is ignored.
+// Records sharing an open group undo together. Groups nest by depth: the
+// outermost Begin opens the group and the matching End closes it, so a caller
+// that groups several edits can itself be called from inside a larger grouped
+// action -- an insert-mode session spanning a multi-cursor pass, say -- without
+// either one cutting the other short. An unmatched End is ignored.
 void UndoBeginGroup(UndoStack *undo);
 void UndoEndGroup(UndoStack *undo);
 

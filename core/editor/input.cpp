@@ -59,36 +59,17 @@ void RecordChord(InputState *input, KeyChord chord) {
   input->record_count += 1;
 }
 
-// Inserts a typed character. Not a command, because there is one of these per
-// printable codepoint and binding them all would be absurd.
-void InsertText(Editor *ed, View *view, Buffer *buffer, u32 codepoint) {
-  u8 encoded[4];
-  u32 length = Utf8Encode(encoded, codepoint);
-  String8 text = String8{encoded, length};
-
-  if (view->vim.mode == VimMode::Replace) {
-    // Replace mode overwrites the character under the cursor instead of
-    // pushing it along, but still stops at the end of the line.
-    u64 line_end = BufferLineEnd(buffer, BufferLineFromOffset(buffer, view->cursor));
-    u64 end = (view->cursor < line_end) ? BufferNextCodepoint(buffer, view->cursor)
-                                        : view->cursor;
-    RangeU64 range = RangeU64{view->cursor, end};
-    if (BufferEditBlocked(buffer, range)) return;
-    BufferReplace(ed, buffer, range, text, view->cursor, view->cursor + length);
-  } else {
-    RangeU64 range = RangeU64{view->cursor, view->cursor};
-    if (BufferEditBlocked(buffer, range)) return;
-    BufferInsert(ed, buffer, view->cursor, text, view->cursor, view->cursor + length);
-  }
-
-  ViewSetCursor(view, buffer, view->cursor + length);
-}
-
 }  // namespace
 
 namespace {
 
 [[nodiscard]] Keymap *ModeKeymap(Editor *ed, const View *view) {
+  // Placing cursors is not a mode of its own: it layers over normal mode so
+  // that every motion stays available for aiming at the next position.
+  if (view->placing && view->vim.mode == VimMode::Normal && ed->cursor_place_map) {
+    return ed->cursor_place_map;
+  }
+
   switch (view->vim.mode) {
     case VimMode::Insert:
     case VimMode::Replace:
@@ -284,13 +265,12 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
       return;
     }
   } else if (VimModeIsInsert(view->vim.mode)) {
-    // Unbound printable keys are text.
+    // Unbound printable keys are text. Routed through CommandExec like
+    // everything else, so typing picks up the scroll-to-cursor that every other
+    // cursor move gets -- without it, typing past the right edge walks the
+    // cursor off screen.
     if (ChordIsPrintable(chord)) {
-      InsertText(ed, view, buffer, chord.codepoint);
-      // Typing moves the cursor without going through CommandExec, which is
-      // where every other cursor move gets its scroll. Without this, typing
-      // past the right edge walks the cursor off screen.
-      EditorScrollFocusedToCursor(ed);
+      CommandExec(ed, CommandId::insert_char, String8{nullptr, 0}, chord);
     }
     ClearPending(input);
   } else {

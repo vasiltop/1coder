@@ -31,6 +31,12 @@ config toggle.
   a charwise selection; double click selects the word or matching-bracket
   range; triple click selects the line; right click extends the nearest
   selection edge, or places the cursor if nothing is selected.
+- **Ctrl + left click:** adds a cursor where it lands, or removes the one
+  already there — the last cursor is never removed. Clicking off the end of a
+  line adds a cursor past its last character, as `A` does while placing. Dragging
+  from the new cursor pulls out a selection under it while the others stay put. A
+  plain click collapses back to one cursor. See
+  [multiple cursors](#multiple-cursors).
 - **Panel gutter:** click goes to column 0 of that line; drag starts a
   charwise selection from line start.
 - **Command line:** click places the command-line cursor; drag selects there;
@@ -99,6 +105,32 @@ window is reused; otherwise it opens in a vertical split beside the current
 one (`:vsplit` / `<leader>v`). With no argument it opens the command window
 prefilled with the last command, or `make -k` if none has been run yet.
 `:recompile` and `<leader>rc` rerun the last command.
+
+## Multiple cursors
+
+`<leader>mc` starts placing cursors and marks the position you are on. Every
+motion still works while placing, so you aim with `j`, `w`, `/foo` or anything
+else; `c` marks the position you land on, and marking one twice takes it back.
+`A` marks the end of the current line — normal mode cannot rest past the last
+character, so this is the only way to put a cursor there. `<CR>` makes the marks
+live, `<Esc>` abandons them.
+
+Placement is staged rather than instant so that the whole motion vocabulary is
+available for choosing positions, instead of a handful of add-a-cursor keys.
+
+Ctrl + left click adds and removes cursors directly, without placement — the
+faster route when the positions are already on screen.
+
+Once cursors are live, everything fans out: `x`, `dw`, `ciwfoo<Esc>` and plain
+typing all happen at every cursor, and the whole pass is one undo step. `v` and
+`V` give each cursor its own selection, so `vlld` or `vac` acts at all of them;
+ctrl-drag pulls out a selection under a freshly added cursor. Cursors that meet
+merge into one, as do selections that grow into each other. `<Esc>` in normal
+mode drops back to a single cursor — so from insert mode it takes two, one to
+leave insert and one to collapse.
+
+Commands that are properties of the window rather than of a cursor — `u`, `.`,
+macros, `/`, splits, scrolling — run once however many cursors are live.
 
 ## The command window
 

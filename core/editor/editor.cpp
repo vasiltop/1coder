@@ -29,6 +29,9 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   ed->insert_map = KeymapAlloc(arena, ed->global_map);
   ed->visual_map = KeymapAlloc(arena, ed->global_map);
   ed->operator_pending_map = KeymapAlloc(arena, ed->global_map);
+  // Placement layers over normal mode rather than replacing it, so marking
+  // positions is done with the ordinary motions.
+  ed->cursor_place_map = KeymapAlloc(arena, ed->normal_map);
 
   ed->cwd = OsGetCwd(arena);
   ed->status_arena = ArenaAlloc(MB(1));

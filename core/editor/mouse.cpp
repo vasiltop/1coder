@@ -1,6 +1,7 @@
 #include "editor/editor.h"
 
 #include "buffers/buf_image.h"
+#include "editor/multicursor.h"
 #include "vim/vim_motions.h"
 #include "vim/vim_operators.h"
 
@@ -396,6 +397,31 @@ void HandleLeftPanelPress(Editor *ed, MouseHit hit, const MouseEvent &event) {
     ClearCapture(&ed->mouse);
     return;
   }
+
+  // Ctrl-click adds a cursor where it lands, or takes away the one already
+  // there. The added one becomes primary and begins a drag, so dragging from it
+  // grows a selection under that cursor while the others stay put.
+  if (HasFlag(event.modifiers, KeyMod::Ctrl)) {
+    if (ViewRemoveCursorAt(view, buffer, hit.offset)) {
+      ClearCapture(&ed->mouse);
+      MultiCursorNormalize(view, buffer);
+      ScrollViewToOwnCursor(ed, hit.panel, view, buffer);
+      return;
+    }
+
+    ViewAddCursorAsPrimary(view, buffer, hit.offset);
+    ScrollViewToOwnCursor(ed, hit.panel, view, buffer);
+    // Character granularity only: a ctrl-drag extends the new cursor's own
+    // selection, and word/line gestures are left to plain clicks.
+    BeginPanelCapture(ed, hit, MouseButton::Left, MouseSelectionKind::Character);
+    return;
+  }
+
+  // A plain click is a fresh start: it puts the cursor somewhere definite, so
+  // leaving other cursors behind would make the next keystroke edit places the
+  // user did not just point at. Placement is left alone -- clicking is simply
+  // another way to move between marks.
+  if (!view->placing) ViewClearExtraCursors(view);
 
   if (VimModeIsVisual(view->vim.mode)) CollapseSelection(view, buffer);
 

@@ -84,6 +84,15 @@ dependencies, so LSP features are testable in the test binary. Process pipes
 live in `core/os/`, and the editor thread drains incoming messages during its
 event loop, keeping frame times predictable.
 
+**Commands do not know about multiple cursors.** A command is written against
+`view->cursor` — one cursor — and `CommandExecArgs` runs it once per cursor,
+swapping each through the primary slot. So motions, operators and typed text all
+fan out without being told, and a command added later inherits the behaviour.
+Cursors are visited highest-offset first, so an edit at one of them cannot
+invalidate the offsets of those not yet visited. The exceptions are marked
+`CmdSingle` in `COMMAND_LIST`: undo, `.`, macros, splits and the rest of what
+belongs to the window rather than to a cursor.
+
 ## The os layer
 
 `core/os/os_file.h` is the only place that talks to the filesystem. Two

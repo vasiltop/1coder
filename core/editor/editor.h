@@ -113,6 +113,9 @@ struct Editor {
   Keymap *insert_map;
   Keymap *visual_map;
   Keymap *operator_pending_map;
+  // Active while placing cursors. Parented to the normal map, so it claims only
+  // the keys that mark, confirm and cancel.
+  Keymap *cursor_place_map;
 
   InputState input;
   MouseState mouse;

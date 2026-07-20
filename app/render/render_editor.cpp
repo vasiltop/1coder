@@ -121,52 +121,83 @@ void DrawSelectionOnLine(RenderContext *ctx, const Buffer *buffer, const View *v
 
 // Draws the cursor in the cell whose top-left corner is (x, y). Shared by
 // panels and the command window, so the shape always reflects the mode of
-// whichever view owns it.
-void DrawCursorCell(RenderContext *ctx, const Buffer *buffer, const View *view, f32 x, f32 y,
-                    bool focused) {
+// whichever view owns it. `offset` says which character the block covers --
+// passed rather than read off the view, so a view with several cursors can
+// draw each of them through here.
+void DrawCursorCell(RenderContext *ctx, const Buffer *buffer, const View *view, u64 offset, f32 x,
+                    f32 y, bool focused, Vec4F32 color) {
   RectF32 cell = {x, y, x + ctx->cell_width, y + ctx->cell_height};
 
   if (!focused) {
     // An unfocused window shows where its cursor sits without competing with
     // the focused one, so it gets an outline rather than a solid block.
     constexpr f32 t = 1.0f;
-    DrawRect(ctx->draw, RectF32{cell.x0, cell.y0, cell.x1, cell.y0 + t}, ctx->theme.cursor);
-    DrawRect(ctx->draw, RectF32{cell.x0, cell.y1 - t, cell.x1, cell.y1}, ctx->theme.cursor);
-    DrawRect(ctx->draw, RectF32{cell.x0, cell.y0, cell.x0 + t, cell.y1}, ctx->theme.cursor);
-    DrawRect(ctx->draw, RectF32{cell.x1 - t, cell.y0, cell.x1, cell.y1}, ctx->theme.cursor);
+    DrawRect(ctx->draw, RectF32{cell.x0, cell.y0, cell.x1, cell.y0 + t}, color);
+    DrawRect(ctx->draw, RectF32{cell.x0, cell.y1 - t, cell.x1, cell.y1}, color);
+    DrawRect(ctx->draw, RectF32{cell.x0, cell.y0, cell.x0 + t, cell.y1}, color);
+    DrawRect(ctx->draw, RectF32{cell.x1 - t, cell.y0, cell.x1, cell.y1}, color);
     return;
   }
 
   if (VimModeIsInsert(view->vim.mode)) {
-    DrawRect(ctx->draw, RectF32{cell.x0, cell.y0, cell.x0 + 2.0f, cell.y1}, ctx->theme.cursor);
+    DrawRect(ctx->draw, RectF32{cell.x0, cell.y0, cell.x0 + 2.0f, cell.y1}, color);
     return;
   }
 
   // A block, with the covered character redrawn in the background colour so it
   // stays legible through it.
-  DrawRect(ctx->draw, cell, ctx->theme.cursor);
+  DrawRect(ctx->draw, cell, color);
 
-  DecodedCodepoint under = BufferDecodeAt(buffer, view->cursor);
+  DecodedCodepoint under = BufferDecodeAt(buffer, offset);
   if (under.codepoint != 0 && under.codepoint != '\n') {
     DrawGlyph(ctx->draw, under.codepoint, cell.x0, cell.y0 + ctx->atlas->ascent,
               ctx->theme.cursor_text);
   }
 }
 
+// Where an offset lands on screen, or false when it is scrolled out of sight.
+[[nodiscard]] bool CursorCellOrigin(RenderContext *ctx, const Buffer *buffer, const View *view,
+                                    u64 offset, RectF32 text_rect, RangeU64 visible, i32 columns,
+                                    f32 *out_x, f32 *out_y) {
+  u64 line = BufferLineFromOffset(buffer, offset);
+  if (line < visible.min || line >= visible.max) return false;
+
+  u64 column = BufferColumnFromOffset(buffer, offset);
+  if (column < view->scroll_column || column - view->scroll_column >= (u64)columns) return false;
+
+  *out_x = ColumnX(ctx, text_rect, column, view->scroll_column);
+  *out_y = text_rect.y0 + (f32)(line - visible.min) * ctx->cell_height;
+  return true;
+}
+
 void DrawCursor(RenderContext *ctx, const Buffer *buffer, const View *view, RectF32 text_rect,
                 RangeU64 visible, i32 columns, bool focused) {
-  u64 cursor_line = ViewCursorLine(view, buffer);
-  if (cursor_line < visible.min || cursor_line >= visible.max) return;
+  f32 x = 0.0f;
+  f32 y = 0.0f;
 
-  u64 cursor_column = ViewCursorColumn(view, buffer);
-  if (cursor_column < view->scroll_column ||
-      cursor_column - view->scroll_column >= (u64)columns) {
-    return;
+  // Positions marked but not yet confirmed get an underline rather than a
+  // block: they are where cursors *would* go, and must not be mistaken for
+  // cursors that are already there.
+  for (u64 i = 0; i < view->pending_count; i += 1) {
+    if (!CursorCellOrigin(ctx, buffer, view, view->pending[i], text_rect, visible, columns, &x, &y))
+      continue;
+    RectF32 cell = {x, y, x + ctx->cell_width, y + ctx->cell_height};
+    DrawRect(ctx->draw, RectF32{cell.x0, cell.y1 - 2.0f, cell.x1, cell.y1},
+             ctx->theme.cursor_pending);
   }
 
-  f32 x = ColumnX(ctx, text_rect, cursor_column, view->scroll_column);
-  f32 y = text_rect.y0 + (f32)(cursor_line - visible.min) * ctx->cell_height;
-  DrawCursorCell(ctx, buffer, view, x, y, focused);
+  // Secondaries first, primary last, so the primary wins wherever they overlap.
+  for (u64 i = 0; i < view->extra_count; i += 1) {
+    if (!CursorCellOrigin(ctx, buffer, view, view->extras[i].offset, text_rect, visible, columns,
+                          &x, &y))
+      continue;
+    DrawCursorCell(ctx, buffer, view, view->extras[i].offset, x, y, focused,
+                   ctx->theme.cursor_secondary);
+  }
+
+  if (CursorCellOrigin(ctx, buffer, view, view->cursor, text_rect, visible, columns, &x, &y)) {
+    DrawCursorCell(ctx, buffer, view, view->cursor, x, y, focused, ctx->theme.cursor);
+  }
 }
 
 void DrawStatusLine(RenderContext *ctx, Editor *ed, const Buffer *buffer, const View *view,
@@ -188,8 +219,19 @@ void DrawStatusLine(RenderContext *ctx, Editor *ed, const Buffer *buffer, const 
                            BufferIsReadOnly(buffer) ? " [ro]" : "");
   DrawText(ctx->draw, left, rect.x0, baseline, color);
 
+  // How many cursors are live, or that marks are being placed -- both are
+  // states the user has to be able to see they are in before they type.
+  String8 cursors = Str8Lit("");
+  if (view->placing) {
+    cursors = PushStr8F(scratch.arena, "PLACE %llu  ", (unsigned long long)view->pending_count);
+  } else if (view->extra_count > 0) {
+    cursors = PushStr8F(scratch.arena, "%llu cursors  ",
+                        (unsigned long long)(view->extra_count + 1));
+  }
+
   String8 mode = VimModeName(view->vim.mode);
-  String8 right = PushStr8F(scratch.arena, "%.*s  %llu:%llu ", (int)mode.size, (char *)mode.str,
+  String8 right = PushStr8F(scratch.arena, "%.*s%.*s  %llu:%llu ", (int)cursors.size,
+                            (char *)cursors.str, (int)mode.size, (char *)mode.str,
                             (unsigned long long)(ViewCursorLine(view, buffer) + 1),
                             (unsigned long long)(ViewCursorColumn(view, buffer) + 1));
   f32 right_x = rect.x1 - (f32)Utf8Length(right) * ctx->cell_width;
@@ -297,8 +339,19 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
   if (image) DrawImagePlaceholder(ctx, image, text_rect);
 
   RangeU64 visible = ViewVisibleLines(view, buffer, rows);
-  RangeU64 selection = ViewSelection(view, buffer);
-  bool has_selection = VimModeIsVisual(view->vim.mode) && !RangeEmpty(selection);
+  // One selection per cursor. Gathered once for the whole panel rather than
+  // recomputed per line, the same way search matches are.
+  RangeU64 selections[kMaxCursors + 1];
+  u64 selection_count = 0;
+  if (VimModeIsVisual(view->vim.mode)) {
+    RangeU64 primary = ViewSelection(view, buffer);
+    if (!RangeEmpty(primary)) selections[selection_count++] = primary;
+    for (u64 i = 0; i < view->extra_count; i += 1) {
+      RangeU64 range = ViewSelectionFor(view, buffer, view->extras[i].offset,
+                                        view->extras[i].anchor);
+      if (!RangeEmpty(range)) selections[selection_count++] = range;
+    }
+  }
   u64 cursor_line = ViewCursorLine(view, buffer);
 
   // Search matches, gathered once for the visible span rather than per line.
@@ -335,8 +388,8 @@ void RenderPanel(RenderContext *ctx, Editor *ed, Panel *panel, bool focused) {
       DrawSelectionOnLine(ctx, buffer, view, line, matches[i], text_rect, top, columns,
                           ctx->theme.search_match);
     }
-    if (has_selection) {
-      DrawSelectionOnLine(ctx, buffer, view, line, selection, text_rect, top, columns,
+    for (u64 i = 0; i < selection_count; i += 1) {
+      DrawSelectionOnLine(ctx, buffer, view, line, selections[i], text_rect, top, columns,
                           ctx->theme.selection);
     }
 
@@ -413,7 +466,8 @@ void RenderCommandLine(RenderContext *ctx, Editor *ed, f32 pixel_width, f32 pixe
       // Same cursor as a panel: a block in normal mode, a bar in insert, with
       // the covered character redrawn through it.
       u64 column = BufferColumnFromOffset(command, view->cursor) + prompt_columns;
-      DrawCursorCell(ctx, command, view, (f32)column * ctx->cell_width, rect.y0, true);
+      DrawCursorCell(ctx, command, view, view->cursor, (f32)column * ctx->cell_width, rect.y0, true,
+                     ctx->theme.cursor);
     }
   } else if (ed->status_message.size > 0) {
     DrawText(ctx->draw, ed->status_message, 0.0f, baseline, ctx->theme.message);

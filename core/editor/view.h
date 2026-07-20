@@ -14,9 +14,26 @@
 // screen" logic is plain arithmetic that can be tested without a window. The
 // renderer only multiplies these by glyph metrics.
 
+// The most cursors a view will carry, placement marks included. A fixed inline
+// array rather than an allocation, matching the jump list, so a View stays
+// trivially resettable by `*view = View{}`.
+inline constexpr u64 kMaxCursors = 128;
+
+// One of a view's several cursors. The fields mirror the primary cursor's on
+// the View, because fanning a command out works by swapping one of these into
+// those fields and running the ordinary single-cursor code.
+struct Cursor {
+  u64 offset;
+  u64 preferred_column;
+  u64 anchor;  // visual anchor, as vim.visual_anchor is for the primary
+};
+
 struct View {
   BufferHandle buffer;
 
+  // The primary cursor. A view with no secondary cursors is the ordinary case
+  // and every command reads and writes these fields directly; multi-cursor is
+  // built on top by swapping each secondary through them in turn.
   u64 cursor;  // byte offset
 
   // Column the cursor "wants". Moving down a short line and back onto a long
@@ -29,6 +46,18 @@ struct View {
   u64 scroll_column;
 
   VimState vim;
+
+  // Secondary cursors. Empty in the single-cursor case, which is what lets
+  // every existing command stay written against the primary alone.
+  Cursor extras[kMaxCursors];
+  u64 extra_count;
+
+  // Positions marked while placing cursors, before they are confirmed. Kept
+  // apart from `extras` so an abandoned placement leaves nothing behind, and so
+  // the renderer can show marks in a shape that reads as "not live yet".
+  u64 pending[kMaxCursors];
+  u64 pending_count;
+  bool placing;
 
   // Per-window jump list for <C-o> / <C-i>.
   JumpList jumps;
@@ -51,9 +80,22 @@ void ViewSetCursorLineColumn(View *view, const Buffer *buffer, u64 line, u64 col
 // allow one past the end.
 [[nodiscard]] u64 ViewClampCursorToMode(const View *view, const Buffer *buffer, u64 offset);
 
+// Clamps into the buffer while always permitting the position just past a
+// line's last character. Multi-cursor uses this rather than the mode-aware
+// clamp: a cursor set may deliberately hold end-of-line positions, since
+// putting one at the end of one line and one at the start of another is exactly
+// what several cursors are for.
+[[nodiscard]] u64 ViewClampCursorAllowLineEnd(const Buffer *buffer, u64 offset);
+
 // The selected span in visual mode, empty otherwise. Linewise selection expands
 // to whole lines.
 [[nodiscard]] RangeU64 ViewSelection(const View *view, const Buffer *buffer);
+
+// The same, for a cursor other than the primary. The mode is a property of the
+// view, but the anchor is per-cursor, so several cursors in visual mode each
+// select their own span.
+[[nodiscard]] RangeU64 ViewSelectionFor(const View *view, const Buffer *buffer, u64 cursor,
+                                        u64 anchor);
 
 // ---------------------------------------------------------------------------
 // Scrolling

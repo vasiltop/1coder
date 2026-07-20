@@ -22,6 +22,7 @@ void EditorInstallDefaultBindings(Editor *ed) {
   Keymap *insert = ed->insert_map;
   Keymap *visual = ed->visual_map;
   Keymap *pending = ed->operator_pending_map;
+  Keymap *place = ed->cursor_place_map;
 
   // ---- global: work in every mode ----
   KeymapBind(global, "<C-w>v", CommandId::split_vertical);
@@ -174,6 +175,26 @@ void EditorInstallDefaultBindings(Editor *ed) {
 
   // compile-mode.nvim's recompile binding.
   KeymapBind(normal, "<leader>rc", CommandId::recompile);
+
+  // ---- multiple cursors ----
+  // Placement is staged: <leader>mc starts it and marks the first position,
+  // motions move between positions, <CR> makes the marks live and <Esc>
+  // abandons them. The placement map is parented to the normal one, so every
+  // motion bound above stays available for aiming.
+  //
+  // Marking repeats on a bare `c`: a mark is made once per position, and a
+  // leader sequence each time would be tiring. It shadows the change operator,
+  // but only for as long as placement is under way -- and changing text is not
+  // what `c` is for while choosing where the cursors go.
+  KeymapBind(normal, "<leader>mc", CommandId::cursor_place);
+  KeymapBind(place, "c", CommandId::cursor_place_mark);
+  // `A` marks the end of the line, borrowing vim's append-at-end-of-line
+  // spelling. Normal mode cannot rest past the last character, so without this
+  // there is no way to mark one cursor at the end of a line and another at the
+  // start of the next -- which is much of the point of having several.
+  KeymapBind(place, "A", CommandId::cursor_place_mark_line_end);
+  KeymapBind(place, "<CR>", CommandId::cursor_place_confirm);
+  KeymapBind(place, "<Esc>", CommandId::cursor_place_cancel);
 
   // ---- text objects ----
   // `i` and `a` are prefixes: the chord after them names the object. They apply

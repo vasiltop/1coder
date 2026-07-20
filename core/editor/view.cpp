@@ -38,6 +38,11 @@ u64 ViewClampCursorToMode(const View *view, const Buffer *buffer, u64 offset) {
   return Min(clamped, line_end);
 }
 
+u64 ViewClampCursorAllowLineEnd(const Buffer *buffer, u64 offset) {
+  u64 clamped = Min(offset, BufferSize(buffer));
+  return Min(clamped, BufferLineEnd(buffer, BufferLineFromOffset(buffer, clamped)));
+}
+
 void ViewSetCursor(View *view, const Buffer *buffer, u64 offset) {
   view->cursor = ViewClampCursorToMode(view, buffer, offset);
   view->preferred_column = BufferColumnFromOffset(buffer, view->cursor);
@@ -64,9 +69,13 @@ u64 ViewCursorColumn(const View *view, const Buffer *buffer) {
 }
 
 RangeU64 ViewSelection(const View *view, const Buffer *buffer) {
-  if (!VimModeIsVisual(view->vim.mode)) return RangeU64{view->cursor, view->cursor};
+  return ViewSelectionFor(view, buffer, view->cursor, view->vim.visual_anchor);
+}
 
-  RangeU64 range = RangeMake(view->vim.visual_anchor, view->cursor);
+RangeU64 ViewSelectionFor(const View *view, const Buffer *buffer, u64 cursor, u64 anchor) {
+  if (!VimModeIsVisual(view->vim.mode)) return RangeU64{cursor, cursor};
+
+  RangeU64 range = RangeMake(anchor, cursor);
 
   if (view->vim.mode == VimMode::VisualLine) {
     // Linewise selection covers whole lines regardless of where in them the

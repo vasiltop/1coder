@@ -142,12 +142,38 @@ TEST(undo_groups_do_not_merge_with_neighbours) {
   Destroy(&f);
 }
 
-TEST(undo_nested_begin_group_is_ignored) {
+TEST(undo_groups_nest) {
   Fixture f = MakeFixture();
+
+  // An inner group closing must not end the outer one: this is what lets a
+  // multi-cursor pass wrap edits that already group themselves.
+  UndoBeginGroup(&f.undo);
+  PushInsert(&f, 0, Str8Lit("a"));
+
+  UndoBeginGroup(&f.undo);
+  PushInsert(&f, 1, Str8Lit("b"));
+  UndoEndGroup(&f.undo);
+
+  // Still inside the outer group, so this joins it too.
+  PushInsert(&f, 2, Str8Lit("c"));
+  UndoEndGroup(&f.undo);
+
+  PushInsert(&f, 3, Str8Lit("z"));  // outside, must be its own step
+
+  CHECK_EQ(UndoStepUndo(&f.undo).count, 1);
+  CHECK_EQ(UndoStepUndo(&f.undo).count, 3);
+  CHECK(!UndoCanUndo(&f.undo));
+
+  Destroy(&f);
+}
+
+TEST(undo_unmatched_end_group_is_ignored) {
+  Fixture f = MakeFixture();
+
+  UndoEndGroup(&f.undo);  // nothing open; must not underflow the depth
 
   UndoBeginGroup(&f.undo);
   PushInsert(&f, 0, Str8Lit("a"));
-  UndoBeginGroup(&f.undo);  // no-op, groups do not nest
   PushInsert(&f, 1, Str8Lit("b"));
   UndoEndGroup(&f.undo);
 

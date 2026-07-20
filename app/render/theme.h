@@ -13,6 +13,10 @@ struct Theme {
 
   Vec4F32 cursor;
   Vec4F32 cursor_text;      // the character sitting under a block cursor
+  // With several cursors, the primary stays the brightest so "where am I" is
+  // still answerable; pending marks are dimmer again, being not yet live.
+  Vec4F32 cursor_secondary;
+  Vec4F32 cursor_pending;
   Vec4F32 selection;
   Vec4F32 search_match;     // every `/` match while the highlight is on
   Vec4F32 current_line;     // a faint wash, not a hard highlight
