@@ -7,8 +7,8 @@ Native LSP support brings code navigation (jump to definition, type, implementat
 completions, diagnostics, formatting and rename. Language servers are auto-detected
 from `PATH`.
 
-![1coder editing its own source, with a live grep for "ViewScroll" narrowing in a
-vertical split alongside](docs/screenshot.png)
+![1coder editing its own source, with a live grep for "test" narrowing in a
+vertical split alongside](docs/screenshot-live-grep.png)
 
 ## Install
 
