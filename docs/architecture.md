@@ -20,8 +20,7 @@ core (static lib) ──┤
 ```
 
 `editor_core` links no graphics library at all, so a stray SDL include in
-`core/` fails the build — `rg '#include.*SDL' core -g '*.{cpp,h}'` checks
-it, and CI runs that check.
+`core/` fails the build — `just boundary` checks it, and CI runs that check.
 
 **Syntax highlighting lives entirely in `core/text/`.** Language definitions,
 the lexical scanner, the per-line state cache, and the `TokenKind` enum are
