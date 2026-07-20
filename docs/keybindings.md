@@ -87,10 +87,10 @@ current file's directory. See [search](search.md) and [explorer](explorer.md).
 
 `:compile <command>` runs any shell command and streams its output into a
 `[compile]` buffer. If that buffer is already visible in some window, that
-window is reused; otherwise it opens in a stacked split below the current one,
-as Emacs' compilation window does. With no argument it opens the command window
-prefilled with the last command, or `make -k` if none has been run yet.
-`:recompile` and `<leader>rc` rerun the last command.
+window is reused; otherwise it opens in a vertical split beside the current
+one (`:vsplit`). With no argument it opens the command window prefilled with
+the last command, or `make -k` if none has been run yet. `:recompile` and
+`<leader>rc` rerun the last command.
 
 ## The command window
 

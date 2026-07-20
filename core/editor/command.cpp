@@ -1608,9 +1608,9 @@ static void PromptCompile(Editor *ed) {
   ScratchEnd(scratch);
 }
 
-// Shows the compile buffer the way Emacs does: if some window already displays
-// it, focus that window; otherwise open it in a new stacked split (Emacs'
-// split-window-vertically -- Axis2::Y here).
+// Shows the compile buffer the way Emacs' compilation window often does: if
+// some window already displays it, focus that window; otherwise open it in a
+// new side-by-side split (Axis2::X -- :vsplit / <leader>v here).
 static void ShowCompileBuffer(Editor *ed, View *origin, BufferHandle handle) {
   if (!ed || handle.index == 0) return;
 
@@ -1626,7 +1626,7 @@ static void ShowCompileBuffer(Editor *ed, View *origin, BufferHandle handle) {
   }
 
   EditorPushJump(ed, origin);
-  if (!EditorSplit(ed, Axis2::Y)) {
+  if (!EditorSplit(ed, Axis2::X)) {
     EditorShowBuffer(ed, handle);
     return;
   }
