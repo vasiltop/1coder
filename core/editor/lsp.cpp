@@ -313,6 +313,31 @@ bool SendPendingOpens(EditorLsp *state, EditorLspSession *session) {
   return changed;
 }
 
+bool RestartFailedSession(EditorLsp *state, EditorLspSession *session) {
+  if (state == nullptr || session == nullptr ||
+      LspClientGetState(&session->client) != LspClientState::Failed) {
+    return false;
+  }
+  if (!LspClientCanRestart(&session->client)) {
+    SetFailureStatus(state->editor, session, Str8Lit("language server restart exhausted"));
+    return false;
+  }
+
+  for (EditorLspDocument &document : state->documents) {
+    if (document.session == session) document.did_open_sent = false;
+  }
+  session->failure_status_applied = false;
+  if (!LspClientRestart(&session->client)) {
+    session->last_state = LspClientGetState(&session->client);
+    SetFailureStatus(state->editor, session, Str8Lit("failed to restart language server"));
+    return false;
+  }
+
+  session->last_state = LspClientGetState(&session->client);
+  EditorSetStatus(state->editor, Str8Lit("LSP: language server restarting; retry action"));
+  return true;
+}
+
 void SendDidClose(EditorLsp *state, EditorLspDocument *document) {
   if (state == nullptr || document == nullptr || document->session == nullptr ||
       !document->did_open_sent) {
@@ -632,7 +657,12 @@ u64 EditorLspSendRequestJson(Editor *ed, Buffer *buffer, String8 method, String8
                              LspClientResponseProc response_proc, void *response_user_data) {
   EditorLsp *state = GetState(ed);
   EditorLspDocument *document = FindDocument(state, buffer);
-  if (document == nullptr || document->session == nullptr || !document->did_open_sent) return 0;
+  if (document == nullptr || document->session == nullptr) return 0;
+  if (LspClientGetState(&document->session->client) == LspClientState::Failed) {
+    (void)RestartFailedSession(state, document->session);
+    return 0;
+  }
+  if (!document->did_open_sent) return 0;
 
   LspClientRequestContext context = {};
   context.document_id = document->id;
@@ -657,6 +687,6 @@ void EditorLspApplyClientFailureStatus(Editor *ed, Buffer *buffer) {
   EditorLspDocument *document = FindDocument(state, buffer);
   if (document == nullptr || document->session == nullptr) return;
   if (LspClientGetState(&document->session->client) == LspClientState::Failed) {
-    SetFailureStatus(ed, document->session, Str8Lit("language server failed"));
+    (void)RestartFailedSession(state, document->session);
   }
 }

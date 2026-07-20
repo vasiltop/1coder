@@ -352,13 +352,13 @@ FILE *OpenRecordFile(String8 path) {
   MultiByteToWideChar(CP_UTF8, 0, (const char *)path.str, (int)path.size, wide, need);
   wide[need] = 0;
 
-  FILE *result = _wfopen(wide, L"wb");
+  FILE *result = _wfopen(wide, L"ab");
   ArenaRelease(arena);
   return result;
 #else
   Arena *arena = ArenaAlloc(KB(64));
   if (arena == nullptr) return nullptr;
-  FILE *result = fopen(PushCStr(arena, path), "wb");
+  FILE *result = fopen(PushCStr(arena, path), "ab");
   ArenaRelease(arena);
   return result;
 #endif

@@ -494,4 +494,67 @@ TEST(lsp_e2e_real_process_navigation_formatting_and_rename_workspace_edit) {
   });
 }
 
+TEST(lsp_e2e_real_process_restarts_once_after_crash) {
+  ArenaScope scope;
+  ScopedFixtureDir fixture(scope.arena, "restart");
+  EditorScope editor(scope.arena);
+  ScenarioLayout layout = PrepareScenarioLayout(scope.arena, fixture.path, "restart.jsonl");
+  String8 file_path = WriteTextFile(scope.arena, layout.root, Str8Lit("main.cpp"), Str8Lit("value\n"));
+
+  ScopedWorkingDirectory cwd(scope.arena);
+  CHECK(cwd.Set(layout.root));
+  ScopedEnvVar path(scope.arena, "PATH", PrependPath(scope.arena, layout.bin));
+  ScopedEnvVar mode(scope.arena, kFakeLspModeEnv, Str8Lit("crash"));
+  ScopedEnvVar record(scope.arena, kFakeLspRecordEnv, layout.record_path);
+#if defined(_WIN32)
+  ScopedEnvVar pathext(scope.arena, "PATHEXT", Str8Lit(".EXE"));
+#endif
+
+  EditorLspConfig config = RealRegistryConfig();
+  EditorLspEnable(&editor.ed, &config);
+  Buffer *buffer = OpenAndShowFileBuffer(&editor.ed, file_path);
+  FocusBuffer(&editor.ed, buffer, 0);
+
+  WaitForEditor(&editor.ed, layout.record_path, "initial didOpen", [&]() {
+    (void)EditorTick(&editor.ed);
+    return BufferDidOpen(&editor.ed, buffer);
+  });
+
+  EditorProcessSpec(&editor.ed, "<C-Space>");
+  WaitForEditor(&editor.ed, layout.record_path, "first server crash", [&]() {
+    (void)EditorTick(&editor.ed);
+    EditorLspBufferInfo info = {};
+    return EditorLspGetBufferInfo(&editor.ed, buffer, &info) &&
+           LspClientGetState(info.client) == LspClientState::Failed;
+  });
+
+  EditorProcessSpec(&editor.ed, "<C-Space>");
+  EditorLspBufferInfo info = {};
+  CHECK(EditorLspGetBufferInfo(&editor.ed, buffer, &info));
+  CHECK_EQ((u64)LspClientGetState(info.client), (u64)LspClientState::Initializing);
+  CHECK(!info.did_open_sent);
+  CHECK(ToStdString(editor.ed.status_message).find("restarting") != std::string::npos);
+
+  WaitForEditor(&editor.ed, layout.record_path, "restart didOpen", [&]() {
+    (void)EditorTick(&editor.ed);
+    return BufferDidOpen(&editor.ed, buffer) &&
+           RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("initialize")) == 2 &&
+           RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("textDocument/didOpen")) == 2;
+  });
+
+  EditorProcessSpec(&editor.ed, "<C-Space>");
+  WaitForEditor(&editor.ed, layout.record_path, "second server crash", [&]() {
+    (void)EditorTick(&editor.ed);
+    EditorLspBufferInfo current = {};
+    return EditorLspGetBufferInfo(&editor.ed, buffer, &current) &&
+           LspClientGetState(current.client) == LspClientState::Failed &&
+           !LspClientCanRestart(current.client);
+  });
+
+  EditorProcessSpec(&editor.ed, "<C-Space>");
+  CHECK_EQ(RecordedMethodCount(scope.arena, layout.record_path, Str8Lit("initialize")), (u64)2);
+  EditorProcessSpec(&editor.ed, "A!<Esc>");
+  CHECK_STR(BufferTextAll(scope.arena, buffer), Str8Lit("value!"));
+}
+
 }  // namespace
