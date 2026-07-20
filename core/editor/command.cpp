@@ -32,6 +32,11 @@ void LeaveInsertMode(Editor *ed, View *view, Buffer *buffer) {
   ViewSetCursor(view, buffer, BufferPrevCodepoint(buffer, view->cursor));
 }
 
+void LeaveVisualMode(View *view, Buffer *buffer, VimMode fallback) {
+  view->vim.mode = VimConsumeVisualExitMode(&view->vim, fallback);
+  ViewSetCursor(view, buffer, view->cursor);
+}
+
 // Runs a motion, either moving the cursor or resolving a pending operator.
 // Every motion command funnels through here, which is what makes operators and
 // motions compose without per-pair code.
@@ -100,13 +105,21 @@ void BeginOperator(CommandArgs *a, OperatorKind op) {
     // rather than waiting for a motion.
     RangeU64 range = ViewSelection(view, buffer);
     bool linewise = (vim->mode == VimMode::VisualLine);
+    bool temporary_visual = VimHasMouseVisualReturnMode(vim);
+    VimMode exit_mode = VimConsumeVisualExitMode(
+        vim, (op == OperatorKind::Change) ? VimMode::Insert : VimMode::Normal);
 
-    vim->mode = VimMode::Normal;
     u64 cursor = VimApplyOperator(ed, view, buffer, op, range, linewise);
 
     if (op == OperatorKind::Change) {
-      EnterInsertMode(ed, view, buffer, cursor);
+      if (temporary_visual) {
+        vim->mode = exit_mode;
+        ViewSetCursor(view, buffer, cursor);
+      } else {
+        EnterInsertMode(ed, view, buffer, cursor);
+      }
     } else {
+      vim->mode = exit_mode;
       ViewSetCursor(view, buffer, cursor);
     }
     return;
@@ -150,8 +163,7 @@ void EnterVisual(CommandArgs *a, VimMode mode) {
   View *view = a->view;
   // Re-pressing the same visual key leaves visual mode, as vim does.
   if (view->vim.mode == mode) {
-    view->vim.mode = VimMode::Normal;
-    ViewSetCursor(view, a->buffer, view->cursor);
+    LeaveVisualMode(view, a->buffer, VimMode::Normal);
     return;
   }
   view->vim.visual_anchor = view->cursor;
@@ -243,6 +255,8 @@ static void Cmd_normal_mode(CommandArgs *a) {
 
   if (VimModeIsInsert(view->vim.mode)) {
     LeaveInsertMode(a->ed, view, buffer);
+  } else if (VimModeIsVisual(view->vim.mode)) {
+    LeaveVisualMode(view, buffer, VimMode::Normal);
   } else {
     view->vim.mode = VimMode::Normal;
     ViewSetCursor(view, buffer, view->cursor);
@@ -711,14 +725,8 @@ static void Cmd_delete_word_before(CommandArgs *a) {
 // <C-r>{reg} in insert mode, which is how vim pastes without leaving it.
 static void Cmd_insert_register(CommandArgs *a) {
   Register reg = EditorGetRegister(a->ed, RegisterNormalise(a->view->vim.pending_register));
-  if (reg.text.size == 0) return;
-
-  TempArena scratch = ScratchBegin();
-  String8 text = PushStr8Copy(scratch.arena, reg.text);
-  BufferInsert(a->ed, a->buffer, a->view->cursor, text, a->view->cursor,
-               a->view->cursor + text.size);
-  ViewSetCursor(a->view, a->buffer, a->view->cursor + text.size);
-  ScratchEnd(scratch);
+  u64 cursor = VimInsertRegister(a->ed, a->view, a->buffer, a->view->cursor, reg);
+  ViewSetCursor(a->view, a->buffer, cursor);
 }
 
 // ---------------------------------------------------------------------------
@@ -1236,7 +1244,7 @@ static void Cmd_command_line_escape(CommandArgs *a) {
   View *view = ed->command_view;
   if (!view) return;
 
-  if (VimModeIsInsert(view->vim.mode)) {
+  if (view->vim.mode != VimMode::Normal) {
     Cmd_normal_mode(a);
     return;
   }

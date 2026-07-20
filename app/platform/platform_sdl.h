@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include "input/keys.h"
+#include "input/mouse.h"
 
 // The SDL boundary for input.
 //
@@ -18,3 +19,15 @@
 // separately as text events so that keyboard layout and dead keys are the
 // platform's problem rather than ours.
 [[nodiscard]] KeyChord KeyChordFromSDLKeyEvent(const SDL_KeyboardEvent *event);
+
+struct SDLMouseTranslateContext {
+  SDL_Window *window;
+  SDL_Renderer *renderer;
+  f32 cell_width;
+  f32 cell_height;
+  KeyMod modifiers;
+  MouseButton captured_button;
+};
+
+[[nodiscard]] MouseEvent MouseEventFromSDLEvent(const SDL_Event *event,
+                                                const SDLMouseTranslateContext &context);
