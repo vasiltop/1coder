@@ -1,5 +1,6 @@
 #include "editor/command.h"
 
+#include "buffers/buf_compile.h"
 #include "buffers/buf_explorer.h"
 #include "editor/filetype.h"
 #include "editor/lsp.h"
@@ -1862,9 +1863,6 @@ static void Cmd_explorer_apply(CommandArgs *a) { ExplorerApplyPending(a->ed, a->
 // Compile
 // ---------------------------------------------------------------------------
 
-BufferHandle CompileBufferRun(Editor *ed, String8 command);
-String8 CompilePrefillCommand(const Editor *ed);
-
 static void PromptCompile(Editor *ed) {
   TempArena scratch = ScratchBegin();
   String8 prefill = CompilePrefillCommand(ed);
@@ -1920,6 +1918,10 @@ static void Cmd_recompile(CommandArgs *a) {
   if (handle.index == 0) return;
   ShowCompileBuffer(a->ed, a->view, handle);
 }
+
+static void Cmd_next_error(CommandArgs *a) { (void)CompileNextError(a->ed, a->view); }
+
+static void Cmd_prev_error(CommandArgs *a) { (void)CompilePrevError(a->ed, a->view); }
 
 // ---------------------------------------------------------------------------
 // Meta listings

@@ -1,7 +1,9 @@
 #include "buffers/buf_compile.h"
 #include "editor/command.h"
 #include "editor/editor.h"
+#include "os/os_file.h"
 #include "test.h"
+#include "test_tempdir.h"
 
 #include <chrono>
 #include <thread>
@@ -11,17 +13,21 @@ namespace {
 struct Fixture {
   Arena *arena;
   Editor ed;
+  TempDir dir;
 };
 
 Fixture MakeFixture() {
   Fixture f = {};
   f.arena = ArenaAlloc(MB(64));
+  f.dir = MakeTempDir("compile");
   EditorInit(&f.ed, f.arena, RectS32{0, 0, 80, 25});
+  f.ed.cwd = PushStr8Copy(f.arena, f.dir.path);
   return f;
 }
 
 void Destroy(Fixture *f) {
   EditorDestroy(&f->ed);
+  Destroy(&f->dir);
   ArenaRelease(f->arena);
 }
 
@@ -78,6 +84,32 @@ constexpr const char *kEchoCommand = "echo compile-token-42";
 #else
 constexpr const char *kEchoCommand = "echo compile-token-42";
 #endif
+
+void WriteDiagSources(Fixture *f) {
+  CHECK(OsFileWrite(TempPath(&f->dir, "a.cpp"), Str8Lit("int main() {\n  return 0;\n}\n")));
+  CHECK(OsFileWrite(TempPath(&f->dir, "b.cpp"), Str8Lit("void f() {\n  int x;\n  int y;\n}\n")));
+  CHECK(OsFileWrite(TempPath(&f->dir, "diags.txt"),
+                    Str8Lit("a.cpp:1:1: error: first\nb.cpp:2:3: error: second\n")));
+}
+
+String8 DiagCatCommand(Fixture *f) {
+#if defined(_WIN32)
+  return PushStr8F(f->arena, "type diags.txt");
+#else
+  return PushStr8F(f->arena, "cat diags.txt");
+#endif
+}
+
+u64 FindCompileLineContaining(Buffer *buffer, String8 needle) {
+  for (u64 line = 0; line < BufferLineCount(buffer); line += 1) {
+    TempArena scratch = ScratchBegin();
+    String8 text = BufferLineText(scratch.arena, buffer, line);
+    bool found = Contains(text, needle);
+    ScratchEnd(scratch);
+    if (found) return line;
+  }
+  return BufferLineCount(buffer);
+}
 
 }  // namespace
 
@@ -187,6 +219,98 @@ TEST(compile_empty_prefills_last_command) {
   Buffer *command = BufferFromHandle(&f.ed.buffers, f.ed.command_buffer);
   String8 line = BufferTextAll(f.arena, command);
   CHECK_STR(line, PushStr8F(f.arena, "compile %s", kEchoCommand));
+
+  Destroy(&f);
+}
+
+TEST(compile_next_prev_error_circular) {
+  Fixture f = MakeFixture();
+  WriteDiagSources(&f);
+
+  String8 cmd = DiagCatCommand(&f);
+  CommandExecLine(&f.ed, PushStr8F(f.arena, "compile %.*s", (int)cmd.size, (char *)cmd.str));
+  CHECK(WaitForCompileIdle(&f));
+  CHECK(OutputContains(CompileBuffer(&f), Str8Lit("a.cpp:1:1: error: first")));
+  CHECK(OutputContains(CompileBuffer(&f), Str8Lit("b.cpp:2:3: error: second")));
+
+  // First next lands on a.cpp:1:1.
+  EditorProcessSpec(&f.ed, "<leader>ne");
+  Buffer *focused = EditorFocusedBuffer(&f.ed);
+  CHECK(focused != nullptr);
+  CHECK(Contains(focused->name, Str8Lit("a.cpp")) || Contains(focused->path, Str8Lit("a.cpp")));
+  View *view = EditorFocusedView(&f.ed);
+  CHECK_EQ(ViewCursorLine(view, focused), 0);
+  CHECK_EQ(ViewCursorColumn(view, focused), 0);
+
+  // Second next advances to b.cpp:2:3.
+  EditorProcessSpec(&f.ed, "<leader>ne");
+  focused = EditorFocusedBuffer(&f.ed);
+  CHECK(Contains(focused->name, Str8Lit("b.cpp")) || Contains(focused->path, Str8Lit("b.cpp")));
+  view = EditorFocusedView(&f.ed);
+  CHECK_EQ(ViewCursorLine(view, focused), 1);
+  CHECK_EQ(ViewCursorColumn(view, focused), 2);
+
+  // From the last error, next wraps to the first.
+  EditorProcessSpec(&f.ed, "<leader>ne");
+  focused = EditorFocusedBuffer(&f.ed);
+  CHECK(Contains(focused->name, Str8Lit("a.cpp")) || Contains(focused->path, Str8Lit("a.cpp")));
+  view = EditorFocusedView(&f.ed);
+  CHECK_EQ(ViewCursorLine(view, focused), 0);
+  CHECK_EQ(ViewCursorColumn(view, focused), 0);
+
+  // From the first, prev wraps to the last.
+  EditorProcessSpec(&f.ed, "<leader>pe");
+  focused = EditorFocusedBuffer(&f.ed);
+  CHECK(Contains(focused->name, Str8Lit("b.cpp")) || Contains(focused->path, Str8Lit("b.cpp")));
+  view = EditorFocusedView(&f.ed);
+  CHECK_EQ(ViewCursorLine(view, focused), 1);
+  CHECK_EQ(ViewCursorColumn(view, focused), 2);
+
+  Destroy(&f);
+}
+
+TEST(compile_enter_opens_error_under_cursor) {
+  Fixture f = MakeFixture();
+  WriteDiagSources(&f);
+
+  String8 cmd = DiagCatCommand(&f);
+  CommandExecLine(&f.ed, PushStr8F(f.arena, "compile %.*s", (int)cmd.size, (char *)cmd.str));
+  CHECK(WaitForCompileIdle(&f));
+
+  Buffer *compile = CompileBuffer(&f);
+  CHECK(EditorFocusedBuffer(&f.ed) == compile);
+
+  u64 line = FindCompileLineContaining(compile, Str8Lit("b.cpp:2:3"));
+  CHECK(line < BufferLineCount(compile));
+  ViewSetCursorLineColumn(EditorFocusedView(&f.ed), compile, line, 0);
+
+  EditorProcessSpec(&f.ed, "<CR>");
+  Buffer *focused = EditorFocusedBuffer(&f.ed);
+  CHECK(Contains(focused->name, Str8Lit("b.cpp")) || Contains(focused->path, Str8Lit("b.cpp")));
+  View *view = EditorFocusedView(&f.ed);
+  CHECK_EQ(ViewCursorLine(view, focused), 1);
+  CHECK_EQ(ViewCursorColumn(view, focused), 2);
+
+  Destroy(&f);
+}
+
+TEST(compile_next_error_with_no_matches_is_noop) {
+  Fixture f = MakeFixture();
+
+  CommandExecLine(&f.ed, PushStr8F(f.arena, "compile %s", kEchoCommand));
+  CHECK(WaitForCompileIdle(&f));
+  CHECK(EditorFocusedBuffer(&f.ed) == CompileBuffer(&f));
+
+  BufferHandle before = EditorFocusedBuffer(&f.ed)->handle;
+  u64 cursor = EditorFocusedView(&f.ed)->cursor;
+
+  EditorProcessSpec(&f.ed, "<leader>ne");
+  CHECK(BufferHandleEqual(EditorFocusedBuffer(&f.ed)->handle, before));
+  CHECK_EQ(EditorFocusedView(&f.ed)->cursor, cursor);
+
+  EditorProcessSpec(&f.ed, "<leader>pe");
+  CHECK(BufferHandleEqual(EditorFocusedBuffer(&f.ed)->handle, before));
+  CHECK_EQ(EditorFocusedView(&f.ed)->cursor, cursor);
 
   Destroy(&f);
 }
