@@ -57,10 +57,14 @@ struct CompilePayload {
 
   // Index into the last rebuilt error list. kNoErrorIndex means none yet.
   u64 error_index = kNoErrorIndex;
+  // 0-based line in the [compile] buffer painted as the current error. Cleared
+  // when a run restarts; set whenever next/prev/Enter lands on a locus.
+  u64 highlight_line = kNoErrorIndex;
 };
 
-CompilePayload *PayloadOf(Buffer *buffer) {
-  return buffer ? (CompilePayload *)buffer->user_data : nullptr;
+CompilePayload *PayloadOf(const Buffer *buffer) {
+  if (!buffer || buffer->kind != BufferKind::Compile) return nullptr;
+  return (CompilePayload *)buffer->user_data;
 }
 
 Buffer *FindCompileBuffer(Editor *ed) {
@@ -386,7 +390,59 @@ CompileErrorList RebuildErrors(Arena *arena, Buffer *buffer) {
   return list;
 }
 
-bool JumpToError(Editor *ed, View *origin, const CompileError *err) {
+// Moves every window showing the compile buffer onto `buffer_line` and centres
+// it, so next/prev error keeps the locus visible beside the source without
+// stealing focus.
+void RevealErrorInCompileViews(Editor *ed, Buffer *compile, u64 buffer_line) {
+  if (!ed || !compile) return;
+
+  CompilePayload *payload = PayloadOf(compile);
+  if (payload) payload->highlight_line = buffer_line;
+
+  Panel *first = PanelFirstLeaf(ed->root_panel);
+  for (Panel *leaf = first; leaf;) {
+    if (leaf->view && BufferHandleEqual(leaf->view->buffer, compile->handle)) {
+      ViewSetCursorLineColumn(leaf->view, compile, buffer_line, 0);
+      i32 height = EditorPanelTextHeight(ed, leaf);
+      if (height > 0) ViewCenterOnCursor(leaf->view, compile, height);
+    }
+    leaf = PanelNextLeaf(ed->root_panel, leaf);
+    if (leaf == first) break;
+  }
+}
+
+// Opens `handle` in a window that is not the compile buffer, so the compile
+// output stays on screen while the locus is shown beside it.
+void ShowLocusAwayFromCompile(Editor *ed, View *origin, Buffer *compile, BufferHandle handle) {
+  if (!ed || handle.index == 0) return;
+
+  View *focused = EditorFocusedView(ed);
+  bool focused_is_compile =
+      focused && compile && BufferHandleEqual(focused->buffer, compile->handle);
+
+  if (focused_is_compile) {
+    Panel *other = nullptr;
+    Panel *first = PanelFirstLeaf(ed->root_panel);
+    for (Panel *leaf = first; leaf;) {
+      if (leaf != ed->focused_panel && leaf->view) {
+        other = leaf;
+        break;
+      }
+      leaf = PanelNextLeaf(ed->root_panel, leaf);
+      if (leaf == first) break;
+    }
+    if (other) {
+      EditorFocusPanel(ed, other);
+    } else {
+      (void)EditorSplit(ed, Axis2::X);
+    }
+  }
+
+  if (origin) EditorPushJump(ed, origin);
+  EditorShowBuffer(ed, handle);
+}
+
+bool JumpToError(Editor *ed, View *origin, Buffer *compile, const CompileError *err) {
   if (!ed || !err || err->path.size == 0) return false;
 
   TempArena scratch = ScratchBegin();
@@ -402,8 +458,8 @@ bool JumpToError(Editor *ed, View *origin, const CompileError *err) {
     return false;
   }
 
-  if (origin) EditorPushJump(ed, origin);
-  EditorShowBuffer(ed, handle);
+  RevealErrorInCompileViews(ed, compile, err->buffer_line);
+  ShowLocusAwayFromCompile(ed, origin, compile, handle);
 
   View *target = EditorFocusedView(ed);
   Buffer *opened = EditorBufferForView(ed, target);
@@ -442,7 +498,7 @@ bool NavigateError(Editor *ed, View *origin, bool next) {
   }
 
   payload->error_index = index;
-  bool ok = JumpToError(ed, origin, &list.items[index]);
+  bool ok = JumpToError(ed, origin, buffer, &list.items[index]);
   ScratchEnd(scratch);
   return ok;
 }
@@ -459,7 +515,7 @@ void CompileSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
   for (u64 i = 0; i < list.count; i += 1) {
     if (list.items[i].buffer_line == cursor_line) {
       payload->error_index = i;
-      JumpToError(ed, view, &list.items[i]);
+      JumpToError(ed, view, buffer, &list.items[i]);
       ScratchEnd(scratch);
       return;
     }
@@ -529,6 +585,7 @@ BufferHandle CompileBufferRun(Editor *ed, String8 command) {
   payload->process = OsProcess{};
   payload->process_started = false;
   payload->error_index = kNoErrorIndex;
+  payload->highlight_line = kNoErrorIndex;
 
   EnsureCompileKeymap(ed, buffer);
 
@@ -582,3 +639,11 @@ void CompileBufferShutdown(Editor *ed) {
 bool CompileNextError(Editor *ed, View *origin) { return NavigateError(ed, origin, true); }
 
 bool CompilePrevError(Editor *ed, View *origin) { return NavigateError(ed, origin, false); }
+
+bool CompileHighlightLine(const Buffer *buffer, u64 *out_line) {
+  if (out_line) *out_line = 0;
+  const CompilePayload *payload = PayloadOf(buffer);
+  if (!payload || payload->highlight_line == kNoErrorIndex) return false;
+  if (out_line) *out_line = payload->highlight_line;
+  return true;
+}

@@ -30,7 +30,12 @@ void CompileRememberCommand(Editor *ed, String8 command);
 // Stops any in-flight compile process. Safe to call when none is running.
 void CompileBufferShutdown(Editor *ed);
 
-// Circular next/prev error navigation. Opens the matching file at line:col.
+// Circular next/prev error navigation. Opens the matching file at line:col in
+// a non-compile window and pans the compile window onto that diagnostic.
 // Returns false when there is no compile buffer or no parseable errors.
 [[nodiscard]] bool CompileNextError(Editor *ed, View *origin);
 [[nodiscard]] bool CompilePrevError(Editor *ed, View *origin);
+
+// The compile-buffer line currently marked as the active error, for painting.
+// False when no next/prev/Enter jump has set one yet.
+[[nodiscard]] bool CompileHighlightLine(const Buffer *buffer, u64 *out_line);

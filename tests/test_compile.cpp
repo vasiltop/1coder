@@ -1,4 +1,5 @@
 #include "buffers/buf_compile.h"
+#include "buffers/buf_explorer.h"
 #include "editor/command.h"
 #include "editor/editor.h"
 #include "os/os_file.h"
@@ -233,14 +234,37 @@ TEST(compile_next_prev_error_circular) {
   CHECK(OutputContains(CompileBuffer(&f), Str8Lit("a.cpp:1:1: error: first")));
   CHECK(OutputContains(CompileBuffer(&f), Str8Lit("b.cpp:2:3: error: second")));
 
-  // First next lands on a.cpp:1:1.
+  Buffer *compile = CompileBuffer(&f);
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
+
+  // First next lands on a.cpp:1:1, leaving the compile window open beside it.
   EditorProcessSpec(&f.ed, "<leader>ne");
   Buffer *focused = EditorFocusedBuffer(&f.ed);
   CHECK(focused != nullptr);
+  CHECK(focused != compile);
   CHECK(Contains(focused->name, Str8Lit("a.cpp")) || Contains(focused->path, Str8Lit("a.cpp")));
   View *view = EditorFocusedView(&f.ed);
   CHECK_EQ(ViewCursorLine(view, focused), 0);
   CHECK_EQ(ViewCursorColumn(view, focused), 0);
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
+
+  u64 first_line = FindCompileLineContaining(compile, Str8Lit("a.cpp:1:1"));
+  u64 highlight = 0;
+  CHECK(CompileHighlightLine(compile, &highlight));
+  CHECK_EQ(highlight, first_line);
+
+  Panel *compile_panel = nullptr;
+  Panel *first = PanelFirstLeaf(f.ed.root_panel);
+  for (Panel *leaf = first; leaf;) {
+    if (leaf->view && BufferHandleEqual(leaf->view->buffer, compile->handle)) {
+      compile_panel = leaf;
+      break;
+    }
+    leaf = PanelNextLeaf(f.ed.root_panel, leaf);
+    if (leaf == first) break;
+  }
+  CHECK(compile_panel != nullptr);
+  CHECK_EQ(ViewCursorLine(compile_panel->view, compile), first_line);
 
   // Second next advances to b.cpp:2:3.
   EditorProcessSpec(&f.ed, "<leader>ne");
@@ -249,6 +273,11 @@ TEST(compile_next_prev_error_circular) {
   view = EditorFocusedView(&f.ed);
   CHECK_EQ(ViewCursorLine(view, focused), 1);
   CHECK_EQ(ViewCursorColumn(view, focused), 2);
+
+  u64 second_line = FindCompileLineContaining(compile, Str8Lit("b.cpp:2:3"));
+  CHECK(CompileHighlightLine(compile, &highlight));
+  CHECK_EQ(highlight, second_line);
+  CHECK_EQ(ViewCursorLine(compile_panel->view, compile), second_line);
 
   // From the last error, next wraps to the first.
   EditorProcessSpec(&f.ed, "<leader>ne");
@@ -265,6 +294,56 @@ TEST(compile_next_prev_error_circular) {
   view = EditorFocusedView(&f.ed);
   CHECK_EQ(ViewCursorLine(view, focused), 1);
   CHECK_EQ(ViewCursorColumn(view, focused), 2);
+
+  Destroy(&f);
+}
+
+TEST(compile_next_error_pans_and_highlights_compile_window) {
+  Fixture f = MakeFixture();
+  WriteDiagSources(&f);
+
+  // Pad the diagnostics so the second error sits well below the viewport,
+  // forcing a scroll when next-error centres on it.
+  String8List lines = {};
+  Str8ListPush(f.arena, &lines, Str8Lit("a.cpp:1:1: error: first\n"));
+  for (u64 i = 0; i < 80; i += 1) {
+    Str8ListPush(f.arena, &lines, Str8Lit("note: padding\n"));
+  }
+  Str8ListPush(f.arena, &lines, Str8Lit("b.cpp:2:3: error: second\n"));
+  CHECK(OsFileWrite(TempPath(&f.dir, "diags.txt"), Str8ListJoin(f.arena, &lines, String8{})));
+
+  String8 cmd = DiagCatCommand(&f);
+  CommandExecLine(&f.ed, PushStr8F(f.arena, "compile %.*s", (int)cmd.size, (char *)cmd.str));
+  CHECK(WaitForCompileIdle(&f));
+
+  Buffer *compile = CompileBuffer(&f);
+  u64 second_line = FindCompileLineContaining(compile, Str8Lit("b.cpp:2:3"));
+  CHECK(second_line > 40);
+
+  EditorProcessSpec(&f.ed, "<leader>ne");
+  EditorProcessSpec(&f.ed, "<leader>ne");
+
+  Panel *compile_panel = nullptr;
+  Panel *first = PanelFirstLeaf(f.ed.root_panel);
+  for (Panel *leaf = first; leaf;) {
+    if (leaf->view && BufferHandleEqual(leaf->view->buffer, compile->handle)) {
+      compile_panel = leaf;
+      break;
+    }
+    leaf = PanelNextLeaf(f.ed.root_panel, leaf);
+    if (leaf == first) break;
+  }
+  CHECK(compile_panel != nullptr);
+  CHECK_EQ(ViewCursorLine(compile_panel->view, compile), second_line);
+  CHECK(compile_panel->view->scroll_line > 0);
+
+  u64 highlight = 0;
+  CHECK(CompileHighlightLine(compile, &highlight));
+  CHECK_EQ(highlight, second_line);
+
+  RangeU64 visible =
+      ViewVisibleLines(compile_panel->view, compile, EditorPanelTextHeight(&f.ed, compile_panel));
+  CHECK(second_line >= visible.min && second_line < visible.max);
 
   Destroy(&f);
 }
@@ -286,10 +365,16 @@ TEST(compile_enter_opens_error_under_cursor) {
 
   EditorProcessSpec(&f.ed, "<CR>");
   Buffer *focused = EditorFocusedBuffer(&f.ed);
+  CHECK(focused != compile);
   CHECK(Contains(focused->name, Str8Lit("b.cpp")) || Contains(focused->path, Str8Lit("b.cpp")));
   View *view = EditorFocusedView(&f.ed);
   CHECK_EQ(ViewCursorLine(view, focused), 1);
   CHECK_EQ(ViewCursorColumn(view, focused), 2);
+  CHECK_EQ(PanelLeafCount(f.ed.root_panel), 2);
+
+  u64 highlight = 0;
+  CHECK(CompileHighlightLine(compile, &highlight));
+  CHECK_EQ(highlight, line);
 
   Destroy(&f);
 }
@@ -311,6 +396,29 @@ TEST(compile_next_error_with_no_matches_is_noop) {
   EditorProcessSpec(&f.ed, "<leader>pe");
   CHECK(BufferHandleEqual(EditorFocusedBuffer(&f.ed)->handle, before));
   CHECK_EQ(EditorFocusedView(&f.ed)->cursor, cursor);
+
+  Destroy(&f);
+}
+
+TEST(compile_highlight_ignores_non_compile_buffers) {
+  Fixture f = MakeFixture();
+  WriteDiagSources(&f);
+
+  String8 cmd = DiagCatCommand(&f);
+  CommandExecLine(&f.ed, PushStr8F(f.arena, "compile %.*s", (int)cmd.size, (char *)cmd.str));
+  CHECK(WaitForCompileIdle(&f));
+  EditorProcessSpec(&f.ed, "<leader>ne");
+
+  Buffer *compile = CompileBuffer(&f);
+  u64 highlight = 0;
+  CHECK(CompileHighlightLine(compile, &highlight));
+
+  // Explorer (and every other kind) also carries user_data. Misreading that as
+  // a CompilePayload used to paint a blue wash on line 0 of the listing.
+  BufferHandle explorer = ExplorerBufferOpen(&f.ed, f.dir.path);
+  Buffer *listing = BufferFromHandle(&f.ed.buffers, explorer);
+  CHECK(listing != nullptr);
+  CHECK(!CompileHighlightLine(listing, &highlight));
 
   Destroy(&f);
 }
