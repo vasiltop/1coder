@@ -86,5 +86,5 @@ jobs:
           EDITOR_TESTS_HEAPCHECK=1 cmd.exe //c diag.bat command_line_resolves_names
           echo "=== full suite ==="
           cmd.exe //c diag.bat > full.log 2>&1 || true
-          tail -6 full.log
+          cat full.log
           grep -q "0 failed" full.log || { echo "SUITE DID NOT PASS"; exit 1; }
