@@ -41,8 +41,10 @@ Add `core/input/mouse.h` as the platform-neutral event and state definition. It 
 - hit-region identity,
 - and a transient `MouseState` used while a button is down or wheel motion is being accumulated.
 
-`MouseState` is intentionally short-lived. It records only the current capture, the pointer anchor, the last hovered pane for visual hover or drag-adjacent state, the pre-selection mode, accumulated fractional wheel deltas, and any resize target. Nothing in it is serialized or persisted.
+`MouseState` is intentionally short-lived. It records only the current capture, the pointer anchor, the last hovered pane for visual hover or drag-adjacent state, accumulated fractional wheel deltas, and any resize target. It may reference the active view during a gesture, but it never owns post-release restoration state. Nothing in it is serialized or persisted.
 For wheel handling, it also stores the current routed wheel target pane, independent X/Y remainders, and the current per-axis scroll semantics (line or page).
+
+Durable temporary-Visual return state lives in the selected `View`'s `VimState` as optional `mouse_visual_return_mode`, limited to `Insert` or `Replace`.
 
 Hit testing and resize handles use the continuous grid coordinates; derived integer cell coordinates are used for buffer text placement and other cell-snapped gestures.
 
@@ -54,7 +56,7 @@ Add `core/editor/mouse.cpp` and route every mouse event through a single `Editor
 - dispatch to mode-specific selection and paste logic,
 - split-boundary resize logic,
 - cancellation and cleanup,
-- and restoration of the prior mode after transient selections.
+- and lifecycle management for the selected view's `mouse_visual_return_mode`.
 
 ### SDL translation
 
@@ -125,7 +127,9 @@ No pixel-distance or platform-dependent slop is used.
 
 In Insert and Replace, any mouse gesture that creates a non-empty selection enters temporary Visual immediately or on drag threshold crossing. Double-click word or matching-bracket selection and triple-click line selection enter Visual immediately; drag selection enters Visual when the threshold defined above is crossed. Those selections remain visible after release just like a completed drag.
 A single click or press-release with no selection stays in the original Insert or Replace mode.
-The remembered Insert or Replace mode is restored only when that Visual selection is later ended or canceled, including a plain click that collapses it, a replacement or paste that consumes it, keyboard Visual exit, focus-loss cancellation, or shutdown.
+On the first such mouse selection from Insert or Replace, set the active view's `mouse_visual_return_mode` to the originating mode and leave it set after release.
+Normal- or Visual-origin selections leave the field unset, and a new temporary mouse selection cannot start until the previous temporary Visual has ended.
+All Visual-ending paths consult that field and, if present, atomically restore the recorded mode and clear the field: plain-click collapse, selection-consuming paste or replacement, keyboard Visual exit, focus-loss cancellation, shutdown, or explicit view destruction (which clears the field without restoration).
 
 ### Clipboard put
 
@@ -163,9 +167,10 @@ Split resizing clamps each adjacent direct child to at least 2 full panel cells 
 - **Outside events:** pointer motion or clicks outside any supported region do nothing except update visual hover if the app tracks it.
 - **Motion without press:** pointer motion without an active press never changes focus.
 - **Captured drags:** once a drag or resize begins, movement remains captured until release, cancellation, or loss of focus.
-- **Release:** ending the active button finalizes a drag selection or resize but does not exit temporary Visual; the pending Insert or Replace mode stays restored only when that selection later ends or is canceled.
+- **Release:** ending the active button finalizes a drag selection or resize but does not exit temporary Visual; the selected view's `mouse_visual_return_mode` stays pending until that selection later ends or is canceled.
 - **Window enter/leave:** enter may update visual hover or drag-adjacent state; leave may clear that state only when no capture is active.
-- **Focus loss or shutdown:** cancel any active capture, restore the prior mode if a transient Visual state was in progress, and leave no half-finished resize behind.
+- **Focus loss or shutdown:** cancel any active capture, then consult the selected view's `mouse_visual_return_mode`; if it is set, restore that mode and clear it, and leave no half-finished resize behind.
+- **View destruction:** clear `mouse_visual_return_mode` without restoration.
 - **Short or empty lines:** cursor placement and selection clamp to legal line bounds, including the empty-line case.
 - **UTF-8:** hit testing uses line-index translation and byte-boundary snapping so multi-byte text remains valid.
 - **Read-only buffers:** selection and focus changes still work; editing gestures such as middle-click put become no-ops.
