@@ -17,24 +17,35 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          # SDL Linux build deps:
+          # https://wiki.libsdl.org/SDL3/README-linux#build-dependencies
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
             cmake \
+            ninja-build \
             pkg-config \
+            libasound2-dev \
+            libpulse-dev \
+            libpipewire-0.3-dev \
             libx11-dev \
             libxext-dev \
             libxrandr-dev \
             libxcursor-dev \
+            libxfixes-dev \
             libxi-dev \
-            libxinerama-dev \
+            libxss-dev \
+            libxtst-dev \
             libxkbcommon-dev \
-            libwayland-dev \
-            libdecor-0-dev \
+            libdrm-dev \
+            libgbm-dev \
             libgl1-mesa-dev \
-            libpipewire-0.3-dev \
-            libpulse-dev \
-            libasound2-dev
+            libgles2-mesa-dev \
+            libegl1-mesa-dev \
+            libdbus-1-dev \
+            libudev-dev \
+            libwayland-dev \
+            libdecor-0-dev
 
       - name: Install just
         run: |
