@@ -32,12 +32,6 @@ struct WorkspaceTarget {
   std::vector<ValidatedTextEdit> validated;
 };
 
-String8 FinishWriter(JsonWriter *writer) {
-  String8 json = JsonWriterFinish(writer);
-  if (json.size == 0) return {};
-  return json;
-}
-
 void SetStatus(Editor *ed, String8 detail) {
   if (ed == nullptr) return;
   EditorSetStatusF(ed, "LSP: %.*s", (int)detail.size, (char *)detail.str);
@@ -101,6 +95,27 @@ Buffer *ResolveRequestBuffer(Editor *ed, BufferHandle handle, String8 uri, i64 v
   return buffer;
 }
 
+Buffer *ResolveCurrentRequestBuffer(Editor *ed, BufferHandle handle, String8 uri, i64 version) {
+  bool stale = false;
+  Buffer *buffer = ResolveRequestBuffer(ed, handle, uri, version, &stale);
+  if (buffer == nullptr && stale) SetStatus(ed, "stale response");
+  return buffer;
+}
+
+bool ResponseFailed(Editor *ed, const LspClientResponse *response) {
+  if (ed == nullptr || response == nullptr) return true;
+  if (response->cancelled) {
+    SetStatus(ed, "cancelled");
+    return true;
+  }
+  if (response->has_error) {
+    SetStatus(ed, response->error_message.size ? response->error_message
+                                               : Str8Lit("request failed"));
+    return true;
+  }
+  return false;
+}
+
 bool WritePosition(JsonWriter *writer, LspPosition position) {
   return JsonWriteObjectBegin(writer) && JsonWriteObjectKey(writer, Str8Lit("line")) &&
          JsonWriteU64(writer, position.line) &&
@@ -118,7 +133,7 @@ bool BuildPositionParams(Arena *arena, String8 uri, LspPosition position, String
             JsonWriteObjectEnd(&writer) &&
             JsonWriteObjectKey(&writer, Str8Lit("position")) &&
             WritePosition(&writer, position) && JsonWriteObjectEnd(&writer);
-  *out = ok ? FinishWriter(&writer) : String8{};
+  *out = ok ? JsonWriterFinish(&writer) : String8{};
   JsonWriterDestroy(&writer);
   return out->size > 0;
 }
@@ -137,7 +152,7 @@ bool BuildFormattingParams(Arena *arena, String8 uri, String8 *out) {
             JsonWriteObjectKey(&writer, Str8Lit("insertSpaces")) &&
             JsonWriteBool(&writer, true) && JsonWriteObjectEnd(&writer) &&
             JsonWriteObjectEnd(&writer);
-  *out = ok ? FinishWriter(&writer) : String8{};
+  *out = ok ? JsonWriterFinish(&writer) : String8{};
   JsonWriterDestroy(&writer);
   return out->size > 0;
 }
@@ -155,7 +170,7 @@ bool BuildRenameParams(Arena *arena, String8 uri, LspPosition position, String8 
             WritePosition(&writer, position) &&
             JsonWriteObjectKey(&writer, Str8Lit("newName")) &&
             JsonWriteString(&writer, new_name) && JsonWriteObjectEnd(&writer);
-  *out = ok ? FinishWriter(&writer) : String8{};
+  *out = ok ? JsonWriterFinish(&writer) : String8{};
   JsonWriterDestroy(&writer);
   return out->size > 0;
 }
@@ -245,6 +260,17 @@ T *AllocateRequestContext(Editor *ed, Buffer *buffer, String8 uri) {
     return nullptr;
   }
   return context;
+}
+
+template <typename T>
+u64 SendRequest(Editor *ed, Buffer *buffer, String8 method, String8 params, T *context,
+                LspClientResponseProc response_proc) {
+  u64 id = EditorLspSendRequestJson(ed, buffer, method, params, 0, nullptr, response_proc, context);
+  if (id == 0) {
+    DestroyOwnedContext(context);
+    SetStatus(ed, "request failed");
+  }
+  return id;
 }
 
 bool TryOffsetFromPosition(Buffer *buffer, LspPosition position, LspPositionEncoding encoding,
@@ -429,13 +455,9 @@ u64 EditorLspRequestFormatting(Editor *ed, Buffer *buffer) {
     return 0;
   }
   context->position_encoding = info.position_encoding;
-  u64 id = EditorLspSendRequestJson(ed, buffer, Str8Lit("textDocument/formatting"), params, 0,
-                                    nullptr, EditorLspOnFormattingResponse, context);
+  u64 id = SendRequest(ed, buffer, Str8Lit("textDocument/formatting"), params, context,
+                       EditorLspOnFormattingResponse);
   ScratchEnd(scratch);
-  if (id == 0) {
-    DestroyOwnedContext(context);
-    SetStatus(ed, "request failed");
-  }
   return id;
 }
 
@@ -462,13 +484,9 @@ u64 EditorLspRequestNavigation(Editor *ed, Buffer *buffer, EditorLspNavigationKi
   }
   context->kind = kind;
   context->position_encoding = info.position_encoding;
-  u64 id = EditorLspSendRequestJson(ed, buffer, NavigationMethod(kind), params, 0, nullptr,
-                                    EditorLspOnNavigationResponse, context);
+  u64 id =
+      SendRequest(ed, buffer, NavigationMethod(kind), params, context, EditorLspOnNavigationResponse);
   ScratchEnd(scratch);
-  if (id == 0) {
-    DestroyOwnedContext(context);
-    SetStatus(ed, "request failed");
-  }
   return id;
 }
 
@@ -516,12 +534,10 @@ u64 EditorLspPrepareRename(Editor *ed, Buffer *buffer, EditorLspRenamePreparePro
   context->callback = callback;
   context->callback_user_data = callback_user_data;
   context->position_encoding = info.position_encoding;
-  u64 id = EditorLspSendRequestJson(ed, buffer, Str8Lit("textDocument/prepareRename"), params, 0,
-                                    nullptr, EditorLspOnPrepareRenameResponse, context);
+  u64 id = SendRequest(ed, buffer, Str8Lit("textDocument/prepareRename"), params, context,
+                       EditorLspOnPrepareRenameResponse);
   ScratchEnd(scratch);
   if (id == 0) {
-    DestroyOwnedContext(context);
-    SetStatus(ed, "request failed");
     EditorLspRenamePrepareResult result = {};
     result.status = EditorLspRenamePrepareStatus::Failed;
     if (callback != nullptr) callback(callback_user_data, &result);
@@ -551,13 +567,9 @@ u64 EditorLspSubmitRename(Editor *ed, Buffer *buffer, String8 new_name) {
     return 0;
   }
   context->position_encoding = info.position_encoding;
-  u64 id = EditorLspSendRequestJson(ed, buffer, Str8Lit("textDocument/rename"), params, 0, nullptr,
-                                    EditorLspOnRenameResponse, context);
+  u64 id =
+      SendRequest(ed, buffer, Str8Lit("textDocument/rename"), params, context, EditorLspOnRenameResponse);
   ScratchEnd(scratch);
-  if (id == 0) {
-    DestroyOwnedContext(context);
-    SetStatus(ed, "request failed");
-  }
   return id;
 }
 
@@ -565,23 +577,11 @@ void EditorLspOnFormattingResponse(void *user_data, const LspClientResponse *res
   EditorLspFormatContext *context = (EditorLspFormatContext *)user_data;
   OwnedContextCleanup<EditorLspFormatContext> cleanup = {context};
   if (context == nullptr || response == nullptr || context->ed == nullptr) return;
-  if (response->cancelled) {
-    SetStatus(context->ed, "cancelled");
-    return;
-  }
-  if (response->has_error) {
-    SetStatus(context->ed, response->error_message.size ? response->error_message
-                                                        : Str8Lit("request failed"));
-    return;
-  }
+  if (ResponseFailed(context->ed, response)) return;
 
-  bool stale = false;
-  Buffer *buffer = ResolveRequestBuffer(context->ed, context->buffer, context->uri,
-                                        response->context.document_version, &stale);
-  if (buffer == nullptr) {
-    if (stale) SetStatus(context->ed, "stale response");
-    return;
-  }
+  Buffer *buffer = ResolveCurrentRequestBuffer(context->ed, context->buffer, context->uri,
+                                               response->context.document_version);
+  if (buffer == nullptr) return;
   if (!response->has_result || response->result == nullptr ||
       response->result->kind == JsonKind::Null) {
     SetStatus(context->ed, "no edits");
@@ -612,20 +612,9 @@ void EditorLspOnNavigationResponse(void *user_data, const LspClientResponse *res
   EditorLspNavigationContext *context = (EditorLspNavigationContext *)user_data;
   OwnedContextCleanup<EditorLspNavigationContext> cleanup = {context};
   if (context == nullptr || response == nullptr || context->ed == nullptr) return;
-  if (response->cancelled) {
-    SetStatus(context->ed, "cancelled");
-    return;
-  }
-  if (response->has_error) {
-    SetStatus(context->ed, response->error_message.size ? response->error_message
-                                                        : Str8Lit("request failed"));
-    return;
-  }
-
-  bool stale = false;
-  if (ResolveRequestBuffer(context->ed, context->buffer, context->uri,
-                           response->context.document_version, &stale) == nullptr) {
-    if (stale) SetStatus(context->ed, "stale response");
+  if (ResponseFailed(context->ed, response)) return;
+  if (ResolveCurrentRequestBuffer(context->ed, context->buffer, context->uri,
+                                  response->context.document_version) == nullptr) {
     return;
   }
   if (!response->has_result || response->result == nullptr) {
@@ -823,20 +812,9 @@ void EditorLspOnRenameResponse(void *user_data, const LspClientResponse *respons
   EditorLspRenameContext *context = (EditorLspRenameContext *)user_data;
   OwnedContextCleanup<EditorLspRenameContext> cleanup = {context};
   if (context == nullptr || response == nullptr || context->ed == nullptr) return;
-  if (response->cancelled) {
-    SetStatus(context->ed, "cancelled");
-    return;
-  }
-  if (response->has_error) {
-    SetStatus(context->ed, response->error_message.size ? response->error_message
-                                                        : Str8Lit("request failed"));
-    return;
-  }
-
-  bool stale = false;
-  if (ResolveRequestBuffer(context->ed, context->buffer, context->uri,
-                           response->context.document_version, &stale) == nullptr) {
-    if (stale) SetStatus(context->ed, "stale response");
+  if (ResponseFailed(context->ed, response)) return;
+  if (ResolveCurrentRequestBuffer(context->ed, context->buffer, context->uri,
+                                  response->context.document_version) == nullptr) {
     return;
   }
   if (!response->has_result || response->result == nullptr ||
