@@ -10,7 +10,7 @@
 - Keep mouse behavior Neovim-style for the exact supported gestures defined in this spec.
 - Support cursor placement, live charwise drag, double-click word or matching-bracket selection, triple-click line selection, and right-click nearest-endpoint extension.
 - Support middle-click system-clipboard put in Normal, Visual, Insert, Replace, and command-line modes.
-- Route wheel scrolling to the hovered pane, not the focused pane, with vertical, horizontal, and `Shift`-page behavior.
+- Route wheel scrolling from each wheel event's own coordinates, not stored hover or focused-pane state, with vertical, horizontal, and `Shift`-page behavior.
 - Preserve fractional wheel deltas so high-DPI trackpads scroll smoothly.
 - Support command-line cursor placement, panel status-line focus, and split resizing from vertical edges and status-line boundaries.
 - Cancel transient mouse state cleanly on release, focus loss, shutdown, or leaving an active capture.
@@ -41,7 +41,7 @@ Add `core/input/mouse.h` as the platform-neutral event and state definition. It 
 - hit-region identity,
 - and a transient `MouseState` used while a button is down or wheel motion is being accumulated.
 
-`MouseState` is intentionally short-lived. It records only the current capture, the pointer anchor, the last hovered pane, the pre-selection mode, accumulated fractional wheel deltas, and any resize target. Nothing in it is serialized or persisted.
+`MouseState` is intentionally short-lived. It records only the current capture, the pointer anchor, the last hovered pane for visual hover or drag-adjacent state, the pre-selection mode, accumulated fractional wheel deltas, and any resize target. Nothing in it is serialized or persisted.
 
 ### Core behavior
 
@@ -49,7 +49,6 @@ Add `core/editor/mouse.cpp` and route every mouse event through a single `Editor
 
 - hit testing against explicit regions,
 - dispatch to mode-specific selection and paste logic,
-- hover-based wheel routing,
 - split-boundary resize logic,
 - cancellation and cleanup,
 - and restoration of the prior mode after transient selections.
@@ -63,8 +62,8 @@ Mouse capture in SDL is short-lived: it is acquired only while a drag or resize 
 SDL translation explicitly handles mouse button, wheel, motion, window enter/leave, and focus-loss events:
 
 - motion updates an active drag or resize;
-- wheel routing uses each wheel event's own `mouse_x` / `mouse_y`, so persistent hover state is not required for scrolling;
-- window leave clears hover only when no capture is active;
+- wheel routing uses each wheel event's own `mouse_x` / `mouse_y` and never falls back to stored hover;
+- window leave may clear visual hover or drag-adjacent state only when no capture is active;
 - focus loss always cancels any active capture.
 
 ### Hit regions
@@ -86,8 +85,9 @@ At a cell where a vertical split edge intersects a panel status line, the vertic
 
 ### Cursor placement and selection
 
-- Left-click in a text surface moves the cursor to the clicked cell, clamping to the end of short or empty lines.
-- A drag from a text surface starts charwise selection and updates live on every pointer move.
+- Every pane-local mouse button press in buffer text or gutter first focuses that pane, then performs its gesture.
+- Left-click in buffer text moves the cursor to the clicked cell, clamping to the end of short or empty lines.
+- A drag from buffer text starts charwise selection and updates live on every pointer move.
 - Double-click selects the word under the pointer; if the click lands on a bracket delimiter, it expands to the matching bracketed range instead of treating the delimiter as an isolated word.
 - Triple-click selects the full logical line as a linewise range.
 - Right-click extends the nearest endpoint of the current selection to the clicked position. If no selection exists, it behaves like a simple cursor placement.
@@ -98,6 +98,7 @@ Selections always resolve through UTF-8-safe byte offsets; pointer placement nev
 
 - Clicking the panel gutter focuses that pane and places the cursor at column zero of the corresponding visible buffer line.
 - Dragging from the panel gutter starts a charwise selection at that line start and extends it live as the pointer moves.
+  Both gutter gestures focus the pane before acting.
 
 ### Mode semantics
 
@@ -115,7 +116,7 @@ Middle-click uses the existing clipboard abstraction. If clipboard text is avail
 
 ### Wheel routing
 
-Wheel motion targets the pane under the pointer, even if another pane is focused.
+Wheel motion routes solely from the wheel event's own `mouse_x` / `mouse_y` coordinates. Stored hover is never a fallback, and wheel never changes focus.
 
 - Vertical wheel scrolls vertically.
 - Horizontal wheel scrolls horizontally.
@@ -138,10 +139,11 @@ Split resizing clamps to each pane's minimum size. If the requested delta would 
 
 ## Edge handling
 
-- **Outside events:** pointer motion or clicks outside any supported region do nothing except preserve hover data for wheel routing.
+- **Outside events:** pointer motion or clicks outside any supported region do nothing except update visual hover if the app tracks it.
+- **Motion without press:** pointer motion without an active press never changes focus.
 - **Captured drags:** once a drag or resize begins, movement remains captured until release, cancellation, or loss of focus.
 - **Release:** ending the active button finalizes selection or resize and clears transient state.
-- **Window enter/leave:** enter may update hover; leave clears hover only when no capture is active.
+- **Window enter/leave:** enter may update visual hover or drag-adjacent state; leave may clear that state only when no capture is active.
 - **Focus loss or shutdown:** cancel any active capture, restore the prior mode if a transient Visual state was in progress, and leave no half-finished resize behind.
 - **Short or empty lines:** cursor placement and selection clamp to legal line bounds, including the empty-line case.
 - **UTF-8:** hit testing uses line-index translation and byte-boundary snapping so multi-byte text remains valid.
@@ -152,6 +154,6 @@ Split resizing clamps to each pane's minimum size. If the requested delta would 
 ## Testing and documentation strategy
 
 - Add core unit tests for `EditorProcessMouse` and the supporting mouse helpers in `tests/`, using synthetic events and editor state only.
-- Cover click-to-cursor, live drag, double and triple click selection, nearest-endpoint extension, middle-click paste, hover-wheel routing, fractional delta accumulation, resize clamping, and cancel-on-focus-loss behavior.
+- Cover click-to-cursor, live drag, double and triple click selection, nearest-endpoint extension, middle-click paste, wheel routing, fractional delta accumulation, resize clamping, and cancel-on-focus-loss behavior.
 - Keep SDL translation thin enough that it can be smoke-tested separately, but do not require SDL in core tests.
 - Document any new mouse behavior in the existing user-facing docs only if it changes bindings or visible semantics; otherwise keep the spec as the source of truth for implementation.
