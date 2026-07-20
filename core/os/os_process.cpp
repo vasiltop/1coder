@@ -6,9 +6,11 @@
 #include <string.h>
 
 #include <mutex>
+#include <vector>
 
 #if defined(_WIN32)
 #  define WIN32_LEAN_AND_MEAN
+#  include <tlhelp32.h>
 #  include <windows.h>
 #else
 #  include <errno.h>
@@ -32,6 +34,8 @@ struct OsProcessImpl {
 #if defined(_WIN32)
   HANDLE process_handle;
   HANDLE thread_handle;
+  HANDLE job_handle;
+  DWORD process_id;
   HANDLE stdin_write;
   HANDLE stdout_read;
   HANDLE stderr_read;
@@ -145,6 +149,21 @@ String8 TryWindowsExecutable(Arena *arena, String8 base) {
   return String8{};
 }
 
+bool IsCmdScriptPath(String8 path) {
+  String8 ext = Str8PathExt(Str8PathBase(path));
+  return Str8Match(ext, Str8Lit("bat"), StringMatch::CaseInsensitive) ||
+         Str8Match(ext, Str8Lit("cmd"), StringMatch::CaseInsensitive);
+}
+
+wchar_t *PushComSpec(Arena *arena) {
+  DWORD need = GetEnvironmentVariableW(L"ComSpec", nullptr, 0);
+  if (need > 1) {
+    wchar_t *value = PushArrayNoZero(arena, wchar_t, need);
+    if (GetEnvironmentVariableW(L"ComSpec", value, need) > 0) return value;
+  }
+  return PushWide(arena, Str8Lit("cmd.exe"));
+}
+
 String8 QuoteWindowsArgument(Arena *arena, String8 argument) {
   bool needs_quotes = argument.size == 0;
   for (u64 i = 0; i < argument.size && !needs_quotes; i += 1) {
@@ -179,6 +198,33 @@ String8 QuoteWindowsArgument(Arena *arena, String8 argument) {
   AppendBytePiece(scratch.arena, &pieces, '"');
 
   String8 quoted = Str8ListJoin(arena, &pieces, String8{nullptr, 0});
+  ScratchEnd(scratch);
+  return quoted;
+}
+
+String8 QuoteCmdArgument(Arena *arena, String8 argument) {
+  bool needs_quotes = argument.size == 0;
+  for (u64 i = 0; i < argument.size && !needs_quotes; i += 1) {
+    u8 c = argument.str[i];
+    needs_quotes = CharIsSpace(c) || c == '"' || c == '&' || c == '|' || c == '<' || c == '>' ||
+                   c == '(' || c == ')' || c == '^' || c == '%' || c == '!';
+  }
+
+  TempArena scratch = ScratchBegin1(arena);
+  String8List pieces = {};
+  if (needs_quotes) AppendBytePiece(scratch.arena, &pieces, '"');
+  for (u64 i = 0; i < argument.size; i += 1) {
+    u8 c = argument.str[i];
+    if (c == '%') {
+      Str8ListPush(scratch.arena, &pieces, Str8Lit("%%"));
+    } else if (c == '"') {
+      Str8ListPush(scratch.arena, &pieces, Str8Lit("\"\""));
+    } else {
+      AppendBytePiece(scratch.arena, &pieces, c);
+    }
+  }
+  if (needs_quotes) AppendBytePiece(scratch.arena, &pieces, '"');
+  String8 quoted = Str8ListJoin(arena, &pieces, String8{});
   ScratchEnd(scratch);
   return quoted;
 }
@@ -222,7 +268,60 @@ bool RefreshExitStatus(OsProcessImpl *impl) {
   if (!GetExitCodeProcess(impl->process_handle, &exit_code)) exit_code = 1;
   impl->exit_code = (i32)exit_code;
   impl->waited = true;
+  CloseHandleIfValid(&impl->job_handle);
   return true;
+}
+
+HANDLE CreateKillOnCloseJob() {
+  HANDLE job = CreateJobObjectW(nullptr, nullptr);
+  if (job == nullptr) return nullptr;
+
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+    CloseHandle(job);
+    return nullptr;
+  }
+  return job;
+}
+
+void TerminateWindowsProcessId(DWORD pid) {
+  HANDLE handle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+  if (handle == nullptr) return;
+  (void)TerminateProcess(handle, 1);
+  (void)WaitForSingleObject(handle, 200);
+  CloseHandle(handle);
+}
+
+void TerminateWindowsProcessTree(DWORD root_pid) {
+  if (root_pid == 0) return;
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) {
+    TerminateWindowsProcessId(root_pid);
+    return;
+  }
+
+  std::vector<PROCESSENTRY32W> processes;
+  PROCESSENTRY32W entry = {};
+  entry.dwSize = sizeof(entry);
+  if (Process32FirstW(snapshot, &entry)) {
+    do {
+      processes.push_back(entry);
+      entry.dwSize = sizeof(entry);
+    } while (Process32NextW(snapshot, &entry));
+  }
+  CloseHandle(snapshot);
+
+  std::vector<DWORD> ordered;
+  ordered.push_back(root_pid);
+  for (size_t index = 0; index < ordered.size(); index += 1) {
+    DWORD parent = ordered[index];
+    for (const PROCESSENTRY32W &process : processes) {
+      if (process.th32ParentProcessID == parent) ordered.push_back(process.th32ProcessID);
+    }
+  }
+
+  for (size_t i = ordered.size(); i > 0; i -= 1) TerminateWindowsProcessId(ordered[i - 1]);
 }
 
 #else
@@ -259,6 +358,12 @@ void IgnoreSigpipeOnce() {
   });
 }
 
+void KillProcessGroupOrProcess(pid_t pid) {
+  if (pid <= 0) return;
+  if (kill(-pid, SIGKILL) == 0 || errno != ESRCH) return;
+  (void)kill(pid, SIGKILL);
+}
+
 bool RefreshExitStatus(OsProcessImpl *impl) {
   if (!impl || impl->waited) return true;
 
@@ -277,7 +382,6 @@ bool RefreshExitStatus(OsProcessImpl *impl) {
   impl->waited = true;
   return true;
 }
-
 #endif
 
 bool IsRunning(OsProcessImpl *impl) {
@@ -446,13 +550,35 @@ bool OsProcessStart(OsProcess *process, const OsProcessCommand *command) {
 
   TempArena scratch = ScratchBegin();
   String8List argv = {};
-  Str8ListPush(scratch.arena, &argv, QuoteWindowsArgument(scratch.arena, command->executable));
-  for (u64 i = 0; i < command->argument_count; i += 1) {
-    Str8ListPush(scratch.arena, &argv, QuoteWindowsArgument(scratch.arena, command->arguments[i]));
+  wchar_t *application = nullptr;
+  String8 command_line_utf8 = {};
+  bool requires_tree_kill = IsCmdScriptPath(command->executable);
+  if (requires_tree_kill) {
+    String8List inner = {};
+    Str8ListPush(scratch.arena, &inner, QuoteCmdArgument(scratch.arena, command->executable));
+    for (u64 i = 0; i < command->argument_count; i += 1) {
+      Str8ListPush(scratch.arena, &inner, QuoteCmdArgument(scratch.arena, command->arguments[i]));
+    }
+    String8 inner_command = Str8ListJoin(scratch.arena, &inner, Str8Lit(" "));
+
+    application = PushComSpec(scratch.arena);
+    Str8ListPush(scratch.arena, &argv, QuoteWindowsArgument(scratch.arena, Str8C("cmd.exe")));
+    Str8ListPush(scratch.arena, &argv, Str8Lit("/d"));
+    Str8ListPush(scratch.arena, &argv, Str8Lit("/v:off"));
+    Str8ListPush(scratch.arena, &argv, Str8Lit("/s"));
+    Str8ListPush(scratch.arena, &argv, Str8Lit("/c"));
+    Str8ListPush(scratch.arena, &argv, PushStr8F(scratch.arena, "\"%.*s\"", (int)inner_command.size,
+                                                 (char *)inner_command.str));
+    command_line_utf8 = Str8ListJoin(scratch.arena, &argv, Str8Lit(" "));
+  } else {
+    Str8ListPush(scratch.arena, &argv, QuoteWindowsArgument(scratch.arena, command->executable));
+    for (u64 i = 0; i < command->argument_count; i += 1) {
+      Str8ListPush(scratch.arena, &argv, QuoteWindowsArgument(scratch.arena, command->arguments[i]));
+    }
+    command_line_utf8 = Str8ListJoin(scratch.arena, &argv, Str8Lit(" "));
+    application = PushWide(scratch.arena, command->executable);
   }
-  String8 command_line_utf8 = Str8ListJoin(scratch.arena, &argv, Str8Lit(" "));
   wchar_t *command_line = PushWide(scratch.arena, command_line_utf8);
-  wchar_t *application = PushWide(scratch.arena, command->executable);
   wchar_t *working_directory =
       command->working_directory.size ? PushWide(scratch.arena, command->working_directory) : nullptr;
 
@@ -464,7 +590,7 @@ bool OsProcessStart(OsProcess *process, const OsProcessCommand *command) {
   startup.hStdError = stderr_child;
 
   PROCESS_INFORMATION info = {};
-  BOOL ok = CreateProcessW(application, command_line, nullptr, nullptr, TRUE, 0, nullptr,
+  BOOL ok = CreateProcessW(application, command_line, nullptr, nullptr, TRUE, CREATE_SUSPENDED, nullptr,
                            working_directory, &startup, &info);
   ScratchEnd(scratch);
 
@@ -473,6 +599,27 @@ bool OsProcessStart(OsProcess *process, const OsProcessCommand *command) {
   CloseHandleIfValid(&stderr_child);
 
   if (!ok) {
+    CloseHandleIfValid(&stdin_parent);
+    CloseHandleIfValid(&stdout_parent);
+    CloseHandleIfValid(&stderr_parent);
+    return false;
+  }
+
+  HANDLE job = CreateKillOnCloseJob();
+  if (job != nullptr && !AssignProcessToJobObject(job, info.hProcess)) {
+    CloseHandle(job);
+    job = nullptr;
+  }
+  if (ResumeThread(info.hThread) == (DWORD)-1) {
+    if (job != nullptr) {
+      TerminateJobObject(job, 1);
+      CloseHandle(job);
+    } else {
+      TerminateWindowsProcessTree(info.dwProcessId);
+    }
+    WaitForSingleObject(info.hProcess, INFINITE);
+    CloseHandle(info.hThread);
+    CloseHandle(info.hProcess);
     CloseHandleIfValid(&stdin_parent);
     CloseHandleIfValid(&stdout_parent);
     CloseHandleIfValid(&stderr_parent);
@@ -493,6 +640,8 @@ bool OsProcessStart(OsProcess *process, const OsProcessCommand *command) {
 
   impl->process_handle = info.hProcess;
   impl->thread_handle = info.hThread;
+  impl->job_handle = job;
+  impl->process_id = info.dwProcessId;
   impl->stdin_write = stdin_parent;
   impl->stdout_read = stdout_parent;
   impl->stderr_read = stderr_parent;
@@ -543,6 +692,7 @@ bool OsProcessStart(OsProcess *process, const OsProcessCommand *command) {
     close(stdout_pipe[0]);
     close(stderr_pipe[0]);
 
+    if (setpgid(0, 0) != 0) _exit(127);
     if (dup2(stdin_pipe[0], STDIN_FILENO) < 0 || dup2(stdout_pipe[1], STDOUT_FILENO) < 0 ||
         dup2(stderr_pipe[1], STDERR_FILENO) < 0) {
       _exit(127);
@@ -578,7 +728,7 @@ bool OsProcessStart(OsProcess *process, const OsProcessCommand *command) {
     CloseFdIfValid(&stdin_pipe[1]);
     CloseFdIfValid(&stdout_pipe[0]);
     CloseFdIfValid(&stderr_pipe[0]);
-    kill(pid, SIGKILL);
+    KillProcessGroupOrProcess(pid);
     waitpid(pid, nullptr, 0);
     return false;
   }
@@ -659,15 +809,43 @@ void OsProcessCloseStdin(OsProcess *process) {
   impl->stdin_closed = true;
 }
 
-void OsProcessTerminate(OsProcess *process) {
+bool OsProcessHasExited(OsProcess *process) {
   OsProcessImpl *impl = GetImpl(process);
-  if (!impl || !IsRunning(impl)) return;
+  if (!impl || impl->waited) return true;
 
 #if defined(_WIN32)
-  (void)TerminateProcess(impl->process_handle, 1);
+  DWORD wait = WaitForSingleObject(impl->process_handle, 0);
+  return wait == WAIT_OBJECT_0;
 #else
-  (void)kill(impl->pid, SIGKILL);
+  siginfo_t info = {};
+  if (waitid(P_PID, impl->pid, &info, WEXITED | WNOHANG | WNOWAIT) != 0) return false;
+  return info.si_pid != 0;
 #endif
+}
+
+void OsProcessTerminate(OsProcess *process) {
+  OsProcessImpl *impl = GetImpl(process);
+  if (!impl) return;
+
+#if defined(_WIN32)
+  if (impl->job_handle != nullptr) {
+    (void)TerminateJobObject(impl->job_handle, 1);
+  } else {
+    TerminateWindowsProcessTree(impl->process_id);
+  }
+#else
+  KillProcessGroupOrProcess(impl->pid);
+#endif
+}
+
+bool OsProcessTryWait(OsProcess *process, i32 *exit_code) {
+  OsProcessImpl *impl = GetImpl(process);
+  if (exit_code) *exit_code = 0;
+  if (!impl) return true;
+
+  bool done = RefreshExitStatus(impl);
+  if (done && exit_code) *exit_code = impl->exit_code;
+  return done;
 }
 
 i32 OsProcessWait(OsProcess *process) {
@@ -719,6 +897,7 @@ void OsProcessDestroy(OsProcess *process) {
 
 #if defined(_WIN32)
   CloseHandleIfValid(&impl->thread_handle);
+  CloseHandleIfValid(&impl->job_handle);
   CloseHandleIfValid(&impl->process_handle);
 #endif
 

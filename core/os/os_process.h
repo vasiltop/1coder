@@ -28,6 +28,8 @@ struct OsProcessRead {
 [[nodiscard]] OsProcessRead OsProcessReadStdout(OsProcess *process, u8 *buffer, u64 capacity);
 [[nodiscard]] OsProcessRead OsProcessReadStderr(OsProcess *process, u8 *buffer, u64 capacity);
 void OsProcessCloseStdin(OsProcess *process);
+[[nodiscard]] bool OsProcessHasExited(OsProcess *process);
 void OsProcessTerminate(OsProcess *process);
+[[nodiscard]] bool OsProcessTryWait(OsProcess *process, i32 *exit_code);
 [[nodiscard]] i32 OsProcessWait(OsProcess *process);
 void OsProcessDestroy(OsProcess *process);

@@ -103,6 +103,10 @@ file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS tests/*.cpp)
 
 add_executable(fake_lsp_server tools/fake_lsp_server.cpp)
 target_compile_options(fake_lsp_server PRIVATE ${EDITOR_COMPILE_OPTIONS})
+target_link_libraries(fake_lsp_server PRIVATE editor_core)
+if(WIN32)
+  target_link_libraries(fake_lsp_server PRIVATE Shell32)
+endif()
 
 add_executable(editor_tests ${TEST_SOURCES})
 target_include_directories(editor_tests PRIVATE tests)
