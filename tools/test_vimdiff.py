@@ -6,6 +6,7 @@ Run with:  python3 -m unittest tools/test_vimdiff.py
 import importlib
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -253,6 +254,104 @@ class TestNoKnownDifferences(unittest.TestCase):
             hasattr(vimdiff, "KNOWN_DIFFERENCES"),
             "KNOWN_DIFFERENCES must be removed from vimdiff"
         )
+
+
+# ===========================================================================
+# 8. run_nvim must build a feedkeys("...", "ntx") call, not execute "normal!"
+# ===========================================================================
+
+class TestFeedkeysCommand(unittest.TestCase):
+    """run_nvim must use call feedkeys(..., "ntx"), not execute 'normal!'."""
+
+    def _capture_nvim_cmd(self, keys):
+        """Return the nvim argv that would be passed to run_subprocess."""
+        captured = []
+
+        def fake_rsp(cmd, **kw):
+            captured.extend(cmd)
+            return MagicMock(returncode=0)
+
+        with patch.object(vimdiff, "run_subprocess", side_effect=fake_rsp):
+            try:
+                vimdiff.run_nvim("hello\n", keys)
+            except vimdiff.CaseError:
+                pass  # pos file absent is expected; we captured what we need
+        return captured
+
+    def test_uses_feedkeys_not_normal_bang(self):
+        cmd = self._capture_nvim_cmd("dw")
+        self.assertTrue(any("feedkeys" in a for a in cmd),
+                        "run_nvim must use feedkeys")
+        self.assertFalse(any("normal!" in a for a in cmd),
+                         "run_nvim must not use execute 'normal!'")
+
+    def test_feedkeys_mode_is_ntx(self):
+        """feedkeys mode must be 'ntx': no-remap, key-codes, synchronous."""
+        cmd = self._capture_nvim_cmd("dw")
+        feedkeys_arg = next(a for a in cmd if "feedkeys" in a)
+        self.assertIn('"ntx"', feedkeys_arg,
+                      "feedkeys mode must be ntx")
+
+    def test_named_key_esc_in_feedkeys_string(self):
+        """<Esc> is encoded as \\<Esc> inside the feedkeys double-quoted string."""
+        cmd = self._capture_nvim_cmd("i<Esc>")
+        feedkeys_arg = next(a for a in cmd if "feedkeys" in a)
+        # to_nvim_keys('<Esc>') → '\<Esc>' which sits inside feedkeys("...")
+        self.assertIn("\\<Esc>", feedkeys_arg)
+        self.assertIn("feedkeys", feedkeys_arg)
+
+    def test_ctrl_key_in_feedkeys_string(self):
+        """<C-r> is preserved as \\<C-r> in the feedkeys argument."""
+        cmd = self._capture_nvim_cmd("dw<C-r>")
+        feedkeys_arg = next(a for a in cmd if "feedkeys" in a)
+        self.assertIn("\\<C-r>", feedkeys_arg)
+
+
+# ===========================================================================
+# 9. Integration: feedkeys processes keys independently; normal! batches them
+# ===========================================================================
+
+@unittest.skipUnless(shutil.which("nvim"), "nvim not available")
+class TestNvimIntegration(unittest.TestCase):
+
+    def test_failed_motion_does_not_abort_later_keys(self):
+        """feedkeys: j failing on last line must not prevent dw from running.
+
+        This is the primary parity regression: interactive jdw on a single-line
+        file deletes 'hello ' even though j found nowhere to go.
+        """
+        text, _pos = vimdiff.run_nvim("hello world\n", "jdw")
+        self.assertEqual(text, "world\n",
+                         "failed j must not abort dw in feedkeys mode")
+
+    def test_normal_bang_aborts_on_failed_motion(self):
+        """Contrast: execute 'normal! jdw' aborts dw after failing j.
+
+        Demonstrates the original bug that the feedkeys change fixes.
+        """
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write("hello world\n")
+            path = f.name
+        try:
+            subprocess.run(
+                ["nvim", "--headless", "-u", "NONE", "-i", "NONE", path,
+                 "-c", "set nocompatible noswapfile",
+                 "-c", 'execute "normal! jdw"',
+                 "-c", "wq"],
+                capture_output=True, timeout=10, check=True,
+            )
+            result = open(path).read()
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+        # normal! aborts the batch when j fails → dw never runs → unchanged
+        self.assertEqual(result, "hello world\n",
+                         "normal! must abort the batch on failed j")
+
+    def test_named_key_esc_exits_insert_mode(self):
+        """<Esc> correctly exits insert mode when fed through feedkeys."""
+        text, _pos = vimdiff.run_nvim("hello\n", "iX<Esc>")
+        self.assertEqual(text, "Xhello\n")
 
 
 if __name__ == "__main__":

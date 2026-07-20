@@ -87,13 +87,14 @@ def preflight():
 
 
 def to_nvim_keys(keys):
-    """Translate this editor's binding notation into a `:execute "normal!"` string.
+    """Translate this editor's binding notation into a feedkeys argument string.
 
-    Returns something ready to sit inside double quotes: named keys become
-    `\\<Esc>` and literal characters are escaped. Escaping has to happen here,
-    per character -- escaping the whole string afterwards would turn the
-    backslash of `\\<Esc>` into a literal one, and every insert-mode case would
-    silently end up typing the text `<Esc>` instead of pressing escape.
+    Returns something ready to sit inside double quotes in a Vim expression:
+    named keys become `\\<Esc>` and literal characters are escaped. Escaping
+    has to happen per character -- escaping the whole string afterwards would
+    turn the backslash of `\\<Esc>` into a literal one, and every insert-mode
+    case would silently end up typing the text `<Esc>` instead of pressing
+    escape.
     """
     out = []
     i = 0
@@ -130,7 +131,7 @@ def run_nvim(text, keys, case_id=""):
         run_subprocess(
             ["nvim", "--headless", "-u", "NONE", "-i", "NONE", path,
              "-c", NVIM_SETTINGS,
-             "-c", 'execute "normal! %s"' % escaped,
+             "-c", 'call feedkeys("%s", "ntx")' % escaped,
              "-c", 'call writefile([line(".").":".col(".")], "%s")' % pos_path,
              "-c", "wq"],
             case_id=case_id,
