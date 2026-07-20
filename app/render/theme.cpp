@@ -52,6 +52,15 @@ Theme ThemeDefault() {
   theme.split_border = Rgb(kUnfocused);
   theme.message = Rgb(kText, 0.75f);
   theme.error = Rgb(0xE06C75);  // the palette has no red of its own
+  theme.diagnostic_error = theme.error;
+  theme.diagnostic_warning = Rgb(0xE5C07B);
+  theme.diagnostic_information = Rgb(0x61AFEF);
+  theme.diagnostic_hint = Rgb(0x98C379);
+  theme.popup_background = Rgb(0x1B1D23);
+  theme.popup_border = theme.split_border;
+  theme.popup_selected = Rgb(kFocused, 0.85f);
+  theme.popup_text = theme.text;
+  theme.popup_detail = theme.message;
 
   // Syntax colours are not in the i3 palette, so these stay as they were. Only
   // Default is tied to the scheme, which keeps ordinary text consistent.

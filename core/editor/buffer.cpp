@@ -1,5 +1,8 @@
 #include "editor/buffer.h"
 
+#include "editor/editor.h"
+#include "editor/lsp.h"
+#include "editor/lsp_ui.h"
 #include "os/os_file.h"
 
 namespace {
@@ -9,6 +12,14 @@ namespace {
 // demand as a buffer actually grows.
 constexpr u64 kBufferArenaReserve = MB(64);
 constexpr u64 kBufferTextReserve = MB(512);
+
+void InvalidateLspPopup(Editor *ed, Buffer *buffer) {
+  if (ed == nullptr) return;
+  const EditorLspUiPopupView *popup = EditorLspUiPopup(ed->lsp_ui);
+  if (popup == nullptr || popup->kind == EditorLspUiPopupKind::None) return;
+  if (buffer != nullptr && !BufferHandleEqual(buffer->handle, popup->anchor_buffer)) return;
+  EditorLspUiInvalidatePopupIfStale(ed->lsp_ui, buffer);
+}
 
 }  // namespace
 
@@ -32,6 +43,7 @@ void BufferInit(Buffer *buffer, BufferKind kind, String8 name) {
   UndoInit(&buffer->undo, buffer->undo_record_arena, buffer->undo_text_arena);
 
   buffer->tokens = TokenArray{nullptr, 0};
+  buffer->syntax = SyntaxCache{};
   buffer->hooks = BufferHooks{};
   buffer->user_data = nullptr;
 }
@@ -91,6 +103,8 @@ void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
   // writing to it, so copy first.
   String8 insert_text = PushStr8Copy(scratch.arena, new_text);
 
+  EditorLspBeforeBufferEdit(ed, buffer, clamped, insert_text, (i64)buffer->edit_serial + 1);
+
   if (!RangeEmpty(clamped)) GapBufferDelete(&buffer->text, clamped);
   if (insert_text.size) GapBufferInsert(&buffer->text, clamped.min, insert_text);
 
@@ -107,6 +121,7 @@ void BufferReplace(Editor *ed, Buffer *buffer, RangeU64 range, String8 new_text,
   if (buffer->hooks.on_edit) {
     buffer->hooks.on_edit(ed, buffer, clamped, insert_text.size);
   }
+  InvalidateLspPopup(ed, buffer);
 
   ScratchEnd(scratch);
 }
@@ -126,6 +141,8 @@ void BufferSetText(Editor *ed, Buffer *buffer, String8 text) {
   if (buffer->hooks.on_edit) {
     buffer->hooks.on_edit(ed, buffer, RangeU64{0, 0}, text.size);
   }
+  EditorLspAfterBufferReset(ed, buffer);
+  InvalidateLspPopup(ed, buffer);
 }
 
 u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
@@ -145,6 +162,7 @@ u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
 
     TempArena scratch = ScratchBegin();
     String8 old_text = PushStr8Copy(scratch.arena, rec->old_text);
+    EditorLspBeforeBufferEdit(ed, buffer, current, old_text, (i64)buffer->edit_serial + 1);
 
     if (!RangeEmpty(current)) GapBufferDelete(&buffer->text, current);
     if (old_text.size) GapBufferInsert(&buffer->text, current.min, old_text);
@@ -157,6 +175,7 @@ u64 BufferUndo(Editor *ed, Buffer *buffer, bool *moved) {
     if (buffer->hooks.on_edit) {
       buffer->hooks.on_edit(ed, buffer, current, old_text.size);
     }
+    InvalidateLspPopup(ed, buffer);
     ScratchEnd(scratch);
   }
 
@@ -182,6 +201,7 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved) {
 
     TempArena scratch = ScratchBegin();
     String8 new_text = PushStr8Copy(scratch.arena, rec->new_text);
+    EditorLspBeforeBufferEdit(ed, buffer, current, new_text, (i64)buffer->edit_serial + 1);
 
     if (!RangeEmpty(current)) GapBufferDelete(&buffer->text, current);
     if (new_text.size) GapBufferInsert(&buffer->text, current.min, new_text);
@@ -194,6 +214,7 @@ u64 BufferRedo(Editor *ed, Buffer *buffer, bool *moved) {
     if (buffer->hooks.on_edit) {
       buffer->hooks.on_edit(ed, buffer, current, new_text.size);
     }
+    InvalidateLspPopup(ed, buffer);
     ScratchEnd(scratch);
   }
 

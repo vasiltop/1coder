@@ -83,6 +83,14 @@ grid resizes through the same path a window resize takes.
 `<leader>pb` fuzzy-picks an open buffer, and `<leader>e` opens the file explorer
 for the current file's directory. See [search](search.md) and [explorer](explorer.md).
 
+## Language server protocol
+
+`gi` jumps to implementation, `gd` to definition, `gD` to declaration, and `gt`
+to type definition. `<leader>cf` formats, `<leader>rn` renames, and `<leader>d`
+shows diagnostics at the cursor. In normal mode `<C-Space>` hovers; in insert
+mode it completes (cycle with Up/Down or Ctrl-N/Ctrl-P, accept with Enter,
+dismiss with Esc). See [language server protocol](lsp.md).
+
 ## Compile
 
 `:compile <command>` runs any shell command and streams its output into a

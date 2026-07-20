@@ -37,6 +37,9 @@ struct ClipboardHooks {
   void (*write)(String8 text);
 };
 
+struct EditorLsp;
+struct EditorLspUi;
+
 // Where a partly-typed chord sequence has got to, plus the machinery for
 // repeating the last change with `.`.
 struct InputState {
@@ -127,6 +130,8 @@ struct Editor {
   Arena *register_arenas[kRegisterCount];
 
   ClipboardHooks clipboard;
+  EditorLsp *lsp;
+  EditorLspUi *lsp_ui;
 
   // Wakes the app event loop when background work (compile output) arrives, so
   // SDL_WaitEvent does not sit idle until the next keypress. Optional: tests
@@ -156,6 +161,10 @@ struct Editor {
   // What the prompt is for: ':' runs a command, '/' and '?' search. The
   // character is also what the renderer draws in front of the typed text.
   u8 command_line_prompt;
+  Arena *command_line_arena;
+  String8 command_line_purpose;
+  bool command_line_rename_active;
+  BufferHandle command_line_rename_target;
 
   // In-file search. The pattern is editor-wide rather than per-view, as vim's
   // is: `/` in one window sets what `n` finds in every other.
@@ -180,8 +189,7 @@ struct Editor {
 
 void EditorInit(Editor *ed, Arena *arena, RectS32 screen);
 void EditorDestroy(Editor *ed);
-// Drains background work (compile output). Returns true when the display should
-// redraw. The app calls this every frame; tests call it until idle.
+// Drains background work. Returns true when the display should redraw.
 [[nodiscard]] bool EditorTick(Editor *ed);
 
 // Recomputes every panel rect. Call after a split, a close or a window resize.

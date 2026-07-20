@@ -1,5 +1,6 @@
 #include "editor/command.h"
 #include "editor/editor.h"
+#include "editor/lsp_ui.h"
 #include "vim/vim_motions.h"
 
 // Key input: turning chords into commands.
@@ -148,6 +149,8 @@ void EditorProcessChord(Editor *ed, KeyChord chord) {
   View *view = EditorInputView(ed);
   Buffer *buffer = EditorBufferForView(ed, view);
   if (!view || !buffer) return;
+  EditorLspUiInvalidatePopupIfStale(ed->lsp_ui, buffer);
+  if (EditorLspUiHandlePopupInput(ed->lsp_ui, ed, view, chord)) return;
 
   InputState *input = &ed->input;
   bool was_recording_macro = input->recording_macro;

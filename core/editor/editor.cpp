@@ -4,6 +4,8 @@
 #include "buffers/buf_explorer.h"
 #include "buffers/buf_image.h"
 #include "editor/command.h"
+#include "editor/lsp.h"
+#include "editor/lsp_ui.h"
 #include "os/os_file.h"
 #include "text/syntax.h"
 
@@ -30,6 +32,7 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
 
   ed->cwd = OsGetCwd(arena);
   ed->status_arena = ArenaAlloc(MB(1));
+  ed->command_line_arena = ArenaAlloc(KB(64));
   ed->font_size = kFontSizeDefault;
   ed->command_line_prompt = ':';
   ed->search_forward = true;
@@ -47,6 +50,8 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   ed->command_buffer = CommandLineBufferOpen(ed);
   ed->command_view = PushStruct(arena, View);
   ViewInit(ed->command_view, ed->command_buffer);
+  EditorLspInit(ed);
+  ed->lsp_ui = EditorLspUiCreate();
 
   // What <CR> on a path opens. Images are the only kind that needs more than
   // "read it as text"; anything unregistered falls through to exactly that.
@@ -57,6 +62,9 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
 }
 
 void EditorDestroy(Editor *ed) {
+  EditorLspDestroy(ed);
+  if (ed->lsp_ui) EditorLspUiDestroy(ed->lsp_ui);
+  ed->lsp_ui = nullptr;
   CompileBufferShutdown(ed);
   BufferRegistryDestroy(&ed->buffers);
 
@@ -65,13 +73,19 @@ void EditorDestroy(Editor *ed) {
     ed->register_arenas[i] = nullptr;
   }
   if (ed->status_arena) ArenaRelease(ed->status_arena);
+  if (ed->command_line_arena) ArenaRelease(ed->command_line_arena);
   if (ed->search_arena) ArenaRelease(ed->search_arena);
   if (ed->compile_arena) ArenaRelease(ed->compile_arena);
   ed->status_arena = nullptr;
+  ed->command_line_arena = nullptr;
   ed->compile_arena = nullptr;
 }
 
-bool EditorTick(Editor *ed) { return CompileBufferTick(ed); }
+bool EditorTick(Editor *ed) {
+  bool lsp_changed = EditorLspTick(ed);
+  bool compile_changed = CompileBufferTick(ed);
+  return lsp_changed || compile_changed;
+}
 
 void EditorLayout(Editor *ed) {
   // The bottom row belongs to the command line and global status, so panels
@@ -192,6 +206,7 @@ void EditorClosePanel(Editor *ed, Panel *panel) {
   Panel *focus = PanelClose(panel, &ed->root_panel);
   ed->focused_panel = focus ? focus : PanelFirstLeaf(ed->root_panel);
   EditorLayout(ed);
+  EditorLspUiInvalidatePopupIfStale(ed->lsp_ui, EditorFocusedBuffer(ed));
 }
 
 void EditorFocusPanel(Editor *ed, Panel *panel) {
@@ -202,6 +217,7 @@ void EditorFocusPanel(Editor *ed, Panel *panel) {
   if (buffer && buffer->hooks.on_activate) {
     buffer->hooks.on_activate(ed, buffer, panel->view);
   }
+  EditorLspUiInvalidatePopupIfStale(ed->lsp_ui, buffer);
 }
 
 void EditorFocusDir(Editor *ed, Dir2 dir) {
@@ -221,6 +237,8 @@ BufferHandle EditorOpenFile(Editor *ed, String8 path) {
   // between two windows onto it.
   BufferHandle existing = BufferFromPath(&ed->buffers, absolute);
   if (existing.index != 0) {
+    Buffer *existing_buffer = BufferFromHandle(&ed->buffers, existing);
+    if (existing_buffer) EditorLspOnFileBufferOpened(ed, existing_buffer);
     ScratchEnd(scratch);
     return existing;
   }
@@ -238,6 +256,7 @@ BufferHandle EditorOpenFile(Editor *ed, String8 path) {
     buffer->name = PushStr8Copy(buffer->arena, Str8PathBase(absolute));
   }
 
+  EditorLspOnFileBufferOpened(ed, buffer);
   SyntaxAttach(buffer, absolute);
 
   ScratchEnd(scratch);
@@ -257,6 +276,7 @@ void EditorShowBuffer(Editor *ed, BufferHandle buffer) {
 
   Buffer *b = BufferFromHandle(&ed->buffers, buffer);
   if (b && b->hooks.on_activate) b->hooks.on_activate(ed, b, view);
+  EditorLspUiInvalidatePopupIfStale(ed->lsp_ui, b);
 }
 
 namespace {
@@ -287,6 +307,7 @@ void EditorJumpTo(Editor *ed, View *view, JumpEntry entry) {
   view->vim.mode = VimMode::Normal;
   VimClearPending(&view->vim);
   ViewSetCursor(view, buffer, entry.offset);
+  EditorLspUiInvalidatePopupIfStale(ed->lsp_ui, buffer);
   EditorScrollFocusedToCursor(ed);
 }
 

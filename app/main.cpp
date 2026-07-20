@@ -12,6 +12,7 @@
 #include "editor/command.h"
 #include "editor/editor.h"
 #include "editor/filetype.h"
+#include "editor/lsp.h"
 #include "platform/platform_sdl.h"
 #include "render/draw.h"
 #include "render/glyph_atlas.h"
@@ -265,6 +266,10 @@ int main(int argc, char **argv) {
   i32 width = 0, height = 0;
   SDL_GetWindowSizeInPixels(app->window, &width, &height);
   EditorInit(&app->editor, arena, RenderScreenCells(&app->render, width, height));
+  EditorLspConfig lsp = {};
+  lsp.wake = EditorWake;
+  lsp.wake_user_data = app;
+  EditorLspEnable(&app->editor, &lsp);
 
   app->editor.font_size = font_size;
   app->editor.clipboard.read = ClipboardRead;
