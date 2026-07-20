@@ -32,6 +32,7 @@ look each kind up in the compiled theme colour table. Incremental edits
 stop as soon as the per-line incoming/outgoing state converges with what was
 previously cached, so a one-line change in a large file rescans only the
 lines whose multiline state was affected.
+
 Everything about editing — motions, operators, undo, panel layout, scrolling,
 command parsing — is testable without opening a window, and the test binary
 needs no display.
