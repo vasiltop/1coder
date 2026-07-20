@@ -1593,6 +1593,47 @@ static void Cmd_explorer_open(CommandArgs *a) {
 
 static void Cmd_explorer_apply(CommandArgs *a) { ExplorerApplyPending(a->ed, a->buffer); }
 
+// ---------------------------------------------------------------------------
+// Compile
+// ---------------------------------------------------------------------------
+
+BufferHandle CompileBufferRun(Editor *ed, String8 command);
+String8 CompilePrefillCommand(const Editor *ed);
+
+static void PromptCompile(Editor *ed) {
+  TempArena scratch = ScratchBegin();
+  String8 prefill = CompilePrefillCommand(ed);
+  String8 line = PushStr8F(scratch.arena, "compile %.*s", (int)prefill.size, (char *)prefill.str);
+  CommandLineOpenWith(ed, line);
+  ScratchEnd(scratch);
+}
+
+static void Cmd_compile(CommandArgs *a) {
+  String8 command = Str8SkipChopWhitespace(a->text);
+  if (command.size == 0) {
+    PromptCompile(a->ed);
+    return;
+  }
+
+  BufferHandle handle = CompileBufferRun(a->ed, command);
+  if (handle.index == 0) return;
+  ShowBufferRecordingJump(a->ed, a->view, handle);
+}
+
+static void Cmd_recompile(CommandArgs *a) {
+  if (a->ed->last_compile_command.size == 0) {
+    PromptCompile(a->ed);
+    return;
+  }
+
+  BufferHandle handle = CompileBufferRun(a->ed, a->ed->last_compile_command);
+  if (handle.index == 0) return;
+  ShowBufferRecordingJump(a->ed, a->view, handle);
+}
+
+// ---------------------------------------------------------------------------
+// Meta listings
+// ---------------------------------------------------------------------------
 static void Cmd_list_commands(CommandArgs *a) {
   TempArena scratch = ScratchBegin();
   String8List lines = {};

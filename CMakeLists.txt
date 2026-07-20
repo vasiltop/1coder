@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+find_package(Threads REQUIRED)
+
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
 endif()
@@ -53,6 +55,7 @@ file(GLOB_RECURSE CORE_SOURCES CONFIGURE_DEPENDS core/*.cpp)
 add_library(editor_core STATIC ${CORE_SOURCES})
 target_include_directories(editor_core PUBLIC core)
 target_compile_options(editor_core PRIVATE ${EDITOR_COMPILE_OPTIONS})
+target_link_libraries(editor_core PUBLIC Threads::Threads)
 
 # ---------------------------------------------------------------------------
 # editor -- the application. SDL lives only above this line.
