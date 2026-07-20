@@ -321,6 +321,188 @@ TEST(panel_resize_takes_from_sibling) {
   Destroy(&f);
 }
 
+TEST(panel_mouse_boundary_vertical_split_discovery) {
+  Fixture f = MakeFixture();
+
+  Panel *right = PanelSplit(f.arena, f.root, Axis2::X, NextView(&f));
+  PanelLayout(f.root, kScreen);
+  Panel *left = f.root->first_child;
+
+  PanelBoundary between = PanelBoundaryBetween(f.root, left, right, Axis2::X);
+  CHECK(between.valid);
+  CHECK(between.parent == f.root);
+  CHECK(between.before == left);
+  CHECK(between.after == right);
+  CHECK(between.axis == Axis2::X);
+
+  PanelBoundary at = PanelBoundaryAt(f.root, 40, 5, Axis2::X);
+  CHECK(at.valid);
+  CHECK(at.parent == f.root);
+  CHECK(at.before == left);
+  CHECK(at.after == right);
+  CHECK(at.axis == Axis2::X);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_nested_horizontal_split_discovery) {
+  Fixture f = MakeFixture();
+
+  Panel *right = PanelSplit(f.arena, f.root, Axis2::X, NextView(&f));
+  Panel *right_bottom = PanelSplit(f.arena, right, Axis2::Y, NextView(&f));
+  PanelLayout(f.root, kScreen);
+  Panel *right_top = right->first_child;
+
+  PanelBoundary between = PanelBoundaryBetween(f.root, right_top, right_bottom, Axis2::Y);
+  CHECK(between.valid);
+  CHECK(between.parent == right);
+  CHECK(between.before == right_top);
+  CHECK(between.after == right_bottom);
+  CHECK(between.axis == Axis2::Y);
+
+  PanelBoundary at = PanelBoundaryAt(f.root, 60, 11, Axis2::Y);
+  CHECK(at.valid);
+  CHECK(at.parent == right);
+  CHECK(at.before == right_top);
+  CHECK(at.after == right_bottom);
+  CHECK(at.axis == Axis2::Y);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_vertical_shared_boundary_discovery) {
+  Fixture f = MakeFixture();
+
+  Panel *right = PanelSplit(f.arena, f.root, Axis2::X, NextView(&f));
+  Panel *left_bottom = PanelSplit(f.arena, f.root->first_child, Axis2::Y, NextView(&f));
+  Panel *right_bottom = PanelSplit(f.arena, right, Axis2::Y, NextView(&f));
+  PanelLayout(f.root, kScreen);
+
+  Panel *left_top = left_bottom->prev;
+  Panel *right_top = right_bottom->prev;
+
+  PanelBoundary between = PanelBoundaryBetween(f.root, left_top, right_top, Axis2::X);
+  CHECK(between.valid);
+  CHECK(between.parent == f.root);
+  CHECK(between.before == f.root->first_child);
+  CHECK(between.after == right);
+
+  PanelBoundary at = PanelBoundaryAt(f.root, 40, 5, Axis2::X);
+  CHECK(at.valid);
+  CHECK(at.parent == f.root);
+  CHECK(at.before == f.root->first_child);
+  CHECK(at.after == right);
+
+  CHECK(!PanelBoundaryBetween(f.root, left_bottom, right_top, Axis2::X).valid);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_invalid_cases) {
+  Fixture f = MakeFixture();
+
+  Panel *b = PanelSplit(f.arena, f.root, Axis2::X, NextView(&f));
+  Panel *c = PanelSplit(f.arena, b, Axis2::X, NextView(&f));
+  PanelLayout(f.root, kScreen);
+
+  Panel *a = f.root->first_child;
+  Panel *b_leaf = b->first_child;
+
+  CHECK(!PanelBoundaryBetween(f.root, nullptr, c, Axis2::X).valid);
+  CHECK(!PanelBoundaryBetween(f.root, b_leaf, b_leaf, Axis2::X).valid);
+  CHECK(!PanelBoundaryBetween(f.root, c, b_leaf, Axis2::X).valid);
+  CHECK(!PanelBoundaryBetween(f.root, a, c, Axis2::X).valid);
+  CHECK(!PanelBoundaryBetween(f.root, b_leaf, c, Axis2::Y).valid);
+  CHECK(!PanelBoundaryAt(f.root, 0, 5, Axis2::X).valid);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_preserves_adjacency_and_total_space) {
+  Fixture f = MakeFixture();
+
+  Panel *right = PanelSplit(f.arena, f.root, Axis2::X, NextView(&f));
+  PanelLayout(f.root, kScreen);
+  Panel *left = f.root->first_child;
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, left, right, Axis2::X), 7);
+  PanelLayout(f.root, kScreen);
+
+  CHECK_EQ(RectWidth(left->rect), 47);
+  CHECK_EQ(RectWidth(right->rect), 33);
+  CHECK_EQ(left->rect.x1, right->rect.x0);
+  CHECK_EQ(RectWidth(left->rect) + RectWidth(right->rect), RectWidth(f.root->rect));
+
+  PanelBoundary moved = PanelBoundaryAt(f.root, 47, 5, Axis2::X);
+  CHECK(moved.valid);
+  CHECK(moved.before == left);
+  CHECK(moved.after == right);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_clamps_to_two_cells_in_both_directions) {
+  Fixture f = MakeFixture();
+
+  Panel *right = PanelSplit(f.arena, f.root, Axis2::X, NextView(&f));
+  PanelLayout(f.root, kScreen);
+  Panel *left = f.root->first_child;
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, left, right, Axis2::X), 100);
+  PanelLayout(f.root, kScreen);
+  CHECK_EQ(RectWidth(left->rect), 78);
+  CHECK_EQ(RectWidth(right->rect), 2);
+
+  PanelResizeBoundary(PanelBoundaryAt(f.root, 78, 5, Axis2::X), -200);
+  PanelLayout(f.root, kScreen);
+  CHECK_EQ(RectWidth(left->rect), 2);
+  CHECK_EQ(RectWidth(right->rect), 78);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_is_noop_when_parent_is_too_small) {
+  Fixture f = MakeFixture();
+
+  Panel *right = PanelSplit(f.arena, f.root, Axis2::X, NextView(&f));
+  RectS32 cramped = {0, 0, 3, 8};
+  PanelLayout(f.root, cramped);
+  Panel *left = f.root->first_child;
+  f32 left_size = left->size_pct;
+  f32 right_size = right->size_pct;
+
+  PanelResizeBoundary(PanelBoundaryBetween(f.root, left, right, Axis2::X), 1);
+  PanelLayout(f.root, cramped);
+
+  CHECK(left->size_pct == left_size);
+  CHECK(right->size_pct == right_size);
+  CHECK_EQ(RectWidth(left->rect), 1);
+  CHECK_EQ(RectWidth(right->rect), 2);
+
+  Destroy(&f);
+}
+
+TEST(panel_mouse_boundary_resize_zero_delta_is_noop_below_minimum) {
+  Fixture f = MakeFixture();
+
+  Panel *right = PanelSplit(f.arena, f.root, Axis2::X, NextView(&f));
+  Panel *left = f.root->first_child;
+  PanelResize(left, -100.0f);
+
+  RectS32 narrow = {0, 0, 50, 8};
+  PanelLayout(f.root, narrow);
+  CHECK_EQ(RectWidth(left->rect), 1);
+  CHECK_EQ(RectWidth(right->rect), 49);
+
+  PanelResizeBoundary(PanelBoundaryAt(f.root, 1, 2, Axis2::X), 0);
+  PanelLayout(f.root, narrow);
+
+  CHECK_EQ(RectWidth(left->rect), 1);
+  CHECK_EQ(RectWidth(right->rect), 49);
+
+  Destroy(&f);
+}
+
 TEST(panel_equalize) {
   Fixture f = MakeFixture();
 

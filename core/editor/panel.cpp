@@ -42,6 +42,59 @@ void PanelUnlink(Panel *panel) {
   return (axis == Axis2::X) ? RectWidth(rect) : RectHeight(rect);
 }
 
+[[nodiscard]] PanelBoundary InvalidBoundary(Axis2 axis) {
+  return PanelBoundary{nullptr, nullptr, nullptr, axis, false};
+}
+
+[[nodiscard]] bool PanelHasAncestor(const Panel *panel, const Panel *ancestor) {
+  for (const Panel *node = panel; node; node = node->parent) {
+    if (node == ancestor) return true;
+  }
+  return false;
+}
+
+[[nodiscard]] i32 PanelDepth(const Panel *panel) {
+  i32 depth = 0;
+  for (const Panel *node = panel; node; node = node->parent) depth += 1;
+  return depth;
+}
+
+[[nodiscard]] Panel *LowestCommonAncestor(Panel *a, Panel *b) {
+  i32 depth_a = PanelDepth(a);
+  i32 depth_b = PanelDepth(b);
+
+  while (depth_a > depth_b) {
+    a = a->parent;
+    depth_a -= 1;
+  }
+  while (depth_b > depth_a) {
+    b = b->parent;
+    depth_b -= 1;
+  }
+
+  while (a && b && a != b) {
+    a = a->parent;
+    b = b->parent;
+  }
+  return (a == b) ? a : nullptr;
+}
+
+[[nodiscard]] Panel *ChildUnderAncestor(Panel *ancestor, Panel *leaf) {
+  for (Panel *node = leaf; node; node = node->parent) {
+    if (node->parent == ancestor) return node;
+  }
+  return nullptr;
+}
+
+[[nodiscard]] bool PanelsShareBoundary(const Panel *before, const Panel *after, Axis2 axis) {
+  if (axis == Axis2::X) {
+    return before->rect.x1 == after->rect.x0 &&
+           Max(before->rect.y0, after->rect.y0) < Min(before->rect.y1, after->rect.y1);
+  }
+  return before->rect.y1 == after->rect.y0 &&
+         Max(before->rect.x0, after->rect.x0) < Min(before->rect.x1, after->rect.x1);
+}
+
 // Centre of an edge, used as the probe point for directional focus.
 void EdgeProbe(RectS32 rect, Dir2 dir, i32 *out_x, i32 *out_y) {
   i32 mid_x = rect.x0 + RectWidth(rect) / 2;
@@ -219,6 +272,48 @@ Panel *PanelFocusDir(Panel *root, Panel *panel, Dir2 dir) {
   return (found == panel) ? nullptr : found;
 }
 
+PanelBoundary PanelBoundaryBetween(Panel *root, Panel *before_leaf, Panel *after_leaf,
+                                   Axis2 axis) {
+  if (!root || !before_leaf || !after_leaf || before_leaf == after_leaf) {
+    return InvalidBoundary(axis);
+  }
+  if (!PanelIsLeaf(before_leaf) || !PanelIsLeaf(after_leaf)) return InvalidBoundary(axis);
+  if (!PanelHasAncestor(before_leaf, root) || !PanelHasAncestor(after_leaf, root)) {
+    return InvalidBoundary(axis);
+  }
+
+  Panel *parent = LowestCommonAncestor(before_leaf, after_leaf);
+  if (!parent || !PanelHasAncestor(parent, root) || parent->split_axis != axis) {
+    return InvalidBoundary(axis);
+  }
+
+  Panel *before = ChildUnderAncestor(parent, before_leaf);
+  Panel *after = ChildUnderAncestor(parent, after_leaf);
+  if (!before || !after || before == after || before->next != after) {
+    return InvalidBoundary(axis);
+  }
+  if (!PanelsShareBoundary(before_leaf, after_leaf, axis)) {
+    return InvalidBoundary(axis);
+  }
+
+  return PanelBoundary{parent, before, after, axis, true};
+}
+
+PanelBoundary PanelBoundaryAt(Panel *root, i32 x, i32 y, Axis2 axis) {
+  if (!root) return InvalidBoundary(axis);
+
+  Panel *before = nullptr;
+  Panel *after = nullptr;
+  if (axis == Axis2::X) {
+    before = PanelFromPoint(root, x - 1, y);
+    after = PanelFromPoint(root, x, y);
+  } else {
+    before = PanelFromPoint(root, x, y);
+    after = PanelFromPoint(root, x, y + 1);
+  }
+  return PanelBoundaryBetween(root, before, after, axis);
+}
+
 void PanelResize(Panel *panel, f32 delta_pct) {
   if (!panel || !panel->parent) return;
 
@@ -232,6 +327,36 @@ void PanelResize(Panel *panel, f32 delta_pct) {
 
   panel->size_pct = target;
   sibling->size_pct = available - target;
+}
+
+void PanelResizeBoundary(PanelBoundary boundary, i32 delta_cells) {
+  if (!boundary.valid || !boundary.parent || !boundary.before || !boundary.after) return;
+  if (boundary.parent->split_axis != boundary.axis) return;
+  if (boundary.before->parent != boundary.parent || boundary.after->parent != boundary.parent) {
+    return;
+  }
+  if (boundary.before->next != boundary.after) return;
+  if (delta_cells == 0) return;
+
+  i32 parent_extent = RectExtent(boundary.parent->rect, boundary.axis);
+  if (parent_extent <= 0) return;
+
+  constexpr i32 kMinChildExtent = 2;
+  if (parent_extent < 2 * kMinChildExtent) return;
+
+  i32 before_extent = RectExtent(boundary.before->rect, boundary.axis);
+  i32 after_extent = RectExtent(boundary.after->rect, boundary.axis);
+  i32 max_grow = Max(after_extent - kMinChildExtent, 0);
+  i32 max_shrink = Max(before_extent - kMinChildExtent, 0);
+  i32 clamped_delta = Clamp(-max_shrink, delta_cells, max_grow);
+  i32 target_before = before_extent + clamped_delta;
+  if (target_before == before_extent) return;
+
+  f32 total = boundary.before->size_pct + boundary.after->size_pct;
+  if (total <= 0.0f) return;
+
+  boundary.before->size_pct = total * ((f32)target_before / (f32)parent_extent);
+  boundary.after->size_pct = total - boundary.before->size_pct;
 }
 
 void PanelEqualize(Panel *root) {

@@ -28,6 +28,14 @@ struct Panel {
   RectS32 rect;      // computed by PanelLayout
 };
 
+struct PanelBoundary {
+  Panel *parent;
+  Panel *before;
+  Panel *after;
+  Axis2 axis;
+  bool valid;
+};
+
 [[nodiscard]] inline bool PanelIsLeaf(const Panel *panel) {
   return panel->first_child == nullptr;
 }
@@ -67,8 +75,13 @@ void PanelLayout(Panel *root, RectS32 rect);
 // The leaf containing a cell, for click-to-focus.
 [[nodiscard]] Panel *PanelFromPoint(Panel *root, i32 x, i32 y);
 
+[[nodiscard]] PanelBoundary PanelBoundaryBetween(Panel *root, Panel *before_leaf,
+                                                 Panel *after_leaf, Axis2 axis);
+[[nodiscard]] PanelBoundary PanelBoundaryAt(Panel *root, i32 x, i32 y, Axis2 axis);
+
 // Grows or shrinks a panel along its parent's axis, taking the difference from
 // its sibling.
 void PanelResize(Panel *panel, f32 delta_pct);
+void PanelResizeBoundary(PanelBoundary boundary, i32 delta_cells);
 // Restores every panel under `root` to an even share.
 void PanelEqualize(Panel *root);
