@@ -39,7 +39,7 @@ config toggle.
   Replace; in Visual it replaces the selection.
 - **Wheel:** scrolls the pane under the pointer without changing focus;
   vertical wheel scrolls vertically, horizontal wheel scrolls horizontally, and
-  `Shift`+vertical wheel pages instead of line-scrolling.
+  `Shift`+vertical or horizontal wheel pages instead of line-scrolling.
 - **Splits and status lines:** drag a vertical split edge to resize left/right
   panes; drag an eligible panel status-line boundary to resize top/bottom
   panes; clicking a status line focuses that pane.
