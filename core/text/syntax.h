@@ -155,12 +155,8 @@ struct SyntaxEdit {
   SyntaxState start_state;
   // Token index of the first token on old_start_line.
   u64 prefix_token_end;
-  // Token index past the last token on old_end_line (start of suffix tokens).
-  u64 suffix_token_start;
   // Total token count before the edit.
   u64 old_token_count;
-  // Byte offset where the suffix tokens began (for computing delta).
-  u64 suffix_byte_start;
 };
 
 [[nodiscard]] SyntaxEdit SyntaxBeginEdit(const Buffer *buffer, RangeU64 old_range);

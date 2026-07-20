@@ -514,15 +514,6 @@ SyntaxEdit SyntaxBeginEdit(const Buffer *buffer, RangeU64 old_range) {
   // Token boundaries: prefix tokens are all tokens before old_start_line.
   edit.prefix_token_end = cache->lines[edit.old_start_line].first_token;
 
-  // Suffix tokens start after old_end_line.
-  if (edit.old_end_line + 1 < cache->line_count) {
-    edit.suffix_token_start = cache->lines[edit.old_end_line + 1].first_token;
-    edit.suffix_byte_start = BufferOffsetFromLine(buffer, edit.old_end_line + 1);
-  } else {
-    edit.suffix_token_start = buffer->tokens.count;
-    edit.suffix_byte_start = size;
-  }
-
   edit.old_token_count = buffer->tokens.count;
 
   return edit;
@@ -633,7 +624,10 @@ void SyntaxEndEdit(Buffer *buffer, SyntaxEdit edit, RangeU64 /*new_range*/) {
 
   // --- Splice token array: [prefix] [rescanned] [shifted suffix] ---
   u64 new_total_tokens = edit.prefix_token_end + rescan_count + retained_suffix_count;
-  EnsureTokenCapacity(buffer, edit.prefix_token_end, new_total_tokens);
+
+  // Growth must preserve the entire old array (not just prefix) because the
+  // retained suffix is read from old indices after reallocation.
+  EnsureTokenCapacity(buffer, edit.old_token_count, new_total_tokens);
 
   // Shift and copy retained suffix tokens.  Source and destination may overlap
   // so copy in the safe direction.

@@ -1279,3 +1279,78 @@ TEST(syntax_incremental_save_as_language_reselection) {
 
   Destroy(&f);
 }
+
+// ---------------------------------------------------------------------------
+// Regression: incremental token-array growth must preserve suffix tokens.
+//
+// EnsureTokenCapacity during SyntaxEndEdit used to copy only
+// `prefix_token_end` entries, leaving the retained suffix (read from the old
+// array indices) pointing into uninitialized memory after a reallocation.
+// This test forces a 256->512 growth by building a buffer whose total token
+// count is just under 256, then performing a small edit on line 0 that
+// converges immediately -- retaining a large suffix.  After the edit the
+// suffix tokens must be sorted, non-empty, in-bounds, and shifted by the
+// exact byte delta.
+// ---------------------------------------------------------------------------
+TEST(syntax_incremental_growth_preserves_suffix) {
+  Fixture f = MakeFixture();
+
+  // Each "x=1;" yields 3 tokens.  80 repetitions = 240 tokens, just under 256.
+  // We put them on 80 separate lines so convergence kicks in after line 0.
+  constexpr int kLines = 80;
+  constexpr int kUnitLen = 5;  // "x=1;\n"
+  char text[kLines * kUnitLen + 1];
+  for (int i = 0; i < kLines; i += 1) {
+    text[i * kUnitLen + 0] = 'x';
+    text[i * kUnitLen + 1] = '=';
+    text[i * kUnitLen + 2] = '1';
+    text[i * kUnitLen + 3] = ';';
+    text[i * kUnitLen + 4] = '\n';
+  }
+  text[kLines * kUnitLen] = '\0';
+
+  Buffer *buffer = OpenAttached(&f, "main.cpp", text);
+
+  // Precondition: total tokens should be 240, capacity 256 (initial).
+  CHECK_EQ(buffer->tokens.count, (u64)(kLines * 3));
+  CHECK_EQ(buffer->syntax.token_capacity, (u64)256);
+
+  // Snapshot a suffix token (line 1's first token) for comparison.
+  u64 suffix_first_tok_idx = buffer->syntax.lines[1].first_token;
+  Token suffix_sample = buffer->tokens.tokens[suffix_first_tok_idx];
+
+  // Replace the first "x=1;" (bytes 0-4) with many tokens to force growth.
+  // "1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1;" produces 20 numbers +
+  // 19 operators + 1 punctuation = 40 tokens from line 0 alone.
+  // Total = 40 + 237 (lines 1-79) = 277 > 256 -> growth to 512.
+  const char *big_insert = "1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1;";
+  String8 big_str = Str8C(big_insert);
+  u64 big_len = big_str.size;
+  BufferReplace(nullptr, buffer, RangeU64{0, 4}, big_str, 0, 0);
+
+  // The capacity must have grown past 256.
+  CHECK(buffer->syntax.token_capacity > 256);
+
+  // Convergence: only line 0 needed rescanning (no state change).
+  CHECK(buffer->syntax.lines_scanned_last_update <= 2);
+
+  // All tokens must be sorted, non-empty, in-bounds.
+  u64 buf_size = BufferSize(buffer);
+  for (u64 i = 0; i < buffer->tokens.count; i += 1) {
+    CHECK(buffer->tokens.tokens[i].start < buffer->tokens.tokens[i].end);
+    CHECK(buffer->tokens.tokens[i].end <= buf_size);
+    if (i + 1 < buffer->tokens.count) {
+      CHECK(buffer->tokens.tokens[i].end <= buffer->tokens.tokens[i + 1].start);
+    }
+  }
+
+  // Suffix tokens (line 1 onward) must be shifted by the byte delta.
+  i64 byte_delta = (i64)big_len - 4;  // inserted big_len bytes, removed 4
+  u64 new_suffix_first_tok = buffer->syntax.lines[1].first_token;
+  Token shifted_sample = buffer->tokens.tokens[new_suffix_first_tok];
+  CHECK_EQ(shifted_sample.start, (u64)((i64)suffix_sample.start + byte_delta));
+  CHECK_EQ(shifted_sample.end, (u64)((i64)suffix_sample.end + byte_delta));
+  CHECK_EQ((int)shifted_sample.kind, (int)suffix_sample.kind);
+
+  Destroy(&f);
+}
