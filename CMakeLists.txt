@@ -28,16 +28,21 @@ target_include_directories(editor_core PUBLIC core)
 
 # ---------------------------------------------------------------------------
 # editor -- the application. SDL lives only above this line.
+# Optional so headless CI can build and run editor_tests without SDL.
 # ---------------------------------------------------------------------------
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/app/main.cpp)
-  find_package(SDL3 CONFIG REQUIRED)
-  file(GLOB_RECURSE APP_SOURCES CONFIGURE_DEPENDS app/*.cpp)
+  find_package(SDL3 CONFIG QUIET)
+  if(SDL3_FOUND)
+    file(GLOB_RECURSE APP_SOURCES CONFIGURE_DEPENDS app/*.cpp)
 
-  add_executable(editor ${APP_SOURCES})
-  target_include_directories(editor PRIVATE app)
-  # Vendored single-header libraries are not ours to keep warning-clean.
-  target_include_directories(editor SYSTEM PRIVATE third_party)
-  target_link_libraries(editor PRIVATE editor_core SDL3::SDL3)
+    add_executable(editor ${APP_SOURCES})
+    target_include_directories(editor PRIVATE app)
+    # Vendored single-header libraries are not ours to keep warning-clean.
+    target_include_directories(editor SYSTEM PRIVATE third_party)
+    target_link_libraries(editor PRIVATE editor_core SDL3::SDL3)
+  else()
+    message(STATUS "SDL3 not found; skipping editor (tests still build)")
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------

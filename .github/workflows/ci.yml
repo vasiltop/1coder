@@ -23,12 +23,5 @@ jobs:
             | bash -s -- --to "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Install SDL3
-        uses: libsdl-org/setup-sdl@main
-        with:
-          version: 3-latest
-          build-type: Release
-          install-linux-dependencies: true
-
       - name: CI
         run: just ci
