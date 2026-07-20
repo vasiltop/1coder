@@ -8,6 +8,7 @@
 #  include <windows.h>
 #else
 #  include <dirent.h>
+#  include <errno.h>
 #  include <fcntl.h>
 #  include <limits.h>
 #  include <sys/mman.h>
@@ -192,7 +193,24 @@ FileList OsDirList(Arena *arena, String8 path) {
         size = (u64)st.st_size;
       }
     }
+    // Only links pay for a stat: is_dir must describe the target (so a link to
+    // a directory lists and opens like one) while is_link records that the
+    // entry itself is a link.
+    bool is_link = false;
+#  if defined(DT_LNK)
+    if (entry->d_type == DT_LNK) {
+      is_link = true;
+      String8 full = OsPathJoin(scratch.arena, path, name);
+      struct stat st;
+      if (stat((const char *)full.str, &st) == 0) {
+        is_dir = S_ISDIR(st.st_mode);
+        size = (u64)st.st_size;
+      }
+    }
+#  endif
+
     node->info.is_dir = is_dir;
+    node->info.is_link = is_link;
     node->info.size = size;
 
     if (last) {
@@ -214,6 +232,134 @@ FileList OsDirList(Arena *arena, String8 path) {
 
   qsort(list.files, list.count, sizeof(FileInfo), CompareEntries);
   return list;
+}
+
+bool OsMakeDir(String8 path) {
+  TempArena scratch = ScratchBegin();
+  const char *cpath = PushCStr(scratch.arena, path);
+  bool ok = (mkdir(cpath, 0777) == 0) || (errno == EEXIST && OsDirExists(path));
+  ScratchEnd(scratch);
+  return ok;
+}
+
+bool OsMakeDirs(String8 path) {
+  if (path.size == 0) return false;
+
+  TempArena scratch = ScratchBegin();
+  String8 partial = PushStr8Copy(scratch.arena, path);
+
+  // Walk forwards, terminating the string at each separator in turn. Mutating
+  // the copy in place avoids one allocation per component.
+  bool ok = true;
+  for (u64 i = 1; i <= partial.size && ok; i += 1) {
+    bool at_end = (i == partial.size);
+    if (!at_end && partial.str[i] != '/') continue;
+
+    u8 saved = at_end ? 0 : partial.str[i];
+    partial.str[i] = 0;
+    ok = OsMakeDir(String8{partial.str, i});
+    if (!at_end) partial.str[i] = saved;
+  }
+
+  ScratchEnd(scratch);
+  return ok;
+}
+
+namespace {
+
+// Creates the parent of `path` so that a create or a move into a directory that
+// does not exist yet works the way typing the line implies.
+bool MakeParentDirs(String8 path) {
+  String8 parent = Str8PathDir(path);
+  if (parent.size == 0 || Str8Match(parent, path)) return true;
+  return OsMakeDirs(parent);
+}
+
+}  // namespace
+
+bool OsFileCreate(String8 path) {
+  if (!MakeParentDirs(path)) return false;
+
+  TempArena scratch = ScratchBegin();
+  const char *cpath = PushCStr(scratch.arena, path);
+  // O_EXCL is what makes this refuse to truncate something already there.
+  int fd = open(cpath, O_WRONLY | O_CREAT | O_EXCL, 0666);
+  ScratchEnd(scratch);
+
+  if (fd < 0) return false;
+  close(fd);
+  return true;
+}
+
+bool OsFileDelete(String8 path) {
+  TempArena scratch = ScratchBegin();
+  const char *cpath = PushCStr(scratch.arena, path);
+  bool ok = (unlink(cpath) == 0);
+  ScratchEnd(scratch);
+  return ok;
+}
+
+bool OsDirDelete(String8 path) {
+  TempArena scratch = ScratchBegin();
+  const char *cpath = PushCStr(scratch.arena, path);
+  bool ok = (rmdir(cpath) == 0);
+  ScratchEnd(scratch);
+  return ok;
+}
+
+bool OsDirDeleteRecursive(String8 path) {
+  TempArena scratch = ScratchBegin();
+  FileList entries = OsDirList(scratch.arena, path);
+
+  bool ok = true;
+  for (u64 i = 0; i < entries.count; i += 1) {
+    FileInfo *info = &entries.files[i];
+    String8 child = OsPathJoin(scratch.arena, path, info->name);
+
+    // A symlink is unlinked whatever it points at. Descending would let this
+    // delete files outside the tree being removed.
+    if (info->is_dir && !info->is_link) {
+      if (!OsDirDeleteRecursive(child)) ok = false;
+    } else {
+      if (!OsFileDelete(child)) ok = false;
+    }
+  }
+
+  ScratchEnd(scratch);
+
+  if (!ok) return false;
+  return OsDirDelete(path);
+}
+
+namespace {
+
+// rename(2) cannot cross filesystems, which a temp directory and a project
+// directory frequently are.
+bool CopyThenDelete(String8 from, String8 to) {
+  TempArena scratch = ScratchBegin();
+  FileContents contents = OsFileRead(scratch.arena, from);
+  bool ok = contents.ok && OsFileWrite(to, contents.data) && OsFileDelete(from);
+  ScratchEnd(scratch);
+  return ok;
+}
+
+}  // namespace
+
+bool OsRename(String8 from, String8 to) {
+  if (!MakeParentDirs(to)) return false;
+
+  TempArena scratch = ScratchBegin();
+  const char *cfrom = PushCStr(scratch.arena, from);
+  const char *cto = PushCStr(scratch.arena, to);
+
+  bool ok = (rename(cfrom, cto) == 0);
+  bool cross_device = (!ok && errno == EXDEV);
+  ScratchEnd(scratch);
+
+  // Only regular files get the fallback; copying a directory tree across
+  // devices is a different job and the explorer reports the failure instead.
+  if (cross_device && OsFileExists(from)) ok = CopyThenDelete(from, to);
+  return ok;
 }
 
 String8 OsGetCwd(Arena *arena) {

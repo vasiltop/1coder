@@ -1,50 +1,10 @@
 #include "os/os_file.h"
 #include "test.h"
+#include "test_tempdir.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-namespace {
-
-// Tests touch the real filesystem, so everything happens inside one scratch
-// directory that is removed at the end.
-struct TempDir {
-  Arena *arena;
-  String8 path;
-};
-
-TempDir MakeTempDir(const char *tag) {
-  TempDir dir = {};
-  dir.arena = ArenaAlloc(MB(16));
-
-  const char *base = getenv("TMPDIR");
-  if (!base || !*base) base = "/tmp";
-
-  dir.path = PushStr8F(dir.arena, "%s/1code_test_%s_%d", base, tag, (int)getpid());
-
-  TempArena scratch = ScratchBegin1(dir.arena);
-  String8 cmd = PushStr8F(scratch.arena, "rm -rf '%.*s' && mkdir -p '%.*s'",
-                          (int)dir.path.size, (char *)dir.path.str,
-                          (int)dir.path.size, (char *)dir.path.str);
-  int rc = system((const char *)cmd.str);
-  (void)rc;
-  ScratchEnd(scratch);
-
-  return dir;
-}
-
-void Destroy(TempDir *dir) {
-  TempArena scratch = ScratchBegin1(dir->arena);
-  String8 cmd = PushStr8F(scratch.arena, "rm -rf '%.*s'", (int)dir->path.size,
-                          (char *)dir->path.str);
-  int rc = system((const char *)cmd.str);
-  (void)rc;
-  ScratchEnd(scratch);
-  ArenaRelease(dir->arena);
-}
-
-}  // namespace
 
 TEST(os_file_write_then_read) {
   TempDir dir = MakeTempDir("rw");
@@ -200,4 +160,131 @@ TEST(os_cwd_and_absolute) {
   CHECK_STR(OsPathAbsolute(arena, ghost), ghost);
 
   ArenaRelease(arena);
+}
+
+// ---------------------------------------------------------------------------
+// Mutation
+// ---------------------------------------------------------------------------
+
+TEST(os_make_dirs_creates_every_component) {
+  TempDir dir = MakeTempDir("mkdirs");
+
+  String8 deep = TempPath(&dir, "a/b/c");
+  CHECK(OsMakeDirs(deep));
+  CHECK(OsDirExists(deep));
+  CHECK(OsDirExists(TempPath(&dir, "a/b")));
+  CHECK(OsDirExists(TempPath(&dir, "a")));
+
+  // Applying the same plan twice must not be an error.
+  CHECK(OsMakeDirs(deep));
+  CHECK(OsMakeDir(deep));
+
+  Destroy(&dir);
+}
+
+TEST(os_file_create_refuses_to_clobber) {
+  TempDir dir = MakeTempDir("create");
+
+  String8 path = TempPath(&dir, "new.txt");
+  CHECK(OsFileCreate(path));
+  CHECK(OsFileExists(path));
+
+  FileContents contents = OsFileRead(dir.arena, path);
+  CHECK(contents.ok);
+  CHECK_EQ(contents.data.size, (u64)0);
+
+  // Creating over something that exists would truncate it.
+  CHECK(!OsFileCreate(path));
+
+  // Parents are created on the way, so a typed "sub/deep.txt" line works.
+  String8 nested = TempPath(&dir, "sub/deep.txt");
+  CHECK(OsFileCreate(nested));
+  CHECK(OsFileExists(nested));
+
+  Destroy(&dir);
+}
+
+TEST(os_rename_moves_content) {
+  TempDir dir = MakeTempDir("rename");
+
+  String8 from = TempPath(&dir, "before.txt");
+  String8 to = TempPath(&dir, "nested/after.txt");
+  CHECK(OsFileWrite(from, Str8Lit("payload")));
+
+  CHECK(OsRename(from, to));
+  CHECK(!OsFileExists(from));
+  CHECK(OsFileExists(to));
+  CHECK_STR(OsFileRead(dir.arena, to).data, Str8Lit("payload"));
+
+  Destroy(&dir);
+}
+
+TEST(os_delete_file_and_empty_dir) {
+  TempDir dir = MakeTempDir("delete");
+
+  String8 file = TempPath(&dir, "gone.txt");
+  CHECK(OsFileWrite(file, Str8Lit("x")));
+  CHECK(OsFileDelete(file));
+  CHECK(!OsFileExists(file));
+
+  String8 empty = TempPath(&dir, "empty");
+  CHECK(OsMakeDir(empty));
+  CHECK(OsDirDelete(empty));
+  CHECK(!OsDirExists(empty));
+
+  // rmdir refuses a non-empty directory; that is what the recursive variant is
+  // for, and conflating the two would make a typo destructive.
+  String8 full = TempPath(&dir, "full");
+  CHECK(OsMakeDir(full));
+  CHECK(OsFileWrite(OsPathJoin(dir.arena, full, Str8Lit("f.txt")), Str8Lit("x")));
+  CHECK(!OsDirDelete(full));
+  CHECK(OsDirExists(full));
+
+  Destroy(&dir);
+}
+
+TEST(os_delete_never_follows_symlinks) {
+  TempDir dir = MakeTempDir("symlink");
+
+  // A tree that links out to a file and a directory the delete must not touch.
+  String8 outside_dir = TempPath(&dir, "outside");
+  String8 outside_file = TempPath(&dir, "outside/keep.txt");
+  CHECK(OsMakeDir(outside_dir));
+  CHECK(OsFileWrite(outside_file, Str8Lit("keep me")));
+
+  String8 tree = TempPath(&dir, "tree");
+  CHECK(OsMakeDirs(TempPath(&dir, "tree/nested")));
+  CHECK(OsFileWrite(TempPath(&dir, "tree/nested/leaf.txt"), Str8Lit("x")));
+
+  TempArena scratch = ScratchBegin1(dir.arena);
+  String8 cmd = PushStr8F(scratch.arena, "ln -s '%.*s' '%.*s/link_dir' && ln -s '%.*s' '%.*s/link_file'",
+                          (int)outside_dir.size, (char *)outside_dir.str,
+                          (int)tree.size, (char *)tree.str,
+                          (int)outside_file.size, (char *)outside_file.str,
+                          (int)tree.size, (char *)tree.str);
+  int rc = system((const char *)cmd.str);
+  CHECK_EQ(rc, 0);
+  ScratchEnd(scratch);
+
+  // The listing sees the link to a directory as a directory, but knows it is a
+  // link -- which is exactly what stops the recursion descending it.
+  FileList listed = OsDirList(dir.arena, tree);
+  bool saw_link_dir = false;
+  for (u64 i = 0; i < listed.count; i += 1) {
+    if (!Str8Match(listed.files[i].name, Str8Lit("link_dir"))) continue;
+    saw_link_dir = true;
+    CHECK(listed.files[i].is_dir);
+    CHECK(listed.files[i].is_link);
+  }
+  CHECK(saw_link_dir);
+
+  CHECK(OsDirDeleteRecursive(tree));
+  CHECK(!OsDirExists(tree));
+
+  // The link targets survived.
+  CHECK(OsDirExists(outside_dir));
+  CHECK(OsFileExists(outside_file));
+  CHECK_STR(OsFileRead(dir.arena, outside_file).data, Str8Lit("keep me"));
+
+  Destroy(&dir);
 }

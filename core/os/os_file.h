@@ -44,6 +44,10 @@ struct FileInfo {
   String8 name;  // entry name only, not a full path
   u64 size;
   bool is_dir;
+  // A symbolic link. `is_dir` still describes the target, so a link to a
+  // directory sorts and opens like one -- but a recursive delete must unlink it
+  // rather than descend, or an `rm -rf` could escape the subtree.
+  bool is_link;
 };
 
 struct FileList {
@@ -54,6 +58,33 @@ struct FileList {
 // Lists `path`, excluding "." and "..". Entries are sorted directories-first
 // then by name, which is the order a file explorer wants to display.
 [[nodiscard]] FileList OsDirList(Arena *arena, String8 path);
+
+// ---------------------------------------------------------------------------
+// Mutation
+// ---------------------------------------------------------------------------
+//
+// What a file explorer needs to apply an edited listing. Each returns false on
+// failure without reporting why: the explorer names the operation that failed
+// and there is nothing useful it could do with an errno.
+
+// Creates one level. True if `path` already exists as a directory, so applying
+// a plan twice is not an error.
+[[nodiscard]] bool OsMakeDir(String8 path);
+// Creates every missing component, so "a/b/c" needs no prior "a" or "a/b".
+[[nodiscard]] bool OsMakeDirs(String8 path);
+// Creates an empty file, including any missing parent directories. False if
+// anything already exists at `path` -- creating over a file would truncate it.
+[[nodiscard]] bool OsFileCreate(String8 path);
+// Moves `from` to `to`, creating `to`'s parent directories. Falls back to a
+// copy-and-unlink when the two are on different filesystems.
+[[nodiscard]] bool OsRename(String8 from, String8 to);
+// Removes a file or a symlink. A link is removed itself, never its target.
+[[nodiscard]] bool OsFileDelete(String8 path);
+// Removes an empty directory only.
+[[nodiscard]] bool OsDirDelete(String8 path);
+// Removes a directory and everything under it. Symlinked directories are
+// unlinked rather than descended into, so this cannot delete outside `path`.
+[[nodiscard]] bool OsDirDeleteRecursive(String8 path);
 
 [[nodiscard]] String8 OsGetCwd(Arena *arena);
 // Joins with a separator, avoiding a doubled or missing slash.
