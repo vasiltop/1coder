@@ -487,8 +487,9 @@ DWORD PathAttributes(String8 path) {
 
 FileContents OsFileRead(Arena *arena, String8 path) {
   TempArena scratch = ScratchBegin1(arena);
-  HANDLE file = CreateFileW(PushWide(scratch.arena, path), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  HANDLE file =
+      CreateFileW(PushWide(scratch.arena, path), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   ScratchEnd(scratch);
   if (file == INVALID_HANDLE_VALUE) return FileContents{String8{nullptr, 0}, false};
 
