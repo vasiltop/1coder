@@ -11,6 +11,9 @@ namespace {
 
 inline constexpr u64 kJsonMaxInputBytes = MB(16);
 inline constexpr u64 kJsonMaxDepth = 128;
+inline constexpr u64 kJsonI64MinMagnitude = (u64)LLONG_MAX + 1;
+inline constexpr f64 kJsonI64PositiveLimit = 9223372036854775808.0;
+inline constexpr f64 kJsonI64NegativeLimit = -9223372036854775808.0;
 
 struct JsonParser {
   Arena *arena;
@@ -132,12 +135,17 @@ void JsonSetExactIntegerMetadata(JsonValue *value, String8 token, f64 number) {
         meta->has_exact_u64 = true;
         meta->exact_u64 = magnitude;
       }
-      if (magnitude <= (u64)LLONG_MAX) {
-        i64 signed_value = negative ? -(i64)magnitude : (i64)magnitude;
-        if ((i64)(f64)signed_value == signed_value && (f64)signed_value == number) {
-          meta->has_exact_i64 = true;
-          meta->exact_i64 = signed_value;
-        }
+      if (!negative && magnitude <= (u64)LLONG_MAX) {
+        i64 signed_value = (i64)magnitude;
+        meta->has_exact_i64 = true;
+        meta->exact_i64 = signed_value;
+      } else if (negative && magnitude < kJsonI64MinMagnitude) {
+        i64 signed_value = -(i64)magnitude;
+        meta->has_exact_i64 = true;
+        meta->exact_i64 = signed_value;
+      } else if (negative && magnitude == kJsonI64MinMagnitude) {
+        meta->has_exact_i64 = true;
+        meta->exact_i64 = LLONG_MIN;
       }
     }
     return;
@@ -151,7 +159,7 @@ void JsonSetExactIntegerMetadata(JsonValue *value, String8 token, f64 number) {
       meta->exact_u64 = unsigned_value;
     }
   }
-  if (number >= (f64)LLONG_MIN && number <= (f64)LLONG_MAX) {
+  if (number >= kJsonI64NegativeLimit && number < kJsonI64PositiveLimit) {
     i64 signed_value = (i64)number;
     if ((f64)signed_value == number) {
       meta->has_exact_i64 = true;

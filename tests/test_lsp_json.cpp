@@ -4,6 +4,7 @@
 #include "lsp/json.h"
 #include "test.h"
 
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -112,6 +113,21 @@ TEST(lsp_json_parse_nested_values_and_accessors) {
   u64 too_big = 0;
   CHECK(!JsonGetU64(JsonObjectGet(root, Str8Lit("too_big")), &too_big));
   CHECK(JsonArrayItem(list, 99) == nullptr);
+}
+
+TEST(lsp_json_i64_boundaries) {
+  ArenaScope scope;
+  String8 text = Str8Lit("[9223372036854775807,-9223372036854775808,-9223372036854775807,"
+                         "9223372036854775808.0,9.223372036854776e18]");
+  JsonValue *root = ParseJsonOrFail(scope.arena, text);
+
+  CheckJsonI64(JsonArrayItem(root, 0), LLONG_MAX);
+  CheckJsonI64(JsonArrayItem(root, 1), LLONG_MIN);
+  CheckJsonI64(JsonArrayItem(root, 2), LLONG_MIN + 1);
+
+  i64 positive_overflow = 0;
+  CHECK(!JsonGetI64(JsonArrayItem(root, 3), &positive_overflow));
+  CHECK(!JsonGetI64(JsonArrayItem(root, 4), &positive_overflow));
 }
 
 TEST(lsp_json_parse_strings_unicode_and_null_termination) {
