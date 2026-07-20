@@ -24,8 +24,9 @@ defaults:
 jobs:
   build:
     strategy:
-      # One platform failing to build should not cost the artifacts of the
-      # others; publish is what decides whether the release goes out.
+      # Let the other platforms finish and upload rather than being cancelled,
+      # so one break shows up as one red job. The release is still all or
+      # nothing: publish needs every build to have succeeded.
       fail-fast: false
       matrix:
         include:
@@ -153,6 +154,9 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          # Nothing is checked out here -- only artifacts are needed -- so gh
+          # has no git remote to infer the repository from and must be told.
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
@@ -163,15 +167,9 @@ jobs:
             gh release delete "$TAG" --yes --cleanup-tag=false
           fi
 
-          # gh appends the generated notes after these.
-          notes='The macOS and Windows binaries are unsigned. macOS refuses the
-          first launch: right-click the binary and choose Open, or run
-          `xattr -d com.apple.quarantine 1code`.'
-
           for attempt in 1 2 3 4 5; do
             if gh release create "$TAG" \
                  --title "$TAG" \
-                 --notes "$notes" \
                  --generate-notes \
                  artifacts/*; then
               exit 0
