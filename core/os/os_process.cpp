@@ -421,9 +421,7 @@ OsProcessRead ReadFd(int fd, u8 *buffer, u64 capacity) {
 String8 OsFindExecutable(Arena *arena, String8 name) {
   if (!arena || name.size == 0) return String8{};
 
-  String8 direct = TryDirectExecutable(arena, name);
-  if (direct.size > 0) return direct;
-  if (HasPathSyntax(name)) return String8{};
+  if (HasPathSyntax(name)) return TryDirectExecutable(arena, name);
   return FindOnPath(arena, name);
 }
 
