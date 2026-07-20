@@ -17,8 +17,8 @@
 #if defined(_WIN32)
 #  include <fcntl.h>
 #  include <io.h>
-#  include <shellapi.h>
 #  include <windows.h>
+#  include <shellapi.h>
 #else
 #  include <errno.h>
 #  include <unistd.h>
