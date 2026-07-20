@@ -70,15 +70,28 @@ jobs:
           EDITOR_TESTS_TRACE: 1
         run: |
           just build
-          echo "=== control: a test that passes, via cmd for the true status ==="
-          cmd.exe /c 'build\editor_tests.exe buffer_save_empty_file & echo EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
-          echo "=== the suspect in isolation, via cmd ==="
-          cmd.exe /c 'build\editor_tests.exe command_line_resolves_names & echo EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
+          # The previous cmd.exe attempt never actually ran: msys passes the
+          # quoting through literally, so cmd got the quotes as part of the
+          # command and printed a bare prompt. Start-Process reports the real
+          # Windows status, which msys otherwise collapses to 127.
+          status() {
+            powershell -NoProfile -Command \
+              '$p = Start-Process -FilePath "build\editor_tests.exe" -ArgumentList $args[0] -Wait -PassThru -NoNewWindow -RedirectStandardOutput out.txt -RedirectStandardError err.txt; Write-Host ("EXIT=" + $p.ExitCode + " (0x" + ("{0:X8}" -f $p.ExitCode) + ")")' \
+              "$1"
+            echo "  stderr tail:"; tail -3 err.txt || true
+          }
+          echo "=== control: a test that passes ==="
+          status buffer_save_empty_file
+          echo "=== the suspect, in isolation ==="
+          status command_line_resolves_names
           echo "=== the suspect, repeated, to show whether it is intermittent ==="
-          for i in 1 2 3 4 5; do
-            cmd.exe /c 'build\editor_tests.exe command_line_resolves_names >nul 2>&1 & echo attempt EXIT=%ERRORLEVEL%' || echo "wrapper=$?"
-          done
-          echo "=== full suite, bounded ==="
-          timeout 300 ./build/editor_tests > full.log 2>&1 || echo "full exit=$?"
-          echo "--- last 25 lines ---"
-          tail -25 full.log || true
+          for i in 1 2 3 4 5; do status command_line_resolves_names; done
+          echo "=== full suite ==="
+          status ""
+          echo "--- trace tail ---"
+          tail -5 err.txt || true
+          # Fail the job on a bad full-suite status. The previous revision ended
+          # every command with `|| echo`, which reported success while the suite
+          # was still dying -- a green that meant nothing.
+          grep -q "^0 " out.txt 2>/dev/null || true
+          tail -1 out.txt | grep -q "0 failed" || { echo "SUITE DID NOT PASS"; exit 1; }
