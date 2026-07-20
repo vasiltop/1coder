@@ -23,6 +23,9 @@ struct OsProcessRead {
 };
 
 [[nodiscard]] String8 OsFindExecutable(Arena *arena, String8 name);
+// Reads a process environment variable. On Windows this uses the live Win32
+// environment block (so SetEnvironmentVariable is visible); elsewhere getenv.
+[[nodiscard]] String8 OsGetEnv(Arena *arena, String8 name);
 // Absolute path of the platform shell: /bin/sh, or %ComSpec% on Windows.
 [[nodiscard]] String8 OsShellExecutable(Arena *arena);
 [[nodiscard]] bool OsProcessStart(OsProcess *process, const OsProcessCommand *command);

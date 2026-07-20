@@ -209,8 +209,23 @@ bool NavigationSupported(const LspServerCapabilities *capabilities,
 
 bool PrepareTrackedRequest(Editor *ed, Buffer *buffer, EditorLspBufferInfo *info, String8 *uri) {
   if (ed == nullptr || buffer == nullptr) return false;
-  if (!EditorLspGetBufferInfo(ed, buffer, info) || info->client == nullptr || !info->did_open_sent) {
-    SetStatus(ed, "file not open");
+  if (!EditorLspGetBufferInfo(ed, buffer, info) || info->client == nullptr) {
+    LspLanguage language = {};
+    String8 language_id = {};
+    if (LspLanguageForPath(buffer->path, &language, &language_id)) {
+      SetStatus(ed, "no language server");
+    } else {
+      SetStatus(ed, "unsupported language");
+    }
+    return false;
+  }
+  if (!info->did_open_sent) {
+    LspClientState state = LspClientGetState(info->client);
+    if (state == LspClientState::Failed) {
+      EditorLspApplyClientFailureStatus(ed, buffer);
+      return false;
+    }
+    SetStatus(ed, "client not ready");
     return false;
   }
   LspClientState state = LspClientGetState(info->client);

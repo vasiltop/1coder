@@ -4,7 +4,7 @@
 
 ## Supported languages
 
-The editor auto-detects the following language servers, searching `PATH`:
+The editor auto-detects the following language servers, searching `PATH` and then common user install dirs (`~/.local/share/nvim/mason/bin`, `~/.local/bin`, `~/.cargo/bin`):
 
 - **C/C++**: `clangd`
 - **Rust**: `rust-analyzer`
