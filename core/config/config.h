@@ -64,7 +64,8 @@ struct ConfigLoadResult {
   bool ok;
 };
 
-// $XDG_CONFIG_HOME/1coder/config.toml, else ~/.config/1coder/config.toml.
+// $XDG_CONFIG_HOME/1coder/config.toml when set; else ~/.config/1coder/config.toml
+// on Unix, or %APPDATA%\1coder\config.toml on Windows.
 [[nodiscard]] String8 ConfigDefaultPath(Arena *arena);
 
 // Parse TOML text into a Config. Does not touch the editor.

@@ -273,12 +273,23 @@ void ParseLspTable(Arena *arena, const TomlValue *table, Config *config, ErrorLo
 
 String8 ConfigDefaultPath(Arena *arena) {
   if (!arena) return String8{};
+
+  // Explicit XDG wins on every platform when set.
   String8 xdg = OsGetEnv(arena, Str8Lit("XDG_CONFIG_HOME"));
   if (xdg.size > 0) return OsPathJoin(arena, xdg, Str8Lit("1coder/config.toml"));
 
+#if defined(_WIN32)
+  // Native Windows convention: %APPDATA%\1coder\config.toml
+  String8 appdata = OsGetEnv(arena, Str8Lit("APPDATA"));
+  if (appdata.size > 0) return OsPathJoin(arena, appdata, Str8Lit("1coder/config.toml"));
+  String8 home = HomeDirectory(arena);
+  if (home.size == 0) return String8{};
+  return OsPathJoin(arena, home, Str8Lit("AppData/Roaming/1coder/config.toml"));
+#else
   String8 home = HomeDirectory(arena);
   if (home.size == 0) return String8{};
   return OsPathJoin(arena, home, Str8Lit(".config/1coder/config.toml"));
+#endif
 }
 
 ConfigLoadResult ConfigParse(Arena *arena, String8 text, String8 path) {

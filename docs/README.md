@@ -7,7 +7,7 @@ the editor properly, or for changing it.
 
 ## Using it
 
-- [Configuration](config.md) — `~/.config/1coder/config.toml`, reload, error log
+- [Configuration](config.md) — user config path, reload, error log
 - [Keybindings](keybindings.md) — the complete key reference
 - [Language server protocol](lsp.md) — auto-detected servers, navigation, completion
 - [The command window](commands.md) — `:` syntax, and how to add a command

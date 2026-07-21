@@ -43,6 +43,68 @@ struct ScopedFixtureDir {
   ~ScopedFixtureDir() { (void)OsDirDeleteRecursive(path); }
 };
 
+struct ScopedEnvVar {
+  Arena *arena;
+  const char *name;
+  bool had_old_value;
+  String8 old_value;
+
+  ScopedEnvVar(Arena *arena_, const char *name_, String8 value) : arena(arena_), name(name_) {
+    const char *old = getenv(name);
+    had_old_value = old != nullptr;
+    if (had_old_value) old_value = PushStr8Copy(arena, Str8C(old));
+    Set(value);
+  }
+
+  ~ScopedEnvVar() {
+    if (had_old_value) {
+      Set(old_value);
+    } else {
+#if defined(_WIN32)
+      CHECK(SetEnvironmentVariableA(name, nullptr) != 0);
+#else
+      CHECK(unsetenv(name) == 0);
+#endif
+    }
+  }
+
+  void Set(String8 value) {
+#if defined(_WIN32)
+    CHECK(SetEnvironmentVariableA(name, PushCStr(arena, value)) != 0);
+#else
+    CHECK(setenv(name, PushCStr(arena, value), 1) == 0);
+#endif
+  }
+
+};
+
+struct ScopedEnvUnset {
+  Arena *arena;
+  const char *name;
+  bool had_old_value;
+  String8 old_value;
+
+  ScopedEnvUnset(Arena *arena_, const char *name_) : arena(arena_), name(name_) {
+    const char *old = getenv(name);
+    had_old_value = old != nullptr;
+    if (had_old_value) old_value = PushStr8Copy(arena, Str8C(old));
+#if defined(_WIN32)
+    CHECK(SetEnvironmentVariableA(name, nullptr) != 0);
+#else
+    CHECK(unsetenv(name) == 0);
+#endif
+  }
+
+  ~ScopedEnvUnset() {
+    if (!had_old_value) return;
+#if defined(_WIN32)
+    CHECK(SetEnvironmentVariableA(name, PushCStr(arena, old_value)) != 0);
+#else
+    CHECK(setenv(name, PushCStr(arena, old_value), 1) == 0);
+#endif
+  }
+};
+
 }  // namespace
 
 TEST(toml_parses_tables_strings_and_arrays) {
@@ -179,4 +241,34 @@ TEST(config_example_file_parses) {
   ConfigLoadResult loaded = ConfigLoadFile(scope.arena, path);
   CHECK(loaded.ok);
   CHECK(loaded.config.binding_count > 100);
+}
+
+TEST(config_default_path_platform_location) {
+  ArenaScope scope;
+  ScopedFixtureDir dir(scope.arena, "default_path");
+
+  {
+    ScopedEnvVar xdg(scope.arena, "XDG_CONFIG_HOME", dir.path);
+    String8 path = ConfigDefaultPath(scope.arena);
+    String8 expect = OsPathJoin(scope.arena, dir.path, Str8Lit("1coder/config.toml"));
+    CHECK_STR(path, expect);
+  }
+
+#if defined(_WIN32)
+  {
+    ScopedEnvUnset xdg(scope.arena, "XDG_CONFIG_HOME");
+    ScopedEnvVar appdata(scope.arena, "APPDATA", dir.path);
+    String8 path = ConfigDefaultPath(scope.arena);
+    String8 expect = OsPathJoin(scope.arena, dir.path, Str8Lit("1coder/config.toml"));
+    CHECK_STR(path, expect);
+  }
+#else
+  {
+    ScopedEnvUnset xdg(scope.arena, "XDG_CONFIG_HOME");
+    ScopedEnvVar home(scope.arena, "HOME", dir.path);
+    String8 path = ConfigDefaultPath(scope.arena);
+    String8 expect = OsPathJoin(scope.arena, dir.path, Str8Lit(".config/1coder/config.toml"));
+    CHECK_STR(path, expect);
+  }
+#endif
 }
