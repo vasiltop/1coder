@@ -374,7 +374,7 @@ Tree MakeGitRootsTree(const char *tag) {
   }
   // Worktree-style marker: `.git` as a file.
   CHECK(OsFileWrite(TempPath(&tree.dir, "beta/.git"), Str8Lit("gitdir: elsewhere\n")));
-  // Nested repo inside a found root must not appear — the walk stops at alpha.
+  // Nested repo inside a found root should still appear.
   CHECK(OsMakeDirs(TempPath(&tree.dir, "alpha/nested/.git")));
 
   return tree;
@@ -387,10 +387,10 @@ TEST(search_walk_git_roots_finds_markers_and_skips_noise) {
   CHECK(ListContains(roots, "alpha"));
   CHECK(ListContains(roots, "beta"));
   CHECK(ListContains(roots, "nested/delta"));
+  CHECK(ListContains(roots, "alpha/nested"));
   CHECK(!ListContains(roots, "noise"));
   CHECK(!ListContains(roots, "nested/plain"));
   CHECK(!ListContains(roots, "build/gamma"));
-  CHECK(!ListContains(roots, "alpha/nested"));
 
   Destroy(&tree);
 }
@@ -400,8 +400,24 @@ TEST(search_walk_git_roots_records_dot_when_root_is_a_repo) {
   String8 alpha = TempPath(&tree.dir, "alpha");
   PathList roots = SearchWalkGitRoots(tree.arena, alpha);
 
-  CHECK_EQ(roots.count, 1);
-  CHECK_STR(roots.paths[0], Str8Lit("."));
+  CHECK(ListContains(roots, "."));
+  CHECK(ListContains(roots, "nested"));
+  CHECK_EQ(roots.count, 2);
+
+  Destroy(&tree);
+}
+
+TEST(search_walk_git_roots_finds_children_when_parent_is_a_repo) {
+  // A projects folder that is itself a git repo must still list child repos —
+  // stopping at the parent would hide every project under it.
+  Tree tree = MakeGitRootsTree("git-roots-parent");
+  CHECK(OsMakeDirs(TempPath(&tree.dir, ".git")));
+
+  PathList roots = SearchWalkGitRoots(tree.arena, tree.root);
+  CHECK(ListContains(roots, "."));
+  CHECK(ListContains(roots, "alpha"));
+  CHECK(ListContains(roots, "beta"));
+  CHECK(ListContains(roots, "nested/delta"));
 
   Destroy(&tree);
 }

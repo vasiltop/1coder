@@ -31,7 +31,7 @@ inline constexpr u64 kSearchMaxFileSize = MB(4);
                                        u64 max_files = kSearchMaxFiles);
 
 // Directories that contain a `.git` marker (file or directory), relative to
-// `root`. A found root is recorded and not descended into.
+// `root`. Nested repositories inside a found root are included.
 inline constexpr u64 kSearchMaxGitRoots = 5000;
 
 [[nodiscard]] PathList SearchWalkGitRoots(Arena *arena, String8 root,

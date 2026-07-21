@@ -127,6 +127,8 @@ void PushPathNode(WalkState *state, String8 relative) {
 
 // Collects directories with a `.git` marker. Unlike the file walk, hidden names
 // are still skipped for descent, but `.git` itself is probed explicitly.
+// Found roots are recorded and still descended into so nested repositories
+// (and a parent that is itself a repo, like a projects folder) show up.
 void WalkGitRoots(WalkState *state, String8 absolute, String8 relative, u64 depth) {
   if (state->truncated || depth > kSearchMaxDepth) return;
 
@@ -139,7 +141,6 @@ void WalkGitRoots(WalkState *state, String8 absolute, String8 relative, u64 dept
     // path rather than a blank line.
     String8 recorded = (relative.size > 0) ? relative : Str8Lit(".");
     PushPathNode(state, recorded);
-    return;
   }
 
   TempArena temp = TempBegin(state->scratch);
