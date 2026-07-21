@@ -198,6 +198,7 @@ inline constexpr CommandFlags CmdSingle = CommandFlags::Single;
   /* ---- search ---- */                                                                                                             \
   X(grep,                  "grep",                  "Search the project",              CommandArg::Text, CmdArg|CmdSingle)           \
   X(find_file,             "find",                  "Fuzzy-find a file",               CommandArg::Text, CmdSingle)                  \
+  X(find_git,              "find-git",              "Fuzzy-find a git repository root", CommandArg::Text, CmdSingle)                 \
   X(live_grep,             "live-grep",             "Search the project as you type",  CommandArg::Text, CmdSingle)                  \
   X(result_open,           "result-open",           "Open the result under the cursor", CommandArg::None, CmdHidden|CmdSingle)       \
   /* ---- explorer ---- */                                                                                                           \

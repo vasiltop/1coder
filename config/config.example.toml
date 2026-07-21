@@ -142,6 +142,8 @@
 "<leader>pf" = "find"
 "<leader>pg" = "live-grep"
 "<leader>pb" = "buffers"
+"<leader>pp" = "find-git"
+"<leader>sc" = "set-cwd"
 "<leader>e" = "explorer"
 "<leader>gs" = "git"
 "<leader>cf" = "format"

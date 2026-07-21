@@ -167,6 +167,8 @@ void EditorInstallDefaultBindings(Editor *ed) {
   // still there for when a fixed list is what is wanted.
   KeymapBind(normal, "<leader>pg", CommandId::live_grep);
   KeymapBind(normal, "<leader>pb", CommandId::list_buffers);
+  KeymapBind(normal, "<leader>pp", CommandId::find_git);
+  KeymapBind(normal, "<leader>sc", CommandId::set_cwd);
 
   // The explorer for the containing directory. `-` does the same thing; this is
   // the discoverable spelling of it.

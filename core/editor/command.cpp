@@ -1774,6 +1774,7 @@ void ShowListing(Editor *ed, String8 name, String8 text) {
 // Provided by core/buffers/buf_picker.cpp.
 BufferHandle GrepBufferOpen(Editor *ed, String8 pattern);
 BufferHandle FinderBufferOpen(Editor *ed);
+BufferHandle GitRootsBufferOpen(Editor *ed);
 BufferHandle LiveGrepBufferOpen(Editor *ed);
 BufferHandle BuffersBufferOpen(Editor *ed);
 
@@ -1824,6 +1825,8 @@ static void Cmd_grep(CommandArgs *a) {
 }
 
 static void Cmd_find_file(CommandArgs *a) { OpenQueryPicker(a, FinderBufferOpen(a->ed)); }
+
+static void Cmd_find_git(CommandArgs *a) { OpenQueryPicker(a, GitRootsBufferOpen(a->ed)); }
 
 // <CR> in a results buffer. The buffer's own on_submit knows what its lines
 // mean; this just hands the current one over.

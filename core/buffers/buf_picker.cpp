@@ -208,6 +208,90 @@ void FinderSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
 }
 
 // ---------------------------------------------------------------------------
+// Git repository root picker
+// ---------------------------------------------------------------------------
+
+// Same shape as the file finder: walk once, fuzzy-filter as you type. Submit
+// sets the editor cwd to the chosen root rather than opening a file.
+struct GitRootsPayload {
+  PathList roots;
+  String8 root;
+  Arena *arena;
+  bool updating;
+};
+
+void GitRootsRefilter(Editor *ed, Buffer *buffer) {
+  GitRootsPayload *payload = (GitRootsPayload *)buffer->user_data;
+  if (!payload || payload->updating) return;
+
+  payload->updating = true;
+
+  TempArena scratch = ScratchBegin();
+  String8 query = Str8SkipChopWhitespace(BufferLineText(scratch.arena, buffer, 0));
+
+  FuzzyResults matches =
+      FuzzyFilter(scratch.arena, payload->roots.paths, payload->roots.count, query, 200);
+
+  String8List lines = {};
+  Str8ListPush(scratch.arena, &lines, String8{nullptr, 0});
+  for (u64 i = 0; i < matches.count; i += 1) {
+    Str8ListPush(scratch.arena, &lines, matches.items[i].text);
+  }
+
+  String8 body = Str8ListJoin(scratch.arena, &lines, Str8Lit("\n"));
+  u64 query_end = BufferLineEnd(buffer, 0);
+  bool read_only = BufferIsReadOnly(buffer);
+  bool query_only = BufferIsQueryOnly(buffer);
+  buffer->flags &= ~(BufferFlags::ReadOnly | BufferFlags::QueryOnly);
+  BufferReplace(ed, buffer, RangeU64{query_end, BufferSize(buffer)}, body, query_end, query_end);
+  if (read_only) buffer->flags |= BufferFlags::ReadOnly;
+  if (query_only) buffer->flags |= BufferFlags::QueryOnly;
+
+  ScratchEnd(scratch);
+  payload->updating = false;
+}
+
+void GitRootsOnEdit(Editor *ed, Buffer *buffer, RangeU64 range, u64 new_len) {
+  GitRootsRefilter(ed, buffer);
+}
+
+void GitRootsSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
+  GitRootsPayload *payload = (GitRootsPayload *)buffer->user_data;
+  if (!payload) return;
+
+  u64 cursor_line = ViewCursorLine(view, buffer);
+  u64 target_line = (cursor_line == 0) ? 1 : cursor_line;
+  if (target_line >= BufferLineCount(buffer)) return;
+
+  TempArena scratch = ScratchBegin();
+  String8 relative = Str8SkipChopWhitespace(BufferLineText(scratch.arena, buffer, target_line));
+  if (relative.size == 0) {
+    ScratchEnd(scratch);
+    return;
+  }
+
+  String8 path = OsPathJoin(scratch.arena, payload->root, relative);
+  String8 absolute = OsPathAbsolute(scratch.arena, path);
+  if (!OsDirExists(absolute)) {
+    EditorSetStatusF(ed, "set-cwd: not a directory: %.*s", (int)absolute.size,
+                     (char *)absolute.str);
+    ScratchEnd(scratch);
+    return;
+  }
+
+  if (!OsSetCwd(absolute)) {
+    EditorSetStatusF(ed, "set-cwd: cannot enter %.*s", (int)absolute.size,
+                     (char *)absolute.str);
+    ScratchEnd(scratch);
+    return;
+  }
+
+  ed->cwd = PushStr8Copy(ed->arena, absolute);
+  EditorSetStatusF(ed, "cwd: %.*s", (int)ed->cwd.size, (char *)ed->cwd.str);
+  ScratchEnd(scratch);
+}
+
+// ---------------------------------------------------------------------------
 // Buffer picker
 // ---------------------------------------------------------------------------
 
@@ -420,6 +504,38 @@ BufferHandle FinderBufferOpen(Editor *ed) {
   // Start empty, which lists everything, then let the hook do the rest.
   BufferSetText(ed, buffer, String8{nullptr, 0});
   FinderRefilter(ed, buffer);
+
+  return handle;
+}
+
+BufferHandle GitRootsBufferOpen(Editor *ed) {
+  BufferHandle handle = BufferFromName(&ed->buffers, Str8Lit("[git-roots]"));
+  if (handle.index == 0) {
+    handle = BufferOpen(&ed->buffers, BufferKind::FileList, Str8Lit("[git-roots]"));
+  }
+
+  Buffer *buffer = BufferFromHandle(&ed->buffers, handle);
+  if (!buffer) return BufferHandleZero();
+
+  GitRootsPayload *payload = PushStruct(buffer->arena, GitRootsPayload);
+  payload->arena = buffer->arena;
+  payload->root = PushStr8Copy(buffer->arena, ed->cwd);
+  payload->roots = SearchWalkGitRoots(buffer->arena, payload->root);
+  payload->updating = false;
+
+  buffer->user_data = payload;
+  buffer->hooks.on_edit = GitRootsOnEdit;
+  buffer->hooks.on_submit = GitRootsSubmit;
+  buffer->flags |= BufferFlags::QueryOnly;
+
+  if (!buffer->hooks.keymap) {
+    Keymap *keymap = KeymapAlloc(ed->arena, ed->normal_map);
+    KeymapBind(keymap, "<CR>", CommandId::result_open);
+    buffer->hooks.keymap = keymap;
+  }
+
+  BufferSetText(ed, buffer, String8{nullptr, 0});
+  GitRootsRefilter(ed, buffer);
 
   return handle;
 }
