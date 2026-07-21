@@ -91,10 +91,10 @@ grid resizes through the same path a window resize takes.
 
 `<leader>pg` searches the project as you type, `<leader>pf` fuzzy-finds a file,
 `<leader>pb` fuzzy-picks an open buffer, `<leader>pp` fuzzy-finds a git
-repository root (and sets the working directory on select), `<leader>sc` sets
-the working directory from the current file or explorer entry, and `<leader>e`
-opens the file explorer for the current file's directory. See [search](search.md)
-and [explorer](explorer.md).
+repository root (sets the working directory and opens the explorer on select),
+`<leader>sc` sets the working directory from the current file or explorer entry,
+and `<leader>e` opens the file explorer for the current file's directory. See
+[search](search.md) and [explorer](explorer.md).
 
 ## Git
 

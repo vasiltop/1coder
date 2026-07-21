@@ -17,7 +17,8 @@ None of them adds a UI concept, which was the point of the buffer system:
 
 `:find-git` / `<leader>pp` walks under the working directory for folders that
 contain a `.git` marker (file or directory), fuzzy-filters them, and on `<CR>`
-runs `:set-cwd` on the selection. Found roots are not descended into.
+runs `:set-cwd` on the selection and opens that directory in the file explorer.
+Found roots are not descended into.
 
 Live search reads the tree once into memory and rescans those bytes per
 keystroke; re-reading the project on every character would not be usable. The

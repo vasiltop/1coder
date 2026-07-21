@@ -432,6 +432,11 @@ TEST(find_git_picker_sets_cwd_on_submit) {
   CHECK_STR(ed.cwd, expect);
   CHECK(!Str8Match(ed.cwd, original_cwd));
 
+  Buffer *opened = EditorFocusedBuffer(&ed);
+  CHECK(opened != nullptr);
+  CHECK_EQ((u32)opened->kind, (u32)BufferKind::Explorer);
+  CHECK_STR(opened->path, expect);
+
   EditorDestroy(&ed);
   ArenaRelease(arena);
   Destroy(&tree);

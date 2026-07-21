@@ -288,6 +288,14 @@ void GitRootsSubmit(Editor *ed, Buffer *buffer, View *view, String8 line) {
 
   ed->cwd = PushStr8Copy(ed->arena, absolute);
   EditorSetStatusF(ed, "cwd: %.*s", (int)ed->cwd.size, (char *)ed->cwd.str);
+
+  // FiletypeOpen routes directories to the explorer, same as opening a path
+  // from the file finder would.
+  BufferHandle handle = FiletypeOpen(ed, absolute);
+  if (handle.index != 0) {
+    EditorPushJump(ed, view);
+    EditorShowBuffer(ed, handle);
+  }
   ScratchEnd(scratch);
 }
 
