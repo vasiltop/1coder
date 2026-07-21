@@ -59,6 +59,151 @@ struct GitPayload {
   Arena *pending_arena;
 };
 
+struct GitTokenBuilder {
+  Token *tokens;
+  u64 count;
+  u64 capacity;
+};
+
+void AddToken(GitTokenBuilder *builder, u64 start, u64 end, TokenKind kind) {
+  if (start >= end || builder->count >= builder->capacity) return;
+  builder->tokens[builder->count++] = Token{start, end, kind};
+}
+
+u64 FindByte(const Buffer *buffer, u64 start, u64 end, u8 needle) {
+  for (u64 offset = start; offset < end; offset += 1) {
+    if (BufferByteAt(buffer, offset) == needle) return offset;
+  }
+  return end;
+}
+
+bool LineStartsWith(const Buffer *buffer, RangeU64 range, String8 prefix) {
+  if (range.max - range.min < prefix.size) return false;
+  for (u64 i = 0; i < prefix.size; i += 1) {
+    if (BufferByteAt(buffer, range.min + i) != prefix.str[i]) return false;
+  }
+  return true;
+}
+
+void HighlightLabel(GitTokenBuilder *builder, const Buffer *buffer, RangeU64 range,
+                    TokenKind value_kind) {
+  u64 colon = FindByte(buffer, range.min, range.max, ':');
+  if (colon == range.max) return;
+  AddToken(builder, range.min, colon + 1, TokenKind::Keyword);
+  u64 value = colon + 1;
+  while (value < range.max && BufferByteAt(buffer, value) == ' ') value += 1;
+  AddToken(builder, value, range.max, value_kind);
+}
+
+void HighlightStatusLine(GitTokenBuilder *builder, const Buffer *buffer, RangeU64 range,
+                         const GitLineInfo *info) {
+  if (info->kind == GitLineKind::Section) {
+    u64 count = FindByte(buffer, range.min, range.max, '(');
+    AddToken(builder, range.min, count < range.max ? count : range.max, TokenKind::Keyword);
+    AddToken(builder, count, range.max, TokenKind::Number);
+    return;
+  }
+
+  if (info->kind == GitLineKind::File) {
+    u64 marker = Min(range.min + 2, range.max);
+    AddToken(builder, marker, Min(marker + 1, range.max), TokenKind::Operator);
+    u64 state = Min(range.min + 4, range.max);
+    TokenKind state_kind = info->entry_kind == GitEntryKind::Unstaged ? TokenKind::Error
+                                                                      : TokenKind::Constant;
+    AddToken(builder, state, Min(state + 2, range.max), state_kind);
+    u64 path = Min(state + 4, range.max);
+    AddToken(builder, path, range.max, TokenKind::String);
+    return;
+  }
+
+  if (info->kind == GitLineKind::HunkHeader) {
+    AddToken(builder, Min(range.min + 4, range.max), range.max, TokenKind::Preprocessor);
+    return;
+  }
+
+  if (info->kind == GitLineKind::HunkLine) {
+    u64 content = Min(range.min + 4, range.max);
+    if (content == range.max) return;
+    u8 prefix = BufferByteAt(buffer, content);
+    TokenKind kind = TokenKind::Comment;
+    if (prefix == '+') kind = TokenKind::String;
+    if (prefix == '-') kind = TokenKind::Error;
+    AddToken(builder, content, range.max, kind);
+    return;
+  }
+
+  if (LineStartsWith(buffer, range, Str8Lit("Head:"))) {
+    HighlightLabel(builder, buffer, range, TokenKind::String);
+  } else if (LineStartsWith(buffer, range, Str8Lit("Away:"))) {
+    HighlightLabel(builder, buffer, range, TokenKind::Number);
+  } else if (LineStartsWith(buffer, range, Str8Lit("Args:"))) {
+    HighlightLabel(builder, buffer, range, TokenKind::Operator);
+  } else if (LineStartsWith(buffer, range, Str8Lit("Help:"))) {
+    HighlightLabel(builder, buffer, range, TokenKind::Comment);
+  }
+}
+
+void HighlightLogLine(GitTokenBuilder *builder, const Buffer *buffer, RangeU64 range,
+                      const GitLineInfo *info) {
+  if (info->kind != GitLineKind::LogEntry) {
+    AddToken(builder, range.min, range.max, TokenKind::Keyword);
+    return;
+  }
+  u64 hash_end = Min(range.min + info->hash.size, range.max);
+  AddToken(builder, range.min, hash_end, TokenKind::Constant);
+  u64 subject = hash_end;
+  while (subject < range.max && BufferByteAt(buffer, subject) == ' ') subject += 1;
+  AddToken(builder, subject, range.max, TokenKind::Function);
+}
+
+void HighlightDiffLine(GitTokenBuilder *builder, const Buffer *buffer, RangeU64 range) {
+  if (range.min == range.max) return;
+  if (LineStartsWith(buffer, range, Str8Lit("@@"))) {
+    AddToken(builder, range.min, range.max, TokenKind::Preprocessor);
+  } else if (LineStartsWith(buffer, range, Str8Lit("+++"))) {
+    AddToken(builder, range.min, range.max, TokenKind::String);
+  } else if (LineStartsWith(buffer, range, Str8Lit("---"))) {
+    AddToken(builder, range.min, range.max, TokenKind::Error);
+  } else if (BufferByteAt(buffer, range.min) == '+') {
+    AddToken(builder, range.min, range.max, TokenKind::String);
+  } else if (BufferByteAt(buffer, range.min) == '-') {
+    AddToken(builder, range.min, range.max, TokenKind::Error);
+  } else if (LineStartsWith(buffer, range, Str8Lit("diff --git"))) {
+    AddToken(builder, range.min, range.max, TokenKind::Keyword);
+  } else if (LineStartsWith(buffer, range, Str8Lit("index "))) {
+    AddToken(builder, range.min, range.max, TokenKind::Comment);
+  } else if (LineStartsWith(buffer, range, Str8Lit("commit "))) {
+    u64 word_end = Min(range.min + 6, range.max);
+    AddToken(builder, range.min, word_end, TokenKind::Keyword);
+    u64 hash = word_end;
+    while (hash < range.max && BufferByteAt(buffer, hash) == ' ') hash += 1;
+    AddToken(builder, hash, range.max, TokenKind::Constant);
+  } else if (LineStartsWith(buffer, range, Str8Lit("Author:")) ||
+             LineStartsWith(buffer, range, Str8Lit("Date:"))) {
+    HighlightLabel(builder, buffer, range, TokenKind::String);
+  }
+}
+
+void HighlightGitBuffer(Buffer *buffer, GitPayload *payload) {
+  u64 line_count = BufferLineCount(buffer);
+  GitTokenBuilder builder = {};
+  builder.capacity = line_count * 4;
+  builder.tokens = PushArray(payload->data_arena, Token, builder.capacity);
+
+  for (u64 line = 0; line < line_count; line += 1) {
+    RangeU64 range = BufferLineRange(buffer, line);
+    if (payload->mode == GitViewMode::Status && line < payload->line_count) {
+      HighlightStatusLine(&builder, buffer, range, &payload->lines[line]);
+    } else if (payload->mode == GitViewMode::Log && line < payload->line_count) {
+      HighlightLogLine(&builder, buffer, range, &payload->lines[line]);
+    } else if (payload->mode == GitViewMode::Diff) {
+      HighlightDiffLine(&builder, buffer, range);
+    }
+  }
+
+  buffer->tokens = TokenArray{builder.tokens, builder.count};
+}
+
 GitPayload *PayloadOf(Buffer *buffer) {
   if (!buffer || buffer->kind != BufferKind::Git) return nullptr;
   return (GitPayload *)buffer->user_data;
@@ -290,6 +435,7 @@ void RenderStatus(Editor *ed, Buffer *buffer, GitPayload *payload) {
 
   payload->lines = infos;
   payload->line_count = count;
+  HighlightGitBuffer(buffer, payload);
 }
 
 void RenderLog(Editor *ed, Buffer *buffer, GitPayload *payload) {
@@ -322,6 +468,7 @@ void RenderLog(Editor *ed, Buffer *buffer, GitPayload *payload) {
   buffer->flags |= BufferFlags::ReadOnly;
   payload->lines = infos;
   payload->line_count = count;
+  HighlightGitBuffer(buffer, payload);
 }
 
 GitLineInfo *LineAtCursor(GitPayload *payload, View *view, Buffer *buffer) {
@@ -428,6 +575,7 @@ BufferHandle GitBufferOpenDiff(Editor *ed, String8 title, String8 body) {
   buffer->flags &= ~BufferFlags::ReadOnly;
   BufferSetText(ed, buffer, body);
   buffer->flags |= BufferFlags::ReadOnly;
+  HighlightGitBuffer(buffer, payload);
   return handle;
 }
 
