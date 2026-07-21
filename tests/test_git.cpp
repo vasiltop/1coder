@@ -67,6 +67,12 @@ Buffer *GitStatusBuffer(Fixture *f) {
 
 String8 BufferAll(Arena *arena, Buffer *buffer) { return BufferTextAll(arena, buffer); }
 
+TokenKind TokenKindAt(Buffer *buffer, String8 text, String8 needle) {
+  u64 offset = Str8FindFirst(text, needle);
+  CHECK(offset < text.size);
+  return TokenKindAtOffset(&buffer->tokens, offset);
+}
+
 void WriteFile(Fixture *f, const char *rel, String8 contents) {
   CHECK(OsFileWrite(TempPath(&f->dir, rel), contents));
 }
@@ -176,6 +182,10 @@ TEST(git_status_buffer_lists_changes) {
   CHECK(Contains(text, Str8Lit("tracked.txt")));
   CHECK(Contains(text, Str8Lit("new.txt")));
   CHECK(Contains(text, Str8Lit("Args: none")));
+  CHECK_EQ((u32)TokenKindAt(buffer, text, Str8Lit("Unstaged changes")),
+           (u32)TokenKind::Keyword);
+  CHECK_EQ((u32)TokenKindAt(buffer, text, Str8Lit("tracked.txt")), (u32)TokenKind::String);
+  CHECK_EQ((u32)TokenKindAt(buffer, text, Str8Lit("Args:")), (u32)TokenKind::Keyword);
   ScratchEnd(scratch);
 
   Destroy(&f);
@@ -282,8 +292,40 @@ TEST(git_log_lists_commits) {
   TempArena scratch = ScratchBegin();
   String8 text = BufferAll(scratch.arena, buffer);
   CHECK(Contains(text, Str8Lit("first commit")));
+  CHECK_EQ((u32)TokenKindAt(buffer, text, Str8Lit("Commits")), (u32)TokenKind::Keyword);
+  CHECK_EQ((u32)TokenKindAt(buffer, text, Str8Lit("first commit")), (u32)TokenKind::Function);
   ScratchEnd(scratch);
 
+  Destroy(&f);
+}
+
+TEST(git_diff_highlights_headers_and_changes) {
+  Fixture f = MakeFixture("git_diff_highlight");
+  String8 diff = Str8Lit(
+      "diff --git a/a.txt b/a.txt\n"
+      "index 111..222 100644\n"
+      "--- a/a.txt\n"
+      "+++ b/a.txt\n"
+      "@@ -1 +1 @@\n"
+      "-old line\n"
+      "+new line\n"
+      " unchanged");
+
+  BufferHandle handle = GitBufferOpenDiff(&f.ed, Str8Lit("[diff]"), diff);
+  Buffer *buffer = BufferFromHandle(&f.ed.buffers, handle);
+  CHECK(buffer != nullptr);
+
+  TempArena scratch = ScratchBegin();
+  String8 text = BufferAll(scratch.arena, buffer);
+  CHECK_EQ((u32)TokenKindAt(buffer, text, Str8Lit("diff --git")), (u32)TokenKind::Keyword);
+  CHECK_EQ((u32)TokenKindAt(buffer, text, Str8Lit("@@")), (u32)TokenKind::Preprocessor);
+  CHECK_EQ((u32)TokenKindAt(buffer, text, Str8Lit("-old line")), (u32)TokenKind::Error);
+  CHECK_EQ((u32)TokenKindAt(buffer, text, Str8Lit("+new line")), (u32)TokenKind::String);
+
+  for (u64 i = 1; i < buffer->tokens.count; i += 1) {
+    CHECK(buffer->tokens.tokens[i - 1].end <= buffer->tokens.tokens[i].start);
+  }
+  ScratchEnd(scratch);
   Destroy(&f);
 }
 
