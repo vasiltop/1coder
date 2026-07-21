@@ -334,6 +334,12 @@ bool BufferLoadFile(Editor *ed, Buffer *buffer, String8 path) {
   buffer->path = PushStr8Copy(buffer->arena, path);
   buffer->name = PushStr8Copy(buffer->arena, Str8PathBase(path));
 
+  // Baseline the on-disk stamp against what we just read, so the watcher only
+  // fires on writes made after this load -- including a reload, which comes
+  // through here and clears any pending conflict.
+  buffer->disk_mtime = OsFileModTime(path);
+  buffer->flags &= ~BufferFlags::DiskConflict;
+
   ScratchEnd(scratch);
   return true;
 }
@@ -359,6 +365,11 @@ bool BufferSaveFile(Buffer *buffer, String8 path) {
       SyntaxAttach(buffer, path);
     }
     buffer->flags &= ~BufferFlags::Dirty;
+    // Re-baseline against our own write. OsFileWrite renames a temp file into
+    // place, which bumps the mtime; without this the watcher would read our
+    // save back as an external change and prompt immediately.
+    buffer->disk_mtime = OsFileModTime(target);
+    buffer->flags &= ~BufferFlags::DiskConflict;
   }
 
   ScratchEnd(scratch);

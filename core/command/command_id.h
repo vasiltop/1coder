@@ -190,6 +190,7 @@ inline constexpr CommandFlags CmdSingle = CommandFlags::Single;
   X(buffer_prev,           "buffer-prev",           "Switch to previous buffer",       CommandArg::None, CmdSingle)                  \
   X(buffer_switch,         "buffer",                "Switch to a named buffer",  CommandArg::BufferName, CmdArg|CmdSingle)           \
   X(edit_file,             "edit",                  "Open a file",                     CommandArg::Path, CmdBang|CmdArg|CmdSingle)   \
+  X(revert,                "revert",                "Reload the file from disk, discarding unsaved changes", CommandArg::None, CmdSingle) \
   X(write_file,            "write",                 "Write the buffer",                CommandArg::Path, CmdBang|CmdRange|CmdSingle) \
   X(write_quit,            "write-quit",            "Write and close the window",      CommandArg::Path, CmdBang|CmdSingle)          \
   X(quit,                  "quit",                  "Close the focused window",        CommandArg::None, CmdBang|CmdSingle)          \

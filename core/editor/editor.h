@@ -154,6 +154,11 @@ struct Editor {
   void (*wake)(void *user_data);
   void *wake_user_data;
 
+  // File-change watcher throttle. EditorTick runs after every event, but the
+  // disk-stat scan need only run a few times a second, so it is gated to this
+  // deadline (steady_clock nanoseconds; 0 means "scan on the next tick").
+  u64 file_watch_next_ns;
+
   String8 cwd;
   String8 status_message;
   Arena *status_arena;  // cleared per message, for the same reason

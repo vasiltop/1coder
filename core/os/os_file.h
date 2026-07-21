@@ -45,6 +45,14 @@ void OsFileUnmap(FileMapping *mapping);
 [[nodiscard]] bool OsFileExists(String8 path);
 [[nodiscard]] bool OsDirExists(String8 path);
 
+// Last-modification time of `path` as an opaque, monotone-per-file stamp: two
+// calls compare equal exactly when the file has not been written between them.
+// Units and epoch are platform-defined (nanoseconds on POSIX, FILETIME ticks on
+// Windows) and must not be interpreted as wall-clock time -- only compared. A
+// missing or unstattable path returns 0, so a file that disappears reads as a
+// change from any real stamp.
+[[nodiscard]] u64 OsFileModTime(String8 path);
+
 struct FileInfo {
   String8 name;  // entry name only, not a full path
   u64 size;

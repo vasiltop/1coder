@@ -3,6 +3,7 @@
 #include "buffers/buf_compile.h"
 #include "buffers/buf_explorer.h"
 #include "buffers/buf_git.h"
+#include "editor/file_watch.h"
 #include "editor/filetype.h"
 #include "editor/lsp.h"
 #include "editor/lsp_actions.h"
@@ -1120,6 +1121,19 @@ static void Cmd_edit_file(CommandArgs *a) {
     return;
   }
   ShowBufferRecordingJump(a->ed, a->view, handle);
+}
+
+static void Cmd_revert(CommandArgs *a) {
+  Buffer *buffer = a->buffer;
+  if (buffer->kind != BufferKind::File || buffer->path.size == 0) {
+    EditorSetStatus(a->ed, Str8Lit("revert: not a file buffer"));
+    return;
+  }
+  if (!EditorReloadFileBuffer(a->ed, buffer)) {
+    EditorSetStatus(a->ed, Str8Lit("revert: failed"));
+    return;
+  }
+  EditorSetStatusF(a->ed, "\"%.*s\" reverted", (int)buffer->path.size, (char *)buffer->path.str);
 }
 
 static void Cmd_buffer_switch(CommandArgs *a) {

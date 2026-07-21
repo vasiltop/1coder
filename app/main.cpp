@@ -12,6 +12,7 @@
 #include "config/config.h"
 #include "editor/command.h"
 #include "editor/editor.h"
+#include "editor/file_watch.h"
 #include "editor/filetype.h"
 #include "editor/lsp.h"
 #include "platform/platform_sdl.h"
@@ -59,6 +60,9 @@ struct App {
   String8 font_path;
   String8 font_face;
   u32 wake_event;
+  // Periodically wakes the idle event loop so the file-change watcher runs even
+  // when the user is not touching the keyboard.
+  SDL_TimerID watch_timer;
 };
 
 // ---------------------------------------------------------------------------
@@ -92,6 +96,19 @@ void EditorWake(void *user_data) {
   SDL_Event event = {};
   event.type = app->wake_event;
   (void)SDL_PushEvent(&event);
+}
+
+// How often the idle loop is nudged to re-stat open files. The scan itself is
+// throttled independently, so this only sets the upper bound on how stale a
+// "live" reload can be.
+constexpr u32 kFileWatchIntervalMs = 1000;
+
+// Runs on SDL's timer thread, so it does no editor work of its own -- it just
+// wakes the main loop, which then runs the watcher on the main thread.
+Uint32 SDLCALL FileWatchTimer(void *user_data, SDL_TimerID timer_id, Uint32 interval) {
+  (void)timer_id;
+  EditorWake(user_data);
+  return interval;  // reschedule at the same cadence
 }
 
 // Feeds a text-input event to the editor, one codepoint at a time. SDL has
@@ -321,6 +338,7 @@ int main(int argc, char **argv) {
   app->editor.clipboard.write = ClipboardWrite;
   app->editor.wake = EditorWake;
   app->editor.wake_user_data = app;
+  app->watch_timer = SDL_AddTimer(kFileWatchIntervalMs, FileWatchTimer, app);
 
   EditorConfigLoad(&app->editor, String8{}, false);
   ApplyConfigPresentation(app);
@@ -427,6 +445,10 @@ int main(int argc, char **argv) {
 
         case SDL_EVENT_WINDOW_FOCUS_GAINED:
           mouse_modifiers = CurrentModifierSnapshot();
+          // Returning to the editor is the moment external edits are most
+          // likely to have piled up, so reconcile them at once rather than
+          // waiting for the next timer tick.
+          EditorFileWatchScan(&app->editor);
           break;
 
         case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -487,6 +509,7 @@ int main(int argc, char **argv) {
   }
 
   SDL_StopTextInput(app->window);
+  if (app->watch_timer) SDL_RemoveTimer(app->watch_timer);
   if (HasMouseCapture(&app->editor)) SyncMouseCapture(false);
   EditorDestroy(&app->editor);
   GlyphAtlasDestroy(&app->atlas);

@@ -239,6 +239,22 @@ bool OsFileExists(String8 path) {
   return ok;
 }
 
+u64 OsFileModTime(String8 path) {
+  TempArena scratch = ScratchBegin();
+  const char *cpath = PushCStr(scratch.arena, path);
+  struct stat st;
+  bool ok = (stat(cpath, &st) == 0);
+  ScratchEnd(scratch);
+  if (!ok) return 0;
+  // Nanosecond resolution so a rewrite within the same second is still seen.
+  // The field spelling differs between the BSD/macOS and glibc headers.
+#if defined(__APPLE__)
+  return (u64)st.st_mtimespec.tv_sec * 1000000000ull + (u64)st.st_mtimespec.tv_nsec;
+#else
+  return (u64)st.st_mtim.tv_sec * 1000000000ull + (u64)st.st_mtim.tv_nsec;
+#endif
+}
+
 bool OsDirExists(String8 path) {
   TempArena scratch = ScratchBegin();
   const char *cpath = PushCStr(scratch.arena, path);
@@ -606,6 +622,19 @@ void OsFileUnmap(FileMapping *mapping) {
 bool OsFileExists(String8 path) {
   DWORD attrs = PathAttributes(path);
   return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+u64 OsFileModTime(String8 path) {
+  TempArena scratch = ScratchBegin();
+  WIN32_FILE_ATTRIBUTE_DATA data;
+  BOOL ok = GetFileAttributesExW(PushWide(scratch.arena, path), GetFileExInfoStandard, &data);
+  ScratchEnd(scratch);
+  if (!ok) return 0;
+  // FILETIME is a 64-bit count of 100ns ticks; fold the halves back together.
+  ULARGE_INTEGER t;
+  t.LowPart = data.ftLastWriteTime.dwLowDateTime;
+  t.HighPart = data.ftLastWriteTime.dwHighDateTime;
+  return (u64)t.QuadPart;
 }
 
 bool OsDirExists(String8 path) {

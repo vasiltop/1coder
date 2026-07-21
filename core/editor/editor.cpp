@@ -5,6 +5,7 @@
 #include "buffers/buf_image.h"
 #include "config/config.h"
 #include "editor/command.h"
+#include "editor/file_watch.h"
 #include "editor/lsp.h"
 #include "editor/lsp_ui.h"
 #include "os/os_file.h"
@@ -94,6 +95,10 @@ void EditorDestroy(Editor *ed) {
 bool EditorTick(Editor *ed) {
   bool lsp_changed = EditorLspTick(ed);
   bool compile_changed = CompileBufferTick(ed);
+  // Reconcile any file edited on disk. Self-throttled, so calling it every tick
+  // is cheap. The app redraws each iteration regardless, so its effects show
+  // without contributing to the return value.
+  EditorFileWatchTick(ed);
   return lsp_changed || compile_changed;
 }
 
