@@ -2,9 +2,10 @@
 
 // Default keybindings.
 //
-// This is the whole configuration surface: there is no scripting language, so
-// changing a binding means editing this file. Everything here goes through the
-// same KeymapBind used by any other code, so nothing about these is privileged.
+// These are installed at startup and again on :config-reload before any
+// overrides from ~/.config/1coder/config.toml are applied. Everything here
+// goes through the same KeymapBind used by user config, so nothing about these
+// is privileged. See config/config.example.toml for the full listing.
 //
 // These mirror the user's neovim config (~/.config/nvim/lua/config/keymaps.lua)
 // for every feature that exists here. Its mappings that depend on plugins --

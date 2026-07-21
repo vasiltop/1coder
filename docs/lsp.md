@@ -50,4 +50,6 @@ Diagnostics are underlined in the buffer and marked in the gutter. Use `<leader>
 
 If a server fails to start, the command window shows a status message. If a running server crashes, the editor attempts one automatic restart. A missing or persistently crashed server does not prevent editing.
 
-The editor requires no configuration, plugins, or runtime dependencies. Ensure language servers are available on `PATH`.
+Language servers are auto-detected by default. Prefer a specific binary with
+`[lsp.<language>]` in `~/.config/1coder/config.toml` (see [configuration](config.md)).
+Ensure servers are available on `PATH` (or give an absolute `command`).

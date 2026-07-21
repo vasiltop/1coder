@@ -1,10 +1,13 @@
 # Keybindings
 
-Defined in `core/vim/vim_binds.cpp`, mirroring `~/.config/nvim` for every
-feature that exists here. Leader is space; `shiftwidth` is 2 and `scrolloff`
-is 4, matching that config.
+Defaults are defined in `core/vim/vim_binds.cpp`, mirroring `~/.config/nvim` for
+every feature that exists here. Leader is space; `shiftwidth` is 2 and
+`scrolloff` is 4, matching that config.
 
-`:bindings` lists everything the running editor knows.
+Override any binding in `~/.config/1coder/config.toml` under `[bindings.*]`
+(see [configuration](config.md) and `config/config.example.toml`). 
+`:config-reload` re-applies the file; `:bindings` lists everything the running
+editor knows.
 
 ## Motions and operators
 
@@ -25,8 +28,8 @@ same as `<C-w>o`: close every other window.
 
 ## Mouse
 
-Mouse support is always on for the supported editor surfaces; there is no
-config toggle.
+Mouse support is always on for the supported editor surfaces; there is not yet
+a config toggle for it.
 
 - **Buffer text:** left click focuses the pane and places the cursor; drag makes
   a charwise selection; double click selects the word or matching-bracket

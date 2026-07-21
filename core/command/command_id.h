@@ -245,6 +245,8 @@ inline constexpr CommandFlags CmdSingle = CommandFlags::Single;
   X(list_commands,         "commands",              "List every command",              CommandArg::None, CmdSingle)                  \
   X(list_buffers,          "buffers",               "Pick an open buffer",             CommandArg::None, CmdSingle)                  \
   X(list_bindings,         "bindings",              "List key bindings",               CommandArg::None, CmdSingle)                  \
+  X(config_reload,         "config-reload",         "Reload the user config file",     CommandArg::None, CmdSingle)                  \
+  X(config_error_log,      "config-error-log",      "Show config load errors",         CommandArg::None, CmdSingle)                  \
   /* ---- cursors ---- */                                                                                                           \
   X(cursor_place,          "cursor-place",          "Start placing extra cursors",     CommandArg::None, CmdSingle)                  \
   X(cursor_place_mark,     "cursor-place-mark",     "Mark this position as a cursor",  CommandArg::None, CmdHidden|CmdSingle)        \

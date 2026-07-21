@@ -2,10 +2,11 @@
 
 #include "base/base_math.h"
 #include "base/base_types.h"
+#include "config/config.h"
 #include "text/token.h"
 
-// Colours, compiled in. There is no config file by design; changing the look
-// means editing this table.
+// Colours start from ThemeDefault() and can be overridden by
+// ~/.config/1coder/config.toml ([theme] / [theme.syntax]).
 
 struct Theme {
   Vec4F32 background;
@@ -48,6 +49,7 @@ struct Theme {
 };
 
 [[nodiscard]] Theme ThemeDefault();
+[[nodiscard]] Theme ThemeFromConfig(const Config *config);
 [[nodiscard]] inline Vec4F32 ThemeColorForToken(const Theme *theme, TokenKind kind) {
   return theme->syntax[(u64)kind];
 }

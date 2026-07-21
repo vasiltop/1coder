@@ -550,6 +550,18 @@ void EditorLspDisable(Editor *ed) {
   state->config = {};
 }
 
+void EditorLspRestartSessions(Editor *ed) {
+  EditorLsp *state = GetState(ed);
+  if (state == nullptr || !state->enabled) return;
+  EditorLspConfig config = state->config;
+  EditorLspEnable(ed, &config);
+}
+
+bool EditorLspIsEnabled(Editor *ed) {
+  EditorLsp *state = GetState(ed);
+  return state != nullptr && state->enabled;
+}
+
 bool EditorLspTick(Editor *ed) {
   EditorLsp *state = GetState(ed);
   if (state == nullptr || !state->enabled) return false;

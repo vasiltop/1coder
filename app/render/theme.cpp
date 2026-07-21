@@ -83,3 +83,128 @@ Theme ThemeDefault() {
 
   return theme;
 }
+
+namespace {
+
+[[nodiscard]] i32 HexNibble(u8 c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+[[nodiscard]] bool ParseHexColor(String8 hex, Vec4F32 *out) {
+  if (!out || hex.size == 0) return false;
+  String8 s = hex;
+  if (s.str[0] == '#') s = Str8Skip(s, 1);
+  if (s.size != 6 && s.size != 8) return false;
+
+  u32 value = 0;
+  for (u64 i = 0; i < s.size; i += 1) {
+    i32 n = HexNibble(s.str[i]);
+    if (n < 0) return false;
+    value = (value << 4) | (u32)n;
+  }
+
+  if (s.size == 6) {
+    *out = Rgb(value);
+  } else {
+    u32 rgb = value >> 8;
+    f32 alpha = (f32)(value & 0xFF) / 255.0f;
+    *out = Rgb(rgb, alpha);
+  }
+  return true;
+}
+
+[[nodiscard]] bool TokenKindFromName(String8 name, TokenKind *out) {
+  struct Entry {
+    const char *name;
+    TokenKind kind;
+  };
+  static const Entry kKinds[] = {
+      {"default", TokenKind::Default},
+      {"keyword", TokenKind::Keyword},
+      {"identifier", TokenKind::Identifier},
+      {"type", TokenKind::Type},
+      {"function", TokenKind::Function},
+      {"string", TokenKind::String},
+      {"character", TokenKind::Character},
+      {"number", TokenKind::Number},
+      {"comment", TokenKind::Comment},
+      {"operator", TokenKind::Operator},
+      {"punctuation", TokenKind::Punctuation},
+      {"preprocessor", TokenKind::Preprocessor},
+      {"constant", TokenKind::Constant},
+      {"error", TokenKind::Error},
+  };
+  for (u64 i = 0; i < ArrayCount(kKinds); i += 1) {
+    if (Str8Match(name, Str8C(kKinds[i].name), StringMatch::CaseInsensitive)) {
+      *out = kKinds[i].kind;
+      return true;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] bool ApplyNamedColor(Theme *theme, String8 name, Vec4F32 color) {
+  if (Str8StartsWith(name, Str8Lit("syntax."))) {
+    TokenKind kind = {};
+    if (!TokenKindFromName(Str8Skip(name, 7), &kind)) return false;
+    theme->syntax[(u64)kind] = color;
+    return true;
+  }
+
+  struct Field {
+    const char *name;
+    Vec4F32 Theme::*member;
+  };
+  static const Field kFields[] = {
+      {"background", &Theme::background},
+      {"text", &Theme::text},
+      {"cursor", &Theme::cursor},
+      {"cursor_text", &Theme::cursor_text},
+      {"cursor_secondary", &Theme::cursor_secondary},
+      {"cursor_pending", &Theme::cursor_pending},
+      {"selection", &Theme::selection},
+      {"search_match", &Theme::search_match},
+      {"current_line", &Theme::current_line},
+      {"line_number", &Theme::line_number},
+      {"line_number_current", &Theme::line_number_current},
+      {"status_background", &Theme::status_background},
+      {"status_text", &Theme::status_text},
+      {"status_background_inactive", &Theme::status_background_inactive},
+      {"status_text_inactive", &Theme::status_text_inactive},
+      {"split_border", &Theme::split_border},
+      {"message", &Theme::message},
+      {"error", &Theme::error},
+      {"diagnostic_error", &Theme::diagnostic_error},
+      {"diagnostic_warning", &Theme::diagnostic_warning},
+      {"diagnostic_information", &Theme::diagnostic_information},
+      {"diagnostic_hint", &Theme::diagnostic_hint},
+      {"popup_background", &Theme::popup_background},
+      {"popup_border", &Theme::popup_border},
+      {"popup_selected", &Theme::popup_selected},
+      {"popup_text", &Theme::popup_text},
+      {"popup_detail", &Theme::popup_detail},
+  };
+  for (u64 i = 0; i < ArrayCount(kFields); i += 1) {
+    if (Str8Match(name, Str8C(kFields[i].name), StringMatch::CaseInsensitive)) {
+      theme->*(kFields[i].member) = color;
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+Theme ThemeFromConfig(const Config *config) {
+  Theme theme = ThemeDefault();
+  if (!config) return theme;
+  for (u64 i = 0; i < config->color_count; i += 1) {
+    Vec4F32 color = {};
+    if (!ParseHexColor(config->colors[i].hex, &color)) continue;
+    (void)ApplyNamedColor(&theme, config->colors[i].name, color);
+  }
+  return theme;
+}

@@ -33,6 +33,10 @@ void EditorLspInit(Editor *ed);
 void EditorLspDestroy(Editor *ed);
 void EditorLspEnable(Editor *ed, const EditorLspConfig *config);
 void EditorLspDisable(Editor *ed);
+// Re-runs enable with the current config (clears missing-server cache and
+// reattaches open files). Used after :config-reload changes LSP overrides.
+void EditorLspRestartSessions(Editor *ed);
+[[nodiscard]] bool EditorLspIsEnabled(Editor *ed);
 
 [[nodiscard]] bool EditorLspTick(Editor *ed);
 

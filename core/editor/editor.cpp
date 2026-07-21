@@ -3,6 +3,7 @@
 #include "buffers/buf_compile.h"
 #include "buffers/buf_explorer.h"
 #include "buffers/buf_image.h"
+#include "config/config.h"
 #include "editor/command.h"
 #include "editor/lsp.h"
 #include "editor/lsp_ui.h"
@@ -36,6 +37,8 @@ void EditorInit(Editor *ed, Arena *arena, RectS32 screen) {
   ed->cwd = OsGetCwd(arena);
   ed->status_arena = ArenaAlloc(MB(1));
   ed->command_line_arena = ArenaAlloc(KB(64));
+  ed->config_arena = ArenaAlloc(MB(4));
+  ed->config_error_arena = ArenaAlloc(KB(64));
   ed->font_size = kFontSizeDefault;
   ed->command_line_prompt = ':';
   ed->search_forward = true;
@@ -79,9 +82,13 @@ void EditorDestroy(Editor *ed) {
   if (ed->command_line_arena) ArenaRelease(ed->command_line_arena);
   if (ed->search_arena) ArenaRelease(ed->search_arena);
   if (ed->compile_arena) ArenaRelease(ed->compile_arena);
+  if (ed->config_arena) ArenaRelease(ed->config_arena);
+  if (ed->config_error_arena) ArenaRelease(ed->config_error_arena);
   ed->status_arena = nullptr;
   ed->command_line_arena = nullptr;
   ed->compile_arena = nullptr;
+  ed->config_arena = nullptr;
+  ed->config_error_arena = nullptr;
 }
 
 bool EditorTick(Editor *ed) {
@@ -410,6 +417,47 @@ void EditorSetStatusF(Editor *ed, const char *fmt, ...) {
   ed->status_message = PushStr8Copy(ed->status_arena, Str8C(buffer));
 
   va_end(args);
+}
+
+void EditorConfigLoad(Editor *ed, String8 path, bool announce_success) {
+  if (!ed) return;
+
+  Arena *next = ArenaAlloc(MB(4));
+  ConfigLoadResult loaded = ConfigLoadFile(next, path);
+  if (!loaded.ok) {
+    if (!ed->config_error_arena) ed->config_error_arena = ArenaAlloc(KB(64));
+    ArenaClear(ed->config_error_arena);
+    ed->config_error_log = PushStr8Copy(ed->config_error_arena, loaded.error_log);
+    ed->config_has_errors = true;
+    EditorSetStatus(ed, Str8Lit("config: errors — :config-error-log"));
+    ArenaRelease(next);
+    return;
+  }
+
+  if (ed->config_arena) ArenaRelease(ed->config_arena);
+  ed->config_arena = next;
+  ed->config = loaded.config;
+  ed->config_has_errors = false;
+  ed->config_error_log = String8{};
+  if (ed->config_error_arena) ArenaClear(ed->config_error_arena);
+
+  ConfigApplyBindings(ed, &ed->config);
+  if (EditorLspIsEnabled(ed)) EditorLspRestartSessions(ed);
+  if (ed->on_config_applied) ed->on_config_applied(ed->on_config_applied_user_data);
+
+  if (!announce_success) return;
+  if (loaded.config.file_missing) {
+    EditorSetStatus(ed, Str8Lit("config: using defaults"));
+  } else {
+    EditorSetStatus(ed, Str8Lit("config: reloaded"));
+  }
+}
+
+void EditorConfigShowErrorLog(Editor *ed) {
+  if (!ed) return;
+  if (!ed->config_has_errors || ed->config_error_log.size == 0) {
+    EditorSetStatus(ed, Str8Lit("config: no errors"));
+  }
 }
 
 namespace {
