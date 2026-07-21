@@ -38,10 +38,11 @@ enum class BufferKind : u8 {
 
 enum class BufferFlags : u32 {
   None = 0,
-  Dirty = 1 << 0,      // has unsaved changes
-  ReadOnly = 1 << 1,   // rejects every edit
-  SingleLine = 1 << 2, // newlines are dropped; the command window is one line
-  QueryOnly = 1 << 3,  // picker: only line 0 is editable
+  Dirty = 1 << 0,        // has unsaved changes
+  ReadOnly = 1 << 1,     // rejects every edit
+  SingleLine = 1 << 2,   // newlines are dropped; the command window is one line
+  QueryOnly = 1 << 3,    // picker: only line 0 is editable
+  DiskConflict = 1 << 4, // changed on disk while we hold unsaved edits
 };
 ENUM_FLAG_OPS(BufferFlags)
 
@@ -108,6 +109,13 @@ struct Buffer {
   // providers -- notice a change without diffing the text.
   u64 edit_serial;
 
+  // Modification time of the file on disk as of the last load or our own save,
+  // in the platform's OsFileModTime units. Zero for buffers with no file. The
+  // file watcher compares the live mtime against this to notice edits made by
+  // other programs. Re-baselined on every load and save so our own atomic write
+  // is never mistaken for an external change.
+  u64 disk_mtime;
+
   BufferHooks hooks;
   void *user_data;
 
@@ -127,6 +135,9 @@ void BufferDestroy(Buffer *buffer);
 [[nodiscard]] inline u64 BufferLineCount(const Buffer *buffer) { return LineCount(&buffer->lines); }
 [[nodiscard]] inline bool BufferIsDirty(const Buffer *buffer) {
   return HasFlag(buffer->flags, BufferFlags::Dirty);
+}
+[[nodiscard]] inline bool BufferHasDiskConflict(const Buffer *buffer) {
+  return HasFlag(buffer->flags, BufferFlags::DiskConflict);
 }
 [[nodiscard]] inline bool BufferIsReadOnly(const Buffer *buffer) {
   return HasFlag(buffer->flags, BufferFlags::ReadOnly);
