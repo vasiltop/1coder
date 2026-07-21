@@ -2162,6 +2162,24 @@ static void Cmd_config_reload(CommandArgs *a) {
   EditorConfigLoad(a->ed, String8{}, true);
 }
 
+static void Cmd_config_edit(CommandArgs *a) {
+  // Opening over unsaved work needs the forced variant.
+  if (BufferIsDirty(a->buffer) && !a->bang && a->buffer->kind == BufferKind::File) {
+    EditorSetStatus(a->ed, Str8Lit("No write since last change (add ! to override)"));
+    return;
+  }
+  TempArena scratch = ScratchBegin();
+  String8 path = ConfigDefaultPath(scratch.arena);
+  BufferHandle handle = FiletypeOpen(a->ed, path);
+  if (handle.index == 0) {
+    EditorSetStatusF(a->ed, "Cannot open %.*s", (int)path.size, (char *)path.str);
+    ScratchEnd(scratch);
+    return;
+  }
+  ShowBufferRecordingJump(a->ed, a->view, handle);
+  ScratchEnd(scratch);
+}
+
 static void Cmd_config_error_log(CommandArgs *a) {
   if (!a->ed->config_has_errors || a->ed->config_error_log.size == 0) {
     EditorSetStatus(a->ed, Str8Lit("config: no errors"));
