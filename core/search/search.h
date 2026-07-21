@@ -11,9 +11,8 @@
 // without a window, and so the buffers built on top of it stay ordinary
 // buffers.
 
-// Directories and files that are never worth walking into. Keeping this here
-// rather than in a config file is the same choice the rest of the editor makes:
-// changing it means editing the source.
+// Directories and files that are never worth walking into. Still a source-level
+// list for now (not exposed in config.toml).
 [[nodiscard]] bool SearchShouldSkipDirectory(String8 name);
 [[nodiscard]] bool SearchShouldSkipFile(String8 name);
 

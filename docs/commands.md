@@ -18,6 +18,9 @@ Tab completes: command names while typing the name, then whatever the command's
 declared argument kind calls for — filesystem paths, buffer names, or command
 names. `:commands` lists everything with its shape.
 
+Config helpers: `:config-reload` re-reads `~/.config/1coder/config.toml`;
+`:config-error-log` opens any load errors in a buffer (see [configuration](config.md)).
+
 The window is an ordinary buffer, so every motion and operator works inside it.
 It opens in insert mode; `<Esc>` drops to normal mode, `<Esc>` again abandons.
 

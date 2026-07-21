@@ -1,6 +1,7 @@
 # Fonts, colours and the gutter
 
-Fonts are chosen at runtime. Colours are compiled in.
+Fonts are chosen at runtime. Colours default to a compiled palette and can be
+overridden in config.
 
 ## Line numbers
 
@@ -23,7 +24,16 @@ property of the view rather than the buffer.
 
 Selection prefers Iosevka, then the usual programming faces, then whatever the
 platform ships — Menlo on macOS, Consolas on Windows, DejaVu or Liberation on
-Linux. Override with environment variables:
+Linux. Override in `~/.config/1coder/config.toml`:
+
+```toml
+[font]
+path = "/path/to/font.ttf"
+face = ""
+size = 16.0
+```
+
+Environment variables still win over the file:
 
 | | |
 |---|---|
@@ -46,9 +56,9 @@ dependency.
 
 ## Colours
 
-Colours are compiled in — `app/render/theme.cpp`, about seventy lines of named
-constants. Nothing is read at runtime, so changing the theme means editing that
-file and rebuilding.
+Defaults live in `app/render/theme.cpp`. Override any field via `[theme]` /
+`[theme.syntax]` in the config file (see [configuration](config.md)). Reload
+with `:config-reload`.
 
 The palette values were taken from the author's `~/.config/i3/config`: `$bg`,
 `$text`, and the focused/unfocused window colours. The last two are reused for

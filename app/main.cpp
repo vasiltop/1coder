@@ -9,6 +9,7 @@
 
 #include "base/base_arena.h"
 #include "base/base_string.h"
+#include "config/config.h"
 #include "editor/command.h"
 #include "editor/editor.h"
 #include "editor/filetype.h"
@@ -17,6 +18,7 @@
 #include "render/draw.h"
 #include "render/glyph_atlas.h"
 #include "render/render_editor.h"
+#include "render/theme.h"
 #include "os/os_file.h"
 
 #include <stdio.h>
@@ -124,6 +126,7 @@ bool RebuildFont(App *app) {
   }
 
   RenderContextInit(&app->render, &app->draw, &app->atlas);
+  app->render.theme = ThemeFromConfig(&app->editor.config);
   SyncScreenSize(app);
   return true;
 }
@@ -153,6 +156,49 @@ void SyncMouseCapture(bool enabled) {
   if (SDL_CaptureMouse(enabled)) return;
   fprintf(stderr, "SDL_CaptureMouse(%s) failed: %s\n", enabled ? "true" : "false", SDL_GetError());
 }
+
+[[nodiscard]] bool ResolveConfigLsp(Arena *arena, LspLanguage language, String8 language_id,
+                                    String8 root, LspServerCommand *command, void *user_data) {
+  Editor *ed = (Editor *)user_data;
+  return ConfigResolveLspCommand(arena, &ed->config, language, language_id, root, command);
+}
+
+void ApplyConfigPresentation(App *app) {
+  if (!app) return;
+  const Config *config = &app->editor.config;
+
+  app->render.theme = ThemeFromConfig(config);
+
+  String8 font_path = app->font_path;
+  String8 font_face = app->font_face;
+  f32 font_size = app->editor.font_size;
+
+  if (config->has_font_path) font_path = config->font_path;
+  if (config->has_font_face) font_face = config->font_face;
+  if (config->has_font_size) font_size = config->font_size;
+
+  // Env vars still win over the config file, matching startup precedence.
+  if (const char *env_font = SDL_getenv("EDITOR_FONT")) {
+    font_path = Str8C(env_font);
+    font_face = String8{nullptr, 0};
+  }
+  if (const char *env_face = SDL_getenv("EDITOR_FONT_FACE")) {
+    font_face = Str8C(env_face);
+  }
+  if (const char *env_size = SDL_getenv("EDITOR_FONT_SIZE")) {
+    f32 parsed = (f32)SDL_atof(env_size);
+    if (parsed > 4.0f) font_size = parsed;
+  }
+
+  bool font_changed = !Str8Match(font_path, app->font_path) || !Str8Match(font_face, app->font_face) ||
+                      font_size != app->editor.font_size;
+  app->font_path = PushStr8Copy(app->arena, font_path);
+  app->font_face = PushStr8Copy(app->arena, font_face);
+  if (font_size != app->editor.font_size) EditorSetFontSize(&app->editor, font_size);
+  if (font_changed) app->editor.font_size_changed = true;
+}
+
+void OnConfigApplied(void *user_data) { ApplyConfigPresentation((App *)user_data); }
 
 void ProcessMouseEvent(App *app, const MouseEvent &event) {
   if (!app || event.action == MouseAction::None) return;
@@ -204,6 +250,8 @@ int main(int argc, char **argv) {
   }
 
   // ---- font ----
+  // Discovery first; [font] from config and EDITOR_FONT* env vars layer on in
+  // ApplyConfigPresentation after the editor loads config.
   String8 font_face = String8{nullptr, 0};
   String8 font_path = GlyphAtlasFindMonospaceFont(arena, &font_face);
   f32 font_size = kFontSizeDefault;
@@ -266,16 +314,30 @@ int main(int argc, char **argv) {
   i32 width = 0, height = 0;
   SDL_GetWindowSizeInPixels(app->window, &width, &height);
   EditorInit(&app->editor, arena, RenderScreenCells(&app->render, width, height));
-  EditorLspConfig lsp = {};
-  lsp.wake = EditorWake;
-  lsp.wake_user_data = app;
-  EditorLspEnable(&app->editor, &lsp);
-
+  app->editor.on_config_applied = OnConfigApplied;
+  app->editor.on_config_applied_user_data = app;
   app->editor.font_size = font_size;
   app->editor.clipboard.read = ClipboardRead;
   app->editor.clipboard.write = ClipboardWrite;
   app->editor.wake = EditorWake;
   app->editor.wake_user_data = app;
+
+  EditorConfigLoad(&app->editor, String8{}, false);
+  ApplyConfigPresentation(app);
+  if (app->editor.font_size_changed) {
+    app->editor.font_size_changed = false;
+    if (!RebuildFont(app)) return 1;
+    app->render.theme = ThemeFromConfig(&app->editor.config);
+  } else {
+    app->render.theme = ThemeFromConfig(&app->editor.config);
+  }
+
+  EditorLspConfig lsp = {};
+  lsp.wake = EditorWake;
+  lsp.wake_user_data = app;
+  lsp.resolve_command = ResolveConfigLsp;
+  lsp.resolve_command_user_data = &app->editor;
+  EditorLspEnable(&app->editor, &lsp);
 
   // Files named on the command line, each in its own split after the first.
   for (int i = 0; i < file_argc; i += 1) {

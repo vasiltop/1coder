@@ -8,6 +8,7 @@
 #include "input/keymap.h"
 #include "input/mouse.h"
 #include "vim/vim_state.h"
+#include "config/config.h"
 
 // Top-level editor state. Holds no window, no renderer and no SDL handles --
 // those live in the app layer and only ever read from here. That is what lets a
@@ -19,9 +20,9 @@ inline constexpr u64 kMaxRecordedChords = 128;
 // with 0 on the cursor's own line, which is what makes a jump count something
 // you read rather than work out.
 //
-// There is no config file, so this is a source-level setting: change
-// kLineNumberModeDefault and rebuild. :number, :relativenumber and :nonumber
-// switch it while running.
+// There is a user config file (~/.config/1coder/config.toml); line-number mode
+// is still switched at runtime with :number / :relativenumber / :nonumber.
+// kLineNumberModeDefault is only the startup default when unset.
 enum class LineNumberMode : u8 { Off, Absolute, Relative };
 
 inline constexpr LineNumberMode kLineNumberModeDefault = LineNumberMode::Relative;
@@ -135,6 +136,17 @@ struct Editor {
   ClipboardHooks clipboard;
   EditorLsp *lsp;
   EditorLspUi *lsp_ui;
+
+  // Optional user config (~/.config/1coder/config.toml). Arena holds the live
+  // Config strings; cleared and rebuilt on a successful reload.
+  Arena *config_arena;
+  Arena *config_error_arena;
+  Config config;
+  String8 config_error_log;
+  bool config_has_errors;
+  // App refreshes theme/font after core applies bindings + LSP overrides.
+  void (*on_config_applied)(void *user_data);
+  void *on_config_applied_user_data;
 
   // Wakes the app event loop when background work (compile output) arrives, so
   // SDL_WaitEvent does not sit idle until the next keypress. Optional: tests
@@ -283,6 +295,13 @@ void EditorOrphanBufferPaths(Editor *ed, String8 path);
 
 void EditorSetStatus(Editor *ed, String8 message);
 void EditorSetStatusF(Editor *ed, const char *fmt, ...) PrintfFormat(2, 3);
+
+// Load or reload ~/.config/1coder/config.toml (or `path` when non-empty).
+// On parse failure keeps the previously applied config and records details for
+// :config-error-log. Status stays a short hint, not a wall of text.
+// `announce_success` is true for :config-reload; startup passes false.
+void EditorConfigLoad(Editor *ed, String8 path, bool announce_success = true);
+void EditorConfigShowErrorLog(Editor *ed);
 
 // ---------------------------------------------------------------------------
 // Registers

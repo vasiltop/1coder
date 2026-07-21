@@ -120,6 +120,12 @@ bool KeymapUnbind(Keymap *map, String8 spec) {
   return true;
 }
 
+void KeymapClear(Keymap *map) {
+  if (!map || !map->root) return;
+  map->root->first_child = nullptr;
+  map->root->command = CommandId::None;
+}
+
 bool KeymapNodeIsPrefix(const KeymapNode *node) {
   return node && node->first_child != nullptr;
 }

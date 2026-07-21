@@ -2141,6 +2141,18 @@ static void Cmd_list_commands(CommandArgs *a) {
 
 static void Cmd_list_buffers(CommandArgs *a) { OpenQueryPicker(a, BuffersBufferOpen(a->ed)); }
 
+static void Cmd_config_reload(CommandArgs *a) {
+  EditorConfigLoad(a->ed, String8{}, true);
+}
+
+static void Cmd_config_error_log(CommandArgs *a) {
+  if (!a->ed->config_has_errors || a->ed->config_error_log.size == 0) {
+    EditorSetStatus(a->ed, Str8Lit("config: no errors"));
+    return;
+  }
+  ShowListing(a->ed, Str8Lit("[config-errors]"), a->ed->config_error_log);
+}
+
 static void Cmd_list_bindings(CommandArgs *a) {
   TempArena scratch = ScratchBegin();
   String8List lines = {};

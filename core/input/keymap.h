@@ -41,6 +41,10 @@ bool KeymapBind(Keymap *map, const char *spec, CommandId command);
 // Removes a binding. Returns false if nothing was bound there.
 bool KeymapUnbind(Keymap *map, String8 spec);
 
+// Drops every binding in this map only (parent chain is untouched). Used when
+// reloading user config so defaults can be reinstalled into the same Keymap*.
+void KeymapClear(Keymap *map);
+
 // What a lookup found. A chord sequence can be a complete binding, a prefix of
 // longer ones, or both at once (`d` is a prefix of `dw`, and in vim `dd` makes
 // `d` meaningful on its own) -- so these are not mutually exclusive.
