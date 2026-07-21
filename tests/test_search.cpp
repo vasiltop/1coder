@@ -354,3 +354,133 @@ TEST(picker_result_lines_are_not_editable) {
   ArenaRelease(arena);
   Destroy(&tree);
 }
+
+Tree MakeGitRootsTree(const char *tag) {
+  Tree tree = {};
+  tree.dir = MakeTempDir(tag);
+  tree.arena = tree.dir.arena;
+  tree.root = tree.dir.path;
+
+  const char *dirs[] = {
+      "alpha/.git",
+      "beta",
+      "noise/src",
+      "build/gamma/.git",
+      "nested/delta/.git",
+      "nested/plain",
+  };
+  for (const char *sub : dirs) {
+    CHECK(OsMakeDirs(TempPath(&tree.dir, sub)));
+  }
+  // Worktree-style marker: `.git` as a file.
+  CHECK(OsFileWrite(TempPath(&tree.dir, "beta/.git"), Str8Lit("gitdir: elsewhere\n")));
+  // Nested repo inside a found root should still appear.
+  CHECK(OsMakeDirs(TempPath(&tree.dir, "alpha/nested/.git")));
+
+  return tree;
+}
+
+TEST(search_walk_git_roots_finds_markers_and_skips_noise) {
+  Tree tree = MakeGitRootsTree("git-roots-walk");
+  PathList roots = SearchWalkGitRoots(tree.arena, tree.root);
+
+  CHECK(ListContains(roots, "alpha"));
+  CHECK(ListContains(roots, "beta"));
+  CHECK(ListContains(roots, "nested/delta"));
+  CHECK(ListContains(roots, "alpha/nested"));
+  CHECK(!ListContains(roots, "noise"));
+  CHECK(!ListContains(roots, "nested/plain"));
+  CHECK(!ListContains(roots, "build/gamma"));
+
+  Destroy(&tree);
+}
+
+TEST(search_walk_git_roots_records_dot_when_root_is_a_repo) {
+  Tree tree = MakeGitRootsTree("git-roots-self");
+  String8 alpha = TempPath(&tree.dir, "alpha");
+  PathList roots = SearchWalkGitRoots(tree.arena, alpha);
+
+  CHECK(ListContains(roots, "."));
+  CHECK(ListContains(roots, "nested"));
+  CHECK_EQ(roots.count, 2);
+
+  Destroy(&tree);
+}
+
+TEST(search_walk_git_roots_finds_children_when_parent_is_a_repo) {
+  // A projects folder that is itself a git repo must still list child repos —
+  // stopping at the parent would hide every project under it.
+  Tree tree = MakeGitRootsTree("git-roots-parent");
+  CHECK(OsMakeDirs(TempPath(&tree.dir, ".git")));
+
+  PathList roots = SearchWalkGitRoots(tree.arena, tree.root);
+  CHECK(ListContains(roots, "."));
+  CHECK(ListContains(roots, "alpha"));
+  CHECK(ListContains(roots, "beta"));
+  CHECK(ListContains(roots, "nested/delta"));
+
+  Destroy(&tree);
+}
+
+TEST(find_git_picker_sets_cwd_on_submit) {
+  Tree tree = MakeGitRootsTree("git-roots-picker");
+
+  Arena *arena = ArenaAlloc(MB(64));
+  Editor ed = {};
+  EditorInit(&ed, arena, RectS32{0, 0, 80, 25});
+  ed.cwd = PushStr8Copy(arena, tree.root);
+  String8 original_cwd = PushStr8Copy(arena, ed.cwd);
+
+  EditorProcessSpec(&ed, "<leader>pp");
+  Buffer *picker = EditorFocusedBuffer(&ed);
+  CHECK_STR(picker->name, Str8Lit("[git-roots]"));
+  CHECK_EQ((u32)EditorFocusedView(&ed)->vim.mode, (u32)VimMode::Insert);
+  CHECK(picker->hooks.on_edit != nullptr);
+  CHECK(BufferIsQueryOnly(picker));
+  CHECK(BufferLineCount(picker) > 1);
+
+  EditorProcessSpec(&ed, "beta");
+  CHECK_STR(BufferLineText(arena, picker, 0), Str8Lit("beta"));
+  CHECK_STR(BufferLineText(arena, picker, 1), Str8Lit("beta"));
+
+  EditorProcessSpec(&ed, "<CR>");
+  String8 expect = OsPathAbsolute(arena, TempPath(&tree.dir, "beta"));
+  CHECK_STR(ed.cwd, expect);
+  CHECK(!Str8Match(ed.cwd, original_cwd));
+
+  Buffer *opened = EditorFocusedBuffer(&ed);
+  CHECK(opened != nullptr);
+  CHECK_EQ((u32)opened->kind, (u32)BufferKind::Explorer);
+  CHECK_STR(opened->path, expect);
+
+  EditorDestroy(&ed);
+  ArenaRelease(arena);
+  Destroy(&tree);
+}
+
+TEST(find_git_command_and_set_cwd_binding) {
+  Tree tree = MakeGitRootsTree("git-roots-cmd");
+
+  Arena *arena = ArenaAlloc(MB(64));
+  Editor ed = {};
+  EditorInit(&ed, arena, RectS32{0, 0, 80, 25});
+  ed.cwd = PushStr8Copy(arena, tree.root);
+
+  CHECK(CommandExecLine(&ed, Str8Lit("find-git")));
+  CHECK_STR(EditorFocusedBuffer(&ed)->name, Str8Lit("[git-roots]"));
+
+  // <leader>sc uses the current file's directory when no argument is given.
+  String8 alpha_file = TempPath(&tree.dir, "alpha/readme.txt");
+  CHECK(OsFileWrite(alpha_file, Str8Lit("hi\n")));
+  BufferHandle file = EditorOpenFile(&ed, alpha_file);
+  CHECK(file.index != 0);
+  EditorShowBuffer(&ed, file);
+
+  EditorProcessSpec(&ed, "<leader>sc");
+  String8 expect = OsPathAbsolute(arena, TempPath(&tree.dir, "alpha"));
+  CHECK_STR(ed.cwd, expect);
+
+  EditorDestroy(&ed);
+  ArenaRelease(arena);
+  Destroy(&tree);
+}

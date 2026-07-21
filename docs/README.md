@@ -11,7 +11,7 @@ the editor properly, or for changing it.
 - [Keybindings](keybindings.md) — the complete key reference
 - [Language server protocol](lsp.md) — auto-detected servers, navigation, completion
 - [The command window](commands.md) — `:` syntax, and how to add a command
-- [Search](search.md) — live grep, file finder, buffer list
+- [Search](search.md) — live grep, file finder, git roots, buffer list
 - [The file explorer](explorer.md) — directories as editable text
 - [Git](git.md) — Magit-style status, stage/hunks, pull/push args
 - [Fonts and colours](rendering.md) — fonts at runtime, theme defaults and overrides

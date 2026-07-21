@@ -1,8 +1,10 @@
 # Search
 
 `<leader>pg` searches the project as you type, `<leader>pf` fuzzy-finds a file,
-and `<leader>pb` fuzzy-picks an open buffer — where the neovim config puts them.
-By name: `:live-grep`, `:find`, `:buffers`, plus `:grep <pattern>` for a fixed list.
+`<leader>pb` fuzzy-picks an open buffer, and `<leader>pp` fuzzy-finds a git
+repository root — where the neovim config puts them.
+By name: `:live-grep`, `:find`, `:buffers`, `:find-git`, plus `:grep <pattern>`
+for a fixed list.
 
 None of them adds a UI concept, which was the point of the buffer system:
 
@@ -12,6 +14,11 @@ None of them adds a UI concept, which was the point of the buffer system:
   `on_edit` hook rewrites everything below as you type, so it opens in insert
   mode and narrows live. Result lines are not editable — `<Esc>` drops to
   normal mode to navigate them with `j`/`k`, and `<CR>` opens one.
+
+`:find-git` / `<leader>pp` walks under the working directory for folders that
+contain a `.git` marker (file or directory), including nested repositories,
+fuzzy-filters them, and on `<CR>` runs `:set-cwd` on the selection and opens
+that directory in the file explorer.
 
 Live search reads the tree once into memory and rescans those bytes per
 keystroke; re-reading the project on every character would not be usable. The

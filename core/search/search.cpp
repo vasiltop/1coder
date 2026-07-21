@@ -104,6 +104,66 @@ int CompareByScore(const void *a, const void *b) {
   return 0;
 }
 
+bool PathHasGit(String8 path) {
+  TempArena scratch = ScratchBegin();
+  String8 marker = OsPathJoin(scratch.arena, path, Str8Lit(".git"));
+  bool ok = OsDirExists(marker) || OsFileExists(marker);
+  ScratchEnd(scratch);
+  return ok;
+}
+
+void PushPathNode(WalkState *state, String8 relative) {
+  PathNode *node = PushStruct(state->nodes, PathNode);
+  node->path = PushStr8Copy(state->arena, relative);
+
+  if (state->last) {
+    state->last->next = node;
+    state->last = node;
+  } else {
+    state->first = state->last = node;
+  }
+  state->count += 1;
+}
+
+// Collects directories with a `.git` marker. Unlike the file walk, hidden names
+// are still skipped for descent, but `.git` itself is probed explicitly.
+// Found roots are recorded and still descended into so nested repositories
+// (and a parent that is itself a repo, like a projects folder) show up.
+void WalkGitRoots(WalkState *state, String8 absolute, String8 relative, u64 depth) {
+  if (state->truncated || depth > kSearchMaxDepth) return;
+
+  if (PathHasGit(absolute)) {
+    if (state->count >= state->max_files) {
+      state->truncated = true;
+      return;
+    }
+    // The walk root itself is a repo: show "." so the picker has a selectable
+    // path rather than a blank line.
+    String8 recorded = (relative.size > 0) ? relative : Str8Lit(".");
+    PushPathNode(state, recorded);
+  }
+
+  TempArena temp = TempBegin(state->scratch);
+  FileList entries = OsDirList(state->scratch, absolute);
+
+  for (u64 i = 0; i < entries.count; i += 1) {
+    if (state->truncated) break;
+
+    FileInfo *entry = &entries.files[i];
+    if (!entry->is_dir) continue;
+    if (entry->name.size > 0 && entry->name.str[0] == '.') continue;
+    if (SearchShouldSkipDirectory(entry->name)) continue;
+
+    String8 child_relative = (relative.size > 0)
+                                 ? OsPathJoin(state->scratch, relative, entry->name)
+                                 : entry->name;
+    String8 child_absolute = OsPathJoin(state->scratch, absolute, entry->name);
+    WalkGitRoots(state, child_absolute, child_relative, depth + 1);
+  }
+
+  TempEnd(temp);
+}
+
 }  // namespace
 
 bool SearchShouldSkipDirectory(String8 name) {
@@ -142,6 +202,33 @@ PathList SearchWalkFiles(Arena *arena, String8 root, u64 max_files) {
   state.max_files = max_files;
 
   WalkDirectory(&state, root, String8{nullptr, 0}, 0);
+
+  list.paths = PushArrayNoZero(arena, String8, Max(state.count, (u64)1));
+  list.count = state.count;
+  list.truncated = state.truncated;
+
+  u64 i = 0;
+  for (PathNode *node = state.first; node; node = node->next) list.paths[i++] = node->path;
+
+  ScratchEnd(dirs);
+  ScratchEnd(nodes);
+  return list;
+}
+
+PathList SearchWalkGitRoots(Arena *arena, String8 root, u64 max_roots) {
+  PathList list = {};
+
+  TempArena nodes = ScratchBegin1(arena);
+  Arena *conflicts[] = {arena, nodes.arena};
+  TempArena dirs = ScratchBegin(conflicts, ArrayCount(conflicts));
+
+  WalkState state = {};
+  state.arena = arena;
+  state.nodes = nodes.arena;
+  state.scratch = dirs.arena;
+  state.max_files = max_roots;
+
+  WalkGitRoots(&state, root, String8{nullptr, 0}, 0);
 
   list.paths = PushArrayNoZero(arena, String8, Max(state.count, (u64)1));
   list.count = state.count;
