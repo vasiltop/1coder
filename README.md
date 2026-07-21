@@ -24,6 +24,7 @@ language servers, or the font, create:
 ~/.config/1coder/config.toml
 ```
 
+On Windows: `%APPDATA%\1coder\config.toml`.  
 (`$XDG_CONFIG_HOME/1coder/config.toml` when that variable is set.)
 
 A full example with every default binding is in

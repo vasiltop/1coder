@@ -1,4 +1,5 @@
-# Example 1coder config — copy to ~/.config/1coder/config.toml and edit.
+# Example 1coder config — copy to ~/.config/1coder/config.toml and edit
+# (Windows: %APPDATA%\1coder\config.toml).
 #
 # The editor ships with these defaults compiled in. You do not need this file
 # for them to work. Keep only the keys you want to change, or start from this

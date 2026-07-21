@@ -6,7 +6,9 @@ startup and again when you run `:config-reload`.
 ## Location
 
 1. `$XDG_CONFIG_HOME/1coder/config.toml` if `XDG_CONFIG_HOME` is set
-2. otherwise `~/.config/1coder/config.toml` (`%USERPROFILE%\.config\1coder\config.toml` on Windows)
+2. otherwise:
+   - Unix / macOS: `~/.config/1coder/config.toml`
+   - Windows: `%APPDATA%\1coder\config.toml` (typically `C:\Users\<you>\AppData\Roaming\1coder\config.toml`)
 
 Missing file → defaults, no error.
 
