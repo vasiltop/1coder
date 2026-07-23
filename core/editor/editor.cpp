@@ -156,6 +156,7 @@ i32 EditorGutterWidth(Editor *ed, const Panel *panel) {
 u64 EditorLineNumberLabel(const Editor *ed, const View *view, const Buffer *buffer, u64 line) {
   if (ed && ed->line_number_mode == LineNumberMode::Relative) {
     u64 cursor_line = ViewCursorLine(view, buffer);
+    if (line == cursor_line) return line + 1;  // hybrid: absolute number on the cursor's own line
     return (line > cursor_line) ? line - cursor_line : cursor_line - line;
   }
   return line + 1;  // buffer lines are 0-based; the display is not

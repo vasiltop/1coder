@@ -5,8 +5,9 @@ overridden in config.
 
 ## Line numbers
 
-The gutter shows each line's distance from the cursor, with `0` on the cursor's
-own line — vim's `relativenumber`. `:number` switches to absolute numbers,
+The gutter shows each line's distance from the cursor, with the cursor's own
+line showing its absolute number — vim's hybrid `number` + `relativenumber`.
+`:number` switches to absolute numbers,
 `:relativenumber` back, and `:nonumber` hides the gutter entirely.
 
 To change what it starts as, edit one constant in `core/editor/editor.h`:
