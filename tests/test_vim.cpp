@@ -1598,8 +1598,9 @@ TEST(line_numbers_relative_labels_count_from_the_cursor) {
   Type(&f, "2j");
   CHECK_EQ(CursorLine(&f), 2);
 
-  // Zero on the cursor's own line, distances either side of it.
-  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 2), 0);
+  // The cursor's own line shows its absolute (1-based) number, distances either
+  // side of it — vim's hybrid number + relativenumber.
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 2), 3);
   CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 1), 1);
   CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 0), 2);
   CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 3), 1);
@@ -1608,7 +1609,7 @@ TEST(line_numbers_relative_labels_count_from_the_cursor) {
   // They follow the cursor rather than being computed once.
   Type(&f, "j");
   CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 2), 1);
-  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 3), 0);
+  CHECK_EQ(EditorLineNumberLabel(&f.ed, view, buffer, 3), 4);
 
   Destroy(&f);
 }
