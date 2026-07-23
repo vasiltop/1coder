@@ -235,6 +235,63 @@ TEST(git_stage_file_and_commit) {
   Destroy(&f);
 }
 
+TEST(git_status_folds_single_hunk) {
+  if (!HaveGit()) return;
+  Fixture f = MakeFixture("git_fold");
+  if (!InitRepo(&f)) {
+    Destroy(&f);
+    return;
+  }
+
+  // A file whose top and bottom change, far enough apart to form two hunks.
+  WriteFile(&f, "a.txt",
+            Str8Lit("l01\nl02\nl03\nl04\nl05\nl06\nl07\nl08\nl09\nl10\n"));
+  CHECK_EQ(RunIn(f.arena, f.dir.path, {Str8Lit("add"), Str8Lit("a.txt")}).exit_code, 0);
+  CHECK_EQ(RunIn(f.arena, f.dir.path, {Str8Lit("commit"), Str8Lit("-m"), Str8Lit("base")}).exit_code,
+           0);
+  WriteFile(&f, "a.txt",
+            Str8Lit("TOPCHANGE\nl02\nl03\nl04\nl05\nl06\nl07\nl08\nl09\nBOTCHANGE\n"));
+
+  CommandExecLine(&f.ed, Str8Lit("git"));
+  Buffer *buffer = GitStatusBuffer(&f);
+  CHECK(buffer != nullptr);
+  View *view = EditorFocusedView(&f.ed);
+
+  auto cursor_to = [&](String8 needle) {
+    TempArena s = ScratchBegin();
+    String8 t = BufferAll(s.arena, buffer);
+    u64 at = Str8FindFirst(t, needle);
+    CHECK(at < t.size);
+    ViewSetCursorLineColumn(view, buffer, BufferLineFromOffset(buffer, at), 0);
+    ScratchEnd(s);
+  };
+
+  // Expand the file to reveal its hunks.
+  cursor_to(Str8Lit("a.txt"));
+  CHECK(GitBufferToggleExpand(&f.ed, buffer, view));
+  buffer = GitStatusBuffer(&f);
+  TempArena scratch = ScratchBegin();
+  String8 text = BufferAll(scratch.arena, buffer);
+  CHECK(Contains(text, Str8Lit("TOPCHANGE")));
+  CHECK(Contains(text, Str8Lit("BOTCHANGE")));
+  CHECK(Str8FindFirst(text, Str8Lit("@@")) < text.size);
+  ScratchEnd(scratch);
+
+  // Fold the first hunk (the one containing TOPCHANGE): its body hides, the
+  // second hunk is unaffected.
+  cursor_to(Str8Lit("@@"));
+  CHECK(GitBufferToggleExpand(&f.ed, buffer, view));
+  buffer = GitStatusBuffer(&f);
+  scratch = ScratchBegin();
+  text = BufferAll(scratch.arena, buffer);
+  CHECK(!Contains(text, Str8Lit("TOPCHANGE")));
+  CHECK(Contains(text, Str8Lit("BOTCHANGE")));
+  CHECK(Contains(text, Str8Lit("...")));
+  ScratchEnd(scratch);
+
+  Destroy(&f);
+}
+
 TEST(git_arg_rebase_toggle_affects_pull_argv) {
   if (!HaveGit()) return;
   Fixture f = MakeFixture("git_flags");
@@ -326,6 +383,70 @@ TEST(git_diff_highlights_headers_and_changes) {
     CHECK(buffer->tokens.tokens[i - 1].end <= buffer->tokens.tokens[i].start);
   }
   ScratchEnd(scratch);
+  Destroy(&f);
+}
+
+TEST(git_diff_view_folds_hunk) {
+  Fixture f = MakeFixture("git_diff_fold");
+  String8 diff = Str8Lit(
+      "commit deadbeef\n"
+      "Author: Test <t@t.test>\n"
+      "\n"
+      "    subject\n"
+      "\n"
+      "diff --git a/a.txt b/a.txt\n"
+      "index 111..222 100644\n"
+      "--- a/a.txt\n"
+      "+++ b/a.txt\n"
+      "@@ -1,3 +1,3 @@\n"
+      " alpha\n"
+      "-ORIGTOP\n"
+      "+NEWTOP\n"
+      " gamma\n"
+      "@@ -8,3 +8,3 @@\n"
+      " hh\n"
+      "-ORIGBOT\n"
+      "+NEWBOT\n"
+      " jj\n");
+
+  BufferHandle handle = GitBufferOpenDiff(&f.ed, Str8Lit("[diff]"), diff);
+  EditorShowBuffer(&f.ed, handle);
+  Buffer *buffer = BufferFromHandle(&f.ed.buffers, handle);
+  View *view = EditorFocusedView(&f.ed);
+  CHECK(buffer != nullptr && view != nullptr);
+
+  TempArena scratch = ScratchBegin();
+  String8 text = BufferAll(scratch.arena, buffer);
+  // The commit-header preamble survives, and both hunks are expanded.
+  CHECK(Contains(text, Str8Lit("commit deadbeef")));
+  CHECK(Contains(text, Str8Lit("NEWTOP")));
+  CHECK(Contains(text, Str8Lit("NEWBOT")));
+  ScratchEnd(scratch);
+
+  // Fold the first hunk: cursor on its @@ header, then toggle.
+  scratch = ScratchBegin();
+  text = BufferAll(scratch.arena, buffer);
+  u64 at = Str8FindFirst(text, Str8Lit("@@"));
+  CHECK(at < text.size);
+  ViewSetCursorLineColumn(view, buffer, BufferLineFromOffset(buffer, at), 0);
+  ScratchEnd(scratch);
+  CHECK(GitBufferToggleExpand(&f.ed, buffer, view));
+
+  scratch = ScratchBegin();
+  text = BufferAll(scratch.arena, buffer);
+  CHECK(!Contains(text, Str8Lit("NEWTOP")));    // first hunk's body hidden
+  CHECK(Contains(text, Str8Lit("NEWBOT")));     // second hunk untouched
+  CHECK(Contains(text, Str8Lit("@@ -1,3 +1,3 @@ ...")));  // fold marker
+  ScratchEnd(scratch);
+
+  // Toggle again to unfold; the body comes back.
+  CHECK(GitBufferToggleExpand(&f.ed, buffer, view));
+  scratch = ScratchBegin();
+  text = BufferAll(scratch.arena, buffer);
+  CHECK(Contains(text, Str8Lit("NEWTOP")));
+  CHECK(!Contains(text, Str8Lit("@@ -1,3 +1,3 @@ ...")));
+  ScratchEnd(scratch);
+
   Destroy(&f);
 }
 

@@ -35,6 +35,8 @@ struct GitExpandedFile {
   GitEntryKind entry_kind;
   GitDiff diff;  // usually one file
   bool open;
+  bool *hunk_collapsed;      // per-hunk fold state; nullptr means all expanded
+  u64 hunk_collapsed_count;  // sized to files[0].hunk_count when allocated
 };
 
 struct GitPayload {
@@ -52,6 +54,13 @@ struct GitPayload {
   GitExpandedFile *expanded;
   u64 expanded_count;
   u64 expanded_capacity;
+
+  // Diff view (git show / log): the parsed patch plus per-hunk fold state. The
+  // preamble is the commit header and --stat block above the first `diff --git`.
+  String8 diff_preamble;
+  GitDiff diff_view;
+  bool *diff_collapsed;
+  u64 diff_collapsed_count;
 
   // Pending discard confirmation.
   String8 pending_discard_path;
@@ -329,6 +338,52 @@ void AppendLine(Arena *arena, String8List *text, GitLineInfo **infos, u64 *count
   Str8ListPush(arena, text, Str8Lit("\n"));
 }
 
+// Emits one hunk: its @@ header line (with a trailing " ..." marker when
+// collapsed) and, unless collapsed, its body lines. `base` supplies the shared
+// metadata (path, entry_kind, hunk_index); `indent` prefixes every line.
+void PushHunkLines(Arena *arena, String8List *text, GitLineInfo **infos, u64 *count, u64 *cap,
+                   const GitHunk *hunk, GitLineInfo base, bool collapsed, String8 indent) {
+  GitLineInfo hinfo = base;
+  hinfo.kind = GitLineKind::HunkHeader;
+  hinfo.expanded = !collapsed;
+  String8 header =
+      collapsed ? PushStr8F(arena, "%.*s%.*s ...", (int)indent.size, (char *)indent.str,
+                            (int)hunk->header.size, (char *)hunk->header.str)
+                : PushStr8F(arena, "%.*s%.*s", (int)indent.size, (char *)indent.str,
+                            (int)hunk->header.size, (char *)hunk->header.str);
+  AppendLine(arena, text, infos, count, cap, header, hinfo);
+  if (collapsed) return;
+
+  String8List body_lines = Str8SplitChar(arena, hunk->body, '\n');
+  for (String8Node *node = body_lines.first; node; node = node->next) {
+    if (node->string.size == 0 && !node->next) continue;
+    GitLineInfo linfo = hinfo;
+    linfo.kind = GitLineKind::HunkLine;
+    AppendLine(arena, text, infos, count, cap,
+               PushStr8F(arena, "%.*s%.*s", (int)indent.size, (char *)indent.str,
+                         (int)node->string.size, (char *)node->string.str),
+               linfo);
+  }
+}
+
+// Byte offset of the first line beginning with "diff --git" in `body`, or
+// body.size when there is none. Everything before it is the commit/stat header.
+u64 FindDiffStart(String8 body) {
+  String8 needle = Str8Lit("diff --git");
+  if (body.size >= needle.size && Str8Match(Str8Prefix(body, needle.size), needle)) return 0;
+  for (u64 pos = 0; pos < body.size;) {
+    u64 nl = Str8FindFirstChar(body, '\n', pos);
+    if (nl >= body.size) break;
+    u64 line_start = nl + 1;
+    String8 rest = Str8Skip(body, line_start);
+    if (rest.size >= needle.size && Str8Match(Str8Prefix(rest, needle.size), needle)) {
+      return line_start;
+    }
+    pos = line_start;
+  }
+  return body.size;
+}
+
 void RenderStatus(Editor *ed, Buffer *buffer, GitPayload *payload) {
   Arena *arena = payload->data_arena;
   String8List text = {};
@@ -397,23 +452,14 @@ void RenderStatus(Editor *ed, Buffer *buffer, GitPayload *payload) {
       for (u64 fi = 0; fi < exp->diff.file_count; fi += 1) {
         GitDiffFile *file = &exp->diff.files[fi];
         for (u64 hi = 0; hi < file->hunk_count; hi += 1) {
-          GitHunk *hunk = &file->hunks[hi];
-          GitLineInfo hinfo = {};
-          hinfo.kind = GitLineKind::HunkHeader;
-          hinfo.entry_kind = kind;
-          hinfo.path = e->path;
-          hinfo.hunk_index = hi;
-          push(PushStr8F(arena, "    %.*s", (int)hunk->header.size, (char *)hunk->header.str),
-               hinfo);
-
-          String8List body_lines = Str8SplitChar(arena, hunk->body, '\n');
-          for (String8Node *node = body_lines.first; node; node = node->next) {
-            if (node->string.size == 0 && !node->next) continue;
-            GitLineInfo linfo = hinfo;
-            linfo.kind = GitLineKind::HunkLine;
-            push(PushStr8F(arena, "    %.*s", (int)node->string.size, (char *)node->string.str),
-                 linfo);
-          }
+          GitLineInfo base = {};
+          base.entry_kind = kind;
+          base.path = e->path;
+          base.hunk_index = hi;
+          bool collapsed =
+              exp->hunk_collapsed && hi < exp->hunk_collapsed_count && exp->hunk_collapsed[hi];
+          PushHunkLines(arena, &text, &infos, &count, &cap, &file->hunks[hi], base, collapsed,
+                        Str8Lit("    "));
         }
       }
     }
@@ -458,6 +504,56 @@ void RenderLog(Editor *ed, Buffer *buffer, GitPayload *payload) {
         PushStr8F(arena, "%.*s  %.*s", (int)e->hash.size, (char *)e->hash.str, (int)e->subject.size,
                   (char *)e->subject.str);
     AppendLine(arena, &text, &infos, &count, &cap, line, info);
+  }
+
+  String8 body = Str8ListJoin(arena, &text, String8{});
+  if (body.size > 0 && body.str[body.size - 1] == '\n') body = Str8Chop(body, 1);
+
+  buffer->flags &= ~BufferFlags::ReadOnly;
+  BufferSetText(ed, buffer, body);
+  buffer->flags |= BufferFlags::ReadOnly;
+  payload->lines = infos;
+  payload->line_count = count;
+  HighlightGitBuffer(buffer, payload);
+}
+
+void RenderDiff(Editor *ed, Buffer *buffer, GitPayload *payload) {
+  Arena *arena = payload->data_arena;
+  String8List text = {};
+  GitLineInfo *infos = nullptr;
+  u64 count = 0;
+  u64 cap = 0;
+
+  // Commit header + --stat block render as plain (unfoldable) lines.
+  if (payload->diff_preamble.size > 0) {
+    String8List pre = Str8SplitChar(arena, payload->diff_preamble, '\n');
+    for (String8Node *node = pre.first; node; node = node->next) {
+      if (node->string.size == 0 && !node->next) continue;
+      AppendLine(arena, &text, &infos, &count, &cap, node->string, GitLineInfo{});
+    }
+  }
+
+  u64 hunk_index = 0;  // flattened across all files, matching diff_collapsed
+  for (u64 fi = 0; fi < payload->diff_view.file_count; fi += 1) {
+    GitDiffFile *file = &payload->diff_view.files[fi];
+
+    // The file's "diff --git ... +++" header lines, verbatim.
+    String8List hdr = Str8SplitChar(arena, file->header, '\n');
+    for (String8Node *node = hdr.first; node; node = node->next) {
+      if (node->string.size == 0 && !node->next) continue;
+      AppendLine(arena, &text, &infos, &count, &cap, node->string, GitLineInfo{});
+    }
+
+    for (u64 hi = 0; hi < file->hunk_count; hi += 1) {
+      GitLineInfo base = {};
+      base.path = file->path;
+      base.hunk_index = hunk_index;
+      bool collapsed = hunk_index < payload->diff_collapsed_count &&
+                       payload->diff_collapsed[hunk_index];
+      PushHunkLines(arena, &text, &infos, &count, &cap, &file->hunks[hi], base, collapsed,
+                    Str8Lit(""));
+      hunk_index += 1;
+    }
   }
 
   String8 body = Str8ListJoin(arena, &text, String8{});
@@ -565,6 +661,13 @@ BufferHandle GitBufferOpenDiff(Editor *ed, String8 title, String8 body) {
   ArenaClear(payload->data_arena);
   payload->lines = nullptr;
   payload->line_count = 0;
+  payload->expanded = nullptr;
+  payload->expanded_count = 0;
+  payload->expanded_capacity = 0;
+  payload->diff_preamble = String8{};
+  payload->diff_view = GitDiff{};
+  payload->diff_collapsed = nullptr;
+  payload->diff_collapsed_count = 0;
 
   if (title.size > 0) {
     // Keep the buffer's registry name as [git-diff] so reuse works; the title
@@ -572,10 +675,29 @@ BufferHandle GitBufferOpenDiff(Editor *ed, String8 title, String8 body) {
     (void)title;
   }
 
-  buffer->flags &= ~BufferFlags::ReadOnly;
-  BufferSetText(ed, buffer, body);
-  buffer->flags |= BufferFlags::ReadOnly;
-  HighlightGitBuffer(buffer, payload);
+  // Split the commit header / --stat preamble from the patch, then parse the
+  // patch into files and hunks so each hunk becomes foldable.
+  u64 split = FindDiffStart(body);
+  payload->diff_preamble = PushStr8Copy(payload->data_arena, Str8Prefix(body, split));
+  payload->diff_view = GitParseDiff(payload->data_arena, Str8Skip(body, split));
+
+  if (payload->diff_view.file_count == 0) {
+    // Unparseable (or empty) output — fall back to raw text so nothing is lost.
+    buffer->flags &= ~BufferFlags::ReadOnly;
+    BufferSetText(ed, buffer, body);
+    buffer->flags |= BufferFlags::ReadOnly;
+    HighlightGitBuffer(buffer, payload);
+    return handle;
+  }
+
+  u64 total_hunks = 0;
+  for (u64 fi = 0; fi < payload->diff_view.file_count; fi += 1) {
+    total_hunks += payload->diff_view.files[fi].hunk_count;
+  }
+  payload->diff_collapsed = PushArray(payload->data_arena, bool, Max(total_hunks, (u64)1));
+  payload->diff_collapsed_count = total_hunks;
+
+  RenderDiff(ed, buffer, payload);
   return handle;
 }
 
@@ -655,10 +777,44 @@ void GitBufferSetFlags(Buffer *buffer, GitFlags flags) {
   if (payload) payload->flags = flags;
 }
 
+// Re-renders the current git mode and restores the cursor line. Shared by the
+// file- and hunk-level toggles so folding feels the same everywhere.
+void GitRerenderKeepingCursor(Editor *ed, Buffer *buffer, View *view, GitPayload *payload) {
+  u64 line = ViewCursorLine(view, buffer);
+  if (payload->mode == GitViewMode::Diff) {
+    RenderDiff(ed, buffer, payload);
+  } else {
+    RenderStatus(ed, buffer, payload);
+  }
+  ViewSetCursorLineColumn(view, buffer, Min(line, BufferLineCount(buffer) - 1), 0);
+}
+
 bool GitBufferToggleExpand(Editor *ed, Buffer *buffer, View *view) {
   GitPayload *payload = PayloadOf(buffer);
   GitLineInfo *info = LineAtCursor(payload, view, buffer);
-  if (!payload || !info || info->kind != GitLineKind::File) return false;
+  if (!payload || !info) return false;
+
+  // On a hunk: fold or unfold just that hunk, leaving its siblings alone.
+  if (info->kind == GitLineKind::HunkHeader || info->kind == GitLineKind::HunkLine) {
+    if (payload->mode == GitViewMode::Diff) {
+      if (info->hunk_index >= payload->diff_collapsed_count) return false;
+      payload->diff_collapsed[info->hunk_index] = !payload->diff_collapsed[info->hunk_index];
+    } else {
+      GitExpandedFile *exp = FindExpanded(payload, info->path, info->entry_kind);
+      if (!exp || exp->diff.file_count == 0) return false;
+      u64 hunks = exp->diff.files[0].hunk_count;
+      if (info->hunk_index >= hunks) return false;
+      if (!exp->hunk_collapsed) {
+        exp->hunk_collapsed = PushArray(payload->data_arena, bool, hunks);
+        exp->hunk_collapsed_count = hunks;
+      }
+      exp->hunk_collapsed[info->hunk_index] = !exp->hunk_collapsed[info->hunk_index];
+    }
+    GitRerenderKeepingCursor(ed, buffer, view, payload);
+    return true;
+  }
+
+  if (info->kind != GitLineKind::File) return false;
   if (info->entry_kind == GitEntryKind::Untracked) {
     EditorSetStatus(ed, Str8Lit("no hunks for untracked files"));
     return false;
@@ -677,11 +833,12 @@ bool GitBufferToggleExpand(Editor *ed, Buffer *buffer, View *view) {
     exp->open = true;
     bool cached = info->entry_kind == GitEntryKind::Staged;
     exp->diff = GitLoadDiff(payload->data_arena, payload->root, exp->path, cached);
+    // Fresh diff: drop any stale per-hunk fold state (hunk count may differ).
+    exp->hunk_collapsed = nullptr;
+    exp->hunk_collapsed_count = 0;
   }
 
-  u64 line = ViewCursorLine(view, buffer);
-  RenderStatus(ed, buffer, payload);
-  ViewSetCursorLineColumn(view, buffer, Min(line, BufferLineCount(buffer) - 1), 0);
+  GitRerenderKeepingCursor(ed, buffer, view, payload);
   return true;
 }
 
